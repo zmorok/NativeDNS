@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=NativeDNS
+Comment=DNS client and rule-based resolver
+Exec=NativeDNS
+Icon=nativedns
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

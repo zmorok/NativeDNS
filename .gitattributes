@@ -1,0 +1,53 @@
+# Default for a cross-platform repository
+* text=auto eol=lf
+
+# C / C++
+*.c    text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.hpp  text eol=lf
+
+# CMake / config / data
+CMakeLists.txt text eol=lf
+*.cmake        text eol=lf
+*.json         text eol=lf
+*.xml          text eol=lf
+*.qrc          text eol=lf
+*.iss          text eol=lf
+*.desktop      text eol=lf
+
+# Documentation
+*.md  text eol=lf
+*.txt text eol=lf
+
+# Qt/resources
+*.svg text eol=lf
+
+# Unix scripts must use LF
+*.sh text eol=lf
+
+# Windows command scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell works with both, keep Windows convention
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+
+*.exe binary
+*.dll binary
+*.sys binary
+*.lib binary
+*.a binary
+*.so binary
+*.dylib binary
+
+*.zip binary
+*.7z binary
+*.gz binary
+*.AppImage binary

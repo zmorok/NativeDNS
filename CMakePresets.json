@@ -1,0 +1,141 @@
+{
+	"version": 6,
+	"configurePresets": [
+		{
+			"name": "windows-base",
+			"hidden": true,
+			"generator": "Visual Studio 18 2026",
+			"toolset": "v143",
+			"architecture": "x64",
+			"binaryDir": "${sourceDir}/build/windows/${presetName}"
+		},
+		{
+			"name": "windows-debug",
+			"inherits": "windows-base",
+			"cacheVariables": {
+				"CMAKE_INSTALL_PREFIX": "${sourceDir}/out/windows/debug",
+				"NATIVEDNS_BUILD_GUI": "ON"
+			}
+		},
+		{
+			"name": "windows-release",
+			"inherits": "windows-base",
+			"cacheVariables": {
+				"CMAKE_INSTALL_PREFIX": "${sourceDir}/out/windows/release",
+				"NATIVEDNS_BUILD_GUI": "ON"
+			}
+		},
+		{
+			"name": "linux-debug",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/build/linux/debug",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"CMAKE_INSTALL_PREFIX": "${sourceDir}/out/linux/debug",
+				"NATIVEDNS_BUILD_GUI": "ON"
+			}
+		},
+		{
+			"name": "linux-release",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/build/linux/release",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release",
+				"CMAKE_INSTALL_PREFIX": "${sourceDir}/out/linux/release",
+				"NATIVEDNS_BUILD_GUI": "ON"
+			}
+		},
+		{
+			"name": "linux-core-debug",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/build/linux/core-debug",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Debug",
+				"NATIVEDNS_BUILD_GUI": "OFF"
+			}
+		},
+		{
+			"name": "linux-core-release",
+			"generator": "Ninja",
+			"binaryDir": "${sourceDir}/build/linux/core-release",
+			"cacheVariables": {
+				"CMAKE_BUILD_TYPE": "Release",
+				"NATIVEDNS_BUILD_GUI": "OFF"
+			}
+		}
+	],
+	"buildPresets": [
+		{
+			"name": "windows-debug",
+			"configurePreset": "windows-debug",
+			"configuration": "Debug"
+		},
+		{
+			"name": "windows-release",
+			"configurePreset": "windows-release",
+			"configuration": "Release"
+		},
+		{
+			"name": "linux-debug",
+			"configurePreset": "linux-debug"
+		},
+		{
+			"name": "linux-release",
+			"configurePreset": "linux-release"
+		},
+		{
+			"name": "linux-core-debug",
+			"configurePreset": "linux-core-debug"
+		},
+		{
+			"name": "linux-core-release",
+			"configurePreset": "linux-core-release"
+		}
+	],
+	"testPresets": [
+		{
+			"name": "windows-debug",
+			"configurePreset": "windows-debug",
+			"configuration": "Debug",
+			"output": {
+				"outputOnFailure": true
+			}
+		},
+		{
+			"name": "windows-release",
+			"configurePreset": "windows-release",
+			"configuration": "Release",
+			"output": {
+				"outputOnFailure": true
+			}
+		},
+		{
+			"name": "linux-debug",
+			"configurePreset": "linux-debug",
+			"output": {
+				"outputOnFailure": true
+			}
+		},
+		{
+			"name": "linux-release",
+			"configurePreset": "linux-release",
+			"output": {
+				"outputOnFailure": true
+			}
+		},
+		{
+			"name": "linux-core-debug",
+			"configurePreset": "linux-core-debug",
+			"output": {
+				"outputOnFailure": true
+			}
+		},
+		{
+			"name": "linux-core-release",
+			"configurePreset": "linux-core-release",
+			"output": {
+				"outputOnFailure": true
+			}
+		}
+	]
+}

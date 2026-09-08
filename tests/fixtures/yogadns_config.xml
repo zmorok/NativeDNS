@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<YogaDnsProfile file_format="1" product_id="1" product_min_version="127000">
+	<Settings ignore_rule_if_interface_down="1" blockTcpPort53="1" clearDnsCache="1" ttlMin="0" ttlMax="2147483647" captivePortalDetection="0" interceptOthers="0">
+		<DnsChecker testTarget="iana.org" testsPerTime="15" importUrls="https://yogadns.com/resolvers/resolvers.md
+https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md
+https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/relays.md
+" />
+	</Settings>
+	<Rule name="AI - OpenAI" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="chatgpt.com;
+*.chatgpt.com;
+openai.com;
+*.openai.com;
+oaiusercontent.com;
+*.oaiusercontent.com;
+oaistatic.com;
+*.oaistatic.com;
+chatgpt.site;
+*.chatgpt.site" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="AI - Google" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="gemini.google.com;
+*.gemini.google.com;
+aistudio.google.com;
+*.aistudio.google.com;
+ai.google.dev;
+*.ai.google.dev;
+labs.google;
+*.labs.google;
+notebooklm.google;
+*.notebooklm.google;
+generativelanguage.googleapis.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="AI - Microsoft" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="copilot.microsoft.com;
+*.copilot.microsoft.com;
+designer.microsoft.com;
+*.designer.microsoft.com;
+featureassets.org;
+*.featureassets.org" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="AI - Anthropic" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="claude.ai;
+*.claude.ai;
+anthropic.com;
+*.anthropic.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="AI - xAI and X" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="grok.com;
+*.grok.com;
+x.ai;
+*.x.ai;
+x.com;
+*.x.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="AI - Other" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="openrouter.ai;
+*.openrouter.ai;
+elevenlabs.io;
+*.elevenlabs.io;
+genspark.ai;
+*.genspark.ai;
+clerk.com;
+*.clerk.com;
+clerk.dev;
+*.clerk.dev" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Developer - GitHub Copilot" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="api.github.com;
+githubcopilot.com;
+*.githubcopilot.com;
+avatars.githubusercontent.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Developer - VS Code" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="vscode.dev;
+*.vscode.dev;
+vsassets.io;
+*.vsassets.io" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Communication - Discord" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="discord.com;
+*.discord.com;
+discord.gg;
+*.discord.gg;
+discordapp.com;
+*.discordapp.com;
+discordapp.net;
+*.discordapp.net" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Media - Twitch" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="twitch.tv;
+*.twitch.tv;
+twitchcdn.net;
+*.twitchcdn.net;
+ttvnw.net;
+*.ttvnw.net;
+jtvnw.net;
+*.jtvnw.net" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Services - Patreon" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="patreon.com;
+*.patreon.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Services - EA" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="ea.com;
+*.ea.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Services - Ecosia" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="ecosia.org;
+*.ecosia.org" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Services - Mozilla" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="mozilla.org;
+*.mozilla.org" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="GeForce NOW" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="geforcenow.com;
+*.geforcenow.com;
+geforce.com;
+*.geforce.com;
+nvidiagrid.net;
+*.nvidiagrid.net;
+*.gx.nvidia.com;
+*.gxn.nvidia.com;
+*.nvgs.nvidia.com;
+login.nvidia.com;
+api-prod.nvidia.com" action="process_server" action_id="1002" interface_id="" interface_id_type="id" interface_name="" />
+	<Rule name="Default" enabled="1" dnssec_local_validation="0" dnssec_reject_unsigned="0" hostnames="*" action="process_server" action_id="0" interface_id="" interface_id_type="id" interface_name="" />
+	<DnsServer id="1001" name="01. Xbox (DoT)" protocol="dot" dnssec_supported="1" dot_host_name="xbox-dns.ru" />
+	<DnsServer id="1002" name="02. Xbox (DoH)" protocol="doh" doh_host_name="xbox-dns.ru" doh_path="/dns-query" />
+	<DnsServer id="1003" name="03. COMSS Geo (DoH)" protocol="doh" af="2" ip="195.133.25.16" doh_host_name="dns.comss.one" doh_path="/dns-query" />
+	<DnsServer id="1005" name="05. Cloudflare (DoT)" protocol="dot" dnssec_supported="1" dot_host_name="one.one.one.one" />
+	<DnsServer id="1006" name="06. Google (DoT)" protocol="dot" dnssec_supported="1" dot_host_name="dns.google" />
+	<DnsServer id="1007" name="07. AdGuard DNS (DoH)" protocol="doh" af="2" ip="94.140.14.14" doh_host_name="dns.adguard-dns.com" doh_path="/dns-query" />
+</YogaDnsProfile>

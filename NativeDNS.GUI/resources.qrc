@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/nativedns">
+    <file alias="nativedns.png">resources/nativedns.png</file>
+    <file alias="nativedns.svg">resources/nativedns.svg</file>
+  </qresource>
+</RCC>

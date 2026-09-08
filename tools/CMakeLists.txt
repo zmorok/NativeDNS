@@ -1,0 +1,6 @@
+add_executable(nativednsctl main.cpp)
+target_link_libraries(nativednsctl PRIVATE NativeDNS.Core.Internal)
+if(WIN32)
+  nativedns_copy_windivert_runtime(nativednsctl)
+  nativedns_copy_sodium_runtime(nativednsctl)
+endif()
