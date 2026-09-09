@@ -93,7 +93,6 @@ install(FILES
   "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
   "${CMAKE_SOURCE_DIR}/README.md"
   DESTINATION . COMPONENT Runtime)
-install(FILES "${CMAKE_SOURCE_DIR}/packaging/NativeDNS.xml" DESTINATION examples COMPONENT Runtime)
 if(UNIX AND NOT APPLE AND NATIVEDNS_BUILD_GUI)
   install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/io.nativedns.NativeDNS.desktop" DESTINATION share/applications COMPONENT Runtime)
   # Keep the installed desktop/AppImage artwork identical to the Qt window and tray icon.

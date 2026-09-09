@@ -51,7 +51,6 @@ if ($Target -in @('standalone','all')) {
         @{ Source = "build\msvc\NativeDNS.GUI\$Configuration\NativeDNS.exe"; Destination = 'NativeDNS.exe' },
         @{ Source = "build\msvc\NativeDNS.GUI\$Configuration\WinDivert.dll"; Destination = 'WinDivert.dll' },
         @{ Source = "build\msvc\NativeDNS.GUI\$Configuration\WinDivert64.sys"; Destination = 'WinDivert64.sys' },
-        @{ Source = 'packaging\NativeDNS.xml'; Destination = 'NativeDNS.xml' },
         @{ Source = 'THIRD_PARTY_NOTICES.md'; Destination = 'THIRD_PARTY_NOTICES.md' }
     )
     foreach ($file in $files) {
