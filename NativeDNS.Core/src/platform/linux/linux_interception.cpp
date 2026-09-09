@@ -34,13 +34,16 @@ class LinuxNftInterception final : public IInterceptionProvider {
 public:
     LinuxNftInterception(Config config,Logger& logger,uint16_t intercepted):config_(std::move(config)),logger_(logger),intercepted_(intercepted){
         router_=std::make_shared<Router>(config_,logger_); original_=system_resolver(); proxy_=std::make_unique<LocalProxy>(router_,original_,logger_,0);
+        logger_.write(Level::verbose,"SYSTEM_RESOLVER","Selected original resolver "+original_.ip+":"+std::to_string(original_.port)+" source="+original_.name);
     }
     ~LinuxNftInterception() override { stop(); }
     void start() override {
         std::lock_guard lock(mutex_); if(status_.state!=State::stopped) throw Error("LIFECYCLE","Linux interception is not stopped"); status_.state=State::starting;
         try {
             if(::geteuid()!=0) throw Error("ELEVATION_REQUIRED","Linux transparent interception requires root/CAP_NET_ADMIN CoreHost privileges");
+            logger_.write(Level::verbose,"LINUX_PRIVILEGES","Transparent interception privilege check passed");
             if(command("command -v nft >/dev/null 2>&1")!=0) throw Error("NFT_NOT_FOUND","nftables command is required for transparent Linux interception");
+            logger_.write(Level::verbose,"NFT_AVAILABLE","nftables executable found");
             proxy_->start(); const auto p=proxy_->status(); if(!p.port) throw Error("INTERCEPTION","Local proxy did not expose a port");
             (void)command("nft delete table inet nativedns >/dev/null 2>&1");
             const std::string script=

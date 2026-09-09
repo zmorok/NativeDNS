@@ -28,6 +28,7 @@ private:
     void buildUi();
     void loadConfiguration();
     void saveConfiguration();
+    void applyFileLogging();
     void openServers();
     void openRules();
     void importConfiguration();

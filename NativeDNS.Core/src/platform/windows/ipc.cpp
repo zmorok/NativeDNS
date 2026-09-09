@@ -130,7 +130,7 @@ void PipeServer::run() {
                 if(!async_transfer(pipe,header,sizeof(header),false,static_cast<HANDLE>(native_stop_))) { CloseHandle(pipe); break; }
                 if(get32(header)!=magic || get16(header+4)!=1) throw Error("IPC_PROTOCOL","Bad IPC magic/version");
                 const uint16_t operation=get16(header+6); const uint64_t request=get64(header+8); const uint32_t length=get32(header+16);
-                if(!request || length>max_payload || operation<1 || operation>9) throw Error("IPC_PROTOCOL","Invalid IPC request header");
+                if(!request || length>max_payload || operation<1 || operation>10) throw Error("IPC_PROTOCOL","Invalid IPC request header");
                 std::string payload(length,'\0');
                 if(length && !async_transfer(pipe,reinterpret_cast<uint8_t*>(payload.data()),length,false,static_cast<HANDLE>(native_stop_))) { CloseHandle(pipe); break; }
                 IpcResponse response;

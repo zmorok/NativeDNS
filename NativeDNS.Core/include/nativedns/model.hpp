@@ -38,7 +38,7 @@ struct Rule {
 };
 struct LoggingSettings {
     Level screen = Level::normal, file = Level::normal;
-    bool file_enabled = false;
+    bool file_enabled = true;
     std::string directory = "logs";
     bool operator==(const LoggingSettings&) const = default;
 };

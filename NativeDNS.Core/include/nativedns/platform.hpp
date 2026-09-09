@@ -19,7 +19,11 @@ uint32_t secure_random_u32();
 uint64_t monotonic_millis();
 uint32_t process_id();
 std::filesystem::path executable_path();
+// Root of the staged application. On Windows executables live in the root;
+// Linux packages place them in <root>/bin.
+std::filesystem::path application_root_directory();
 std::filesystem::path user_config_directory();
+std::string system_summary();
 
 class ProcessInstanceLock {
 public:

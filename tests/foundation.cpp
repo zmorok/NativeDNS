@@ -33,7 +33,9 @@ int main() {
         check(std::filesystem::exists(path) && std::filesystem::exists(path.string() + ".1"),"log rotation");
         {
             std::ifstream stream(path,std::ios::binary); std::string contents((std::istreambuf_iterator<char>(stream)),{});
-            check(contents.find("DEBUG") == std::string::npos && contents.find("NORMAL") != std::string::npos,"independent file level");
+            check(contents.find("must not reach file") == std::string::npos && contents.find("NORMAL") != std::string::npos,"independent file level");
+            check(contents.find("[INFO]") != std::string::npos,"file log contains readable level");
+            check(contents.size()>20&&contents[3]=='.'&&contents[6]=='.'&&contents[11]==' '&&contents[14]==':'&&contents[17]==':',"file log date/time format");
         }
         logger.clear_display(); check(std::filesystem::file_size(path) > 0,"display clear does not clear file");
         logger.clear_file(); check(std::filesystem::file_size(path) == 0,"clear file");

@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/file.h>
+#include <sys/utsname.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sodium.h>
@@ -13,6 +14,7 @@
 #include <limits.h>
 #include <cerrno>
 #include <cctype>
+#include <sstream>
 
 namespace nd::platform {
 namespace {
@@ -45,10 +47,23 @@ std::filesystem::path executable_path(){
     buffer[n]='\0';
     return std::filesystem::path(buffer);
 }
+std::filesystem::path application_root_directory(){
+    const auto directory=executable_path().parent_path();
+    return directory.filename()=="bin"?directory.parent_path():directory;
+}
 std::filesystem::path user_config_directory(){
     if(const char* xdg=std::getenv("XDG_CONFIG_HOME"); xdg&&*xdg) return std::filesystem::path(xdg)/"nativedns";
     if(const char* home=std::getenv("HOME"); home&&*home) return std::filesystem::path(home)/".config"/"nativedns";
     return executable_path().parent_path();
+}
+std::string system_summary(){
+    utsname details{};
+    const bool available=::uname(&details)==0;
+    std::ostringstream output;
+    output<<"platform=linux-x64";
+    if(available) output<<" kernel="<<details.sysname<<' '<<details.release<<" machine="<<details.machine;
+    output<<" pid="<<process_id()<<" uid="<<::getuid()<<" euid="<<::geteuid();
+    return output.str();
 }
 void wait_socket(std::intptr_t raw,bool writing,std::chrono::steady_clock::time_point deadline){
     const int socket=static_cast<int>(raw);

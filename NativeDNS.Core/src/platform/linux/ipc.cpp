@@ -277,7 +277,7 @@ void PipeServer::run() {
                 const uint16_t operation = get16(header + 6);
                 const uint64_t request = get64(header + 8);
                 const uint32_t length = get32(header + 16);
-                if (!request || length > max_payload || operation < 1 || operation > 9) {
+                if (!request || length > max_payload || operation < 1 || operation > 10) {
                     throw Error("IPC_PROTOCOL", "Invalid IPC request header");
                 }
 

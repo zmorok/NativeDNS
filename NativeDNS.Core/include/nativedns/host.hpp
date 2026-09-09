@@ -22,6 +22,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable shutdown_cv_;
     bool shutdown_requested_ = false;
+    std::atomic_bool stopped_ = true;
     Config config_;
     Server original_;
     uint16_t local_port_;

@@ -7,7 +7,7 @@
 #include <condition_variable>
 
 namespace nd {
-enum class IpcOperation : uint16_t { ping = 1, status = 2, start = 3, stop = 4, logs = 5, shutdown = 6, clear_file_log = 7, clear_display = 8, restart = 9 };
+enum class IpcOperation : uint16_t { ping = 1, status = 2, start = 3, stop = 4, logs = 5, shutdown = 6, clear_file_log = 7, clear_display = 8, restart = 9, configure_file_log = 10 };
 struct IpcResponse { uint32_t status = 0; std::string payload; };
 class PipeServer {
 public:

@@ -274,7 +274,7 @@ Config load_config(const std::filesystem::path& path) {
             saw_logging = true; known(node, {"screen","file","enabled","directory"});
             config.logging.screen = static_cast<Level>(num(node, "screen", 1));
             config.logging.file = static_cast<Level>(num(node, "file", 1));
-            config.logging.file_enabled = flag(node, "enabled", false); config.logging.directory = attr(node, "directory", "logs");
+            config.logging.file_enabled = flag(node, "enabled", true); config.logging.directory = attr(node, "directory", "logs");
         } else if (node.name == "Server") {
             known(node, {"id","name","enabled","protocol","ip","port","hostname","url","dnssec","timeout","bootstrap","hashes","publicKey","provider","relay"});
             Server s;

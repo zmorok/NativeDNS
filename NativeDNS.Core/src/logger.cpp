@@ -6,6 +6,17 @@
 #include <iomanip>
 #include <sstream>
 namespace nd {
+namespace {
+const char* level_name(Level level){
+    switch(level){
+    case Level::errors_only:return "ERROR";
+    case Level::normal:return "INFO";
+    case Level::verbose:return "VERBOSE";
+    case Level::debug:return "DEBUG";
+    }
+    return "UNKNOWN";
+}
+}
 Logger::Logger(size_t capacity) : capacity_(capacity) {
     if (!capacity) throw std::invalid_argument("log capacity must be positive");
 }
@@ -18,7 +29,18 @@ void Logger::write(Level level, std::string code, std::string message) {
         std::lock_guard lock(mutex_);
         events_.push_back({++sequence_, std::chrono::system_clock::now(), level, std::move(code), std::move(message)});
         if (events_.size() > capacity_) events_.pop_front();
-        if (file_enabled_ && level <= file_level_) write_file(events_.back());
+        if (file_enabled_ && level <= file_level_) {
+            try {
+                write_file(events_.back());
+            } catch (const std::exception& error) {
+                // Diagnostics must never take DNS routing down. Keep the failure
+                // visible through the live log and disable the broken sink.
+                file_enabled_ = false;
+                events_.push_back({++sequence_, std::chrono::system_clock::now(), Level::errors_only,
+                                   "FILE_LOG_FAILED", error.what()});
+                if (events_.size() > capacity_) events_.pop_front();
+            }
+        }
     }
     changed_.notify_all();
 }
@@ -57,7 +79,7 @@ void Logger::configure_file(bool enabled, Level level, std::filesystem::path pat
 }
 void Logger::clear_file() {
     std::lock_guard lock(mutex_);
-    if (file_path_.empty()) return;
+    if (file_path_.empty() || !std::filesystem::exists(file_path_)) return;
     std::ofstream stream(file_path_, std::ios::binary | std::ios::trunc);
     if (!stream) throw std::runtime_error("cannot clear log file");
     stream.flush();
@@ -87,10 +109,9 @@ void Logger::write_file(const LogEvent& event) {
     const auto instant = std::chrono::system_clock::to_time_t(event.time);
     tm local{};
     platform::local_time(instant, local);
-    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(event.time.time_since_epoch()).count() % 1000;
     std::ostringstream line;
-    line << '[' << std::put_time(&local, "%Y-%m-%d %H:%M:%S") << '.' << std::setw(3) << std::setfill('0') << millis << "] "
-         << event.sequence << ' ' << event.code << ' ' << event.message << "\r\n";
+    line << '[' << std::put_time(&local, "%d.%m.%Y %H:%M:%S") << "] "
+         << event.sequence << " [" << level_name(event.level) << "] " << event.code << ' ' << event.message << "\r\n";
     const auto text = line.str();
     rotate_file(text.size());
     std::ofstream stream(file_path_, std::ios::binary | std::ios::app);

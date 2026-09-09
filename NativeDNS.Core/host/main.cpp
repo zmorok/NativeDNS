@@ -4,6 +4,14 @@
 #include <iostream>
 
 namespace {
+void log_startup_failure(const char* code,const std::string& message) noexcept{
+    try{
+        nd::Logger logger(16);
+        logger.configure_file(true,nd::Level::errors_only,nd::platform::application_root_directory()/"logs"/"NativeDNS.log");
+        logger.write(nd::Level::errors_only,code,message);
+    }catch(...){ }
+}
+
 nd::Server default_original(){
     nd::Server s;
     s.id=1;
@@ -91,9 +99,11 @@ int main(int argc,char** argv){
         host.stop();
         return restart?23:0;
     }catch(const nd::Error& e){
+        log_startup_failure(e.code.c_str(),e.what());
         std::cerr<<e.code<<": "<<e.what()<<"\n";
         return 10;
     }catch(const std::exception& e){
+        log_startup_failure("INTERNAL",e.what());
         std::cerr<<"INTERNAL: "<<e.what()<<"\n";
         return 11;
     }

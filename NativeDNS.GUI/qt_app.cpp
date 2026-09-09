@@ -13,6 +13,8 @@
 #include <QCoreApplication>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDesktopServices>
+#include <QDateTime>
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -44,6 +46,7 @@
 #include <QTextCursor>
 #include <QTextCharFormat>
 #include <QTextDocument>
+#include <QUrl>
 #include <thread>
 #include <algorithm>
 #include <functional>
@@ -73,6 +76,22 @@ int protocolIndex(nd::Protocol p){for(int i=0;i<8;++i)if(protocolFrom(i)==p)retu
 QString joinPatterns(const std::vector<std::string>& patterns){QStringList list;for(const auto& p:patterns)list<<q(p);return list.join(";\n");}
 uint32_t nextServerId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.servers)id=std::max(id,v.id);return id+1;}
 uint32_t nextRuleId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.rules)id=std::max(id,v.id);return id+1;}
+QString friendlyCoreStatus(const QString& raw){
+    const auto parts=raw.split(' ',Qt::SkipEmptyParts);
+    if(parts.isEmpty())return "Core: Unknown";
+    auto value=[&](const QString& key){for(const auto& part:parts)if(part.startsWith(key+'='))return part.mid(key.size()+1);return QString{};};
+    const auto state=parts.front();
+    if(state=="ERROR"){
+        const auto marker=raw.indexOf(" error=");
+        return marker>=0?"Core: Error | "+raw.mid(marker+7):"Core: Error";
+    }
+    QString stateText=state.toLower();if(!stateText.isEmpty())stateText[0]=stateText[0].toUpper();
+    if(state!="RUNNING")return "Core: "+stateText;
+    const QString mode=value("transparent")=="1"?"Transparent":"Local proxy";
+    const QString udp=value("udp")=="1"?"Active":"Inactive";
+    const QString tcp=value("tcp")=="1"?"Active":"Inactive";
+    return "Core: Running | Mode: "+mode+" | DNS port: "+value("port")+" | UDP: "+udp+" | TCP: "+tcp;
+}
 
 bool editServer(QWidget* parent,nd::Server& server){
     QDialog dialog(parent);dialog.setWindowTitle(server.id?"DNS Server":"Add DNS Server");dialog.resize(520,390);
@@ -202,6 +221,38 @@ void NativeDnsWindow::buildUi(){
         if(i==configuredLevel)action->setChecked(true);
         connect(action,&QAction::triggered,this,[this,i]{config_.logging.screen=static_cast<nd::Level>(i);saveConfiguration();});
     }
+    logMenu->addSeparator();
+    auto* fileEnabled=logMenu->addAction("Write diagnostic file");
+    fileEnabled->setCheckable(true);
+    fileEnabled->setChecked(config_.logging.file_enabled);
+    connect(fileEnabled,&QAction::toggled,this,[this](bool enabled){config_.logging.file_enabled=enabled;applyFileLogging();});
+    auto* fileLevel=logMenu->addMenu("File level");
+    auto* fileGroup=new QActionGroup(this);
+    fileGroup->setExclusive(true);
+    const int configuredFileLevel=std::clamp(static_cast<int>(config_.logging.file),0,3);
+    for(int i=0;i<4;++i){
+        auto* action=fileLevel->addAction(QStringList{"Errors Only","Normal","Verbose","Debug"}[i]);
+        action->setCheckable(true);
+        fileGroup->addAction(action);
+        if(i==configuredFileLevel)action->setChecked(true);
+        connect(action,&QAction::triggered,this,[this,i]{config_.logging.file=static_cast<nd::Level>(i);applyFileLogging();});
+    }
+    auto* clearFile=logMenu->addAction("Clear Diagnostic File");
+    auto* openLogFolder=logMenu->addAction("Open Log Folder");
+    connect(clearFile,&QAction::triggered,this,[this]{
+        try{
+            const auto response=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::clear_file_log,{},500);
+            if(response.status)throw std::runtime_error(response.payload);
+        }catch(const std::exception& error){QMessageBox::warning(this,"NativeDNS Log",error.what());}
+    });
+    connect(openLogFolder,&QAction::triggered,this,[this]{
+        try{
+            auto directory=std::filesystem::path(config_.logging.directory);
+            if(directory.is_relative())directory=nd::platform::application_root_directory()/directory;
+            std::filesystem::create_directories(directory);
+            QDesktopServices::openUrl(QUrl::fromLocalFile(qPath(directory)));
+        }catch(...){ }
+    });
 
     auto* window=menuBar()->addMenu("&Window");
     hideToTrayAction_=window->addAction("Hide to tray");
@@ -328,6 +379,16 @@ void NativeDnsWindow::loadConfiguration(){
 }
 
 void NativeDnsWindow::saveConfiguration(){try{nd::save_config(config_,configPath());}catch(const std::exception& e){QMessageBox::critical(this,"Configuration",e.what());}}
+void NativeDnsWindow::applyFileLogging(){
+    saveConfiguration();
+    try{
+        const auto payload=std::string(config_.logging.file_enabled?"1":"0")+'\t'+std::to_string(static_cast<unsigned>(config_.logging.file));
+        const auto response=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::configure_file_log,payload,500);
+        if(response.status)throw std::runtime_error(response.payload);
+    }catch(...){
+        // The setting is persisted and will be applied when CoreHost starts.
+    }
+}
 void NativeDnsWindow::openServers(){ServerDialog dialog(this,config_,[this]{saveConfiguration();});dialog.exec();}
 void NativeDnsWindow::openRules(){RulesDialog dialog(this,config_,[this]{saveConfiguration();});dialog.exec();}
 void NativeDnsWindow::importConfiguration(){const auto file=QFileDialog::getOpenFileName(this,"Import Configuration",{},"DNS configuration (*.xml);;All files (*)");if(file.isEmpty())return;try{const auto path=fsPath(file);try{config_=nd::load_config(path);}catch(const nd::Error&){config_=nd::import_yoga(path).config;}saveConfiguration();QMessageBox::information(this,"NativeDNS","Configuration imported.");}catch(const std::exception& e){QMessageBox::critical(this,"Import",e.what());}}
@@ -449,7 +510,7 @@ void NativeDnsWindow::refreshStatus(){
             self->statusRefreshPending_=false;
             if(!failed){
                 self->coreLaunchPending_=false;
-                self->setStatusText("Core: "+status,status.startsWith("ERROR"));
+                self->setStatusText(friendlyCoreStatus(status),status.startsWith("ERROR"));
             }else if(self->coreLaunchPending_&&self->coreLaunchTimer_.isValid()&&self->coreLaunchTimer_.elapsed()<10000){
                 self->setStatusText("Core: starting...");
             }else{
@@ -487,9 +548,17 @@ void NativeDnsWindow::appendLogLines(const QString& payload){
         bool ok=false;
         const auto seq=fields[0].toULongLong(&ok);
         if(ok)logSequence_=std::max(logSequence_,static_cast<uint64_t>(seq));
+        QString timestamp;
+        int messageField=3;
+        if(fields.size()>=5){
+            bool timeOk=false;
+            const auto milliseconds=fields[2].toLongLong(&timeOk);
+            if(timeOk){timestamp=QDateTime::fromMSecsSinceEpoch(milliseconds).toString("dd.MM HH:mm:ss");messageField=4;}
+        }
+        if(timestamp.isEmpty())timestamp=QDateTime::currentDateTime().toString("dd.MM HH:mm:ss");
         QTextCharFormat format;
         format.setForeground(fields[1].toUInt()==0?QColor(190,0,0):palette().color(QPalette::Text));
-        cursor.insertText(fields.mid(3).join('\t')+'\n',format);
+        cursor.insertText('['+timestamp+"] "+fields.mid(messageField).join('\t')+'\n',format);
     }
     cursor.endEditBlock();
     log_->setTextCursor(cursor);

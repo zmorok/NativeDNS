@@ -66,8 +66,11 @@ Current operations include:
 | 7 | Clear file log |
 | 8 | Clear display |
 | 9 | Restart |
+| 10 | Configure file log (`enabled<TAB>level`) |
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
+
+Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in milliseconds, code, and message. The GUI formats that timestamp in local time.
 
 ## Lifecycle
 

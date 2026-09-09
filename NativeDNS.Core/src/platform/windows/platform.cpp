@@ -6,6 +6,7 @@
 #include <sodium.h>
 #include <vector>
 #include <cstring>
+#include <sstream>
 
 namespace nd::platform {
 namespace {
@@ -35,6 +36,7 @@ std::filesystem::path executable_path(){
     if(!n||n>=buffer.size()) throw Error("PATH","Cannot determine executable path");
     return std::filesystem::path(std::wstring(buffer.data(),n));
 }
+std::filesystem::path application_root_directory(){ return executable_path().parent_path(); }
 std::filesystem::path user_config_directory(){
     const DWORD required=GetEnvironmentVariableW(L"LOCALAPPDATA",nullptr,0);
     if(required>0) {
@@ -46,6 +48,25 @@ std::filesystem::path user_config_directory(){
         }
     }
     return executable_path().parent_path();
+}
+std::string system_summary(){
+    using RtlGetVersionFunction=LONG (WINAPI*)(OSVERSIONINFOW*);
+    OSVERSIONINFOW version{}; version.dwOSVersionInfoSize=sizeof(version);
+    if(const auto module=GetModuleHandleW(L"ntdll.dll"))
+        if(const auto get_version=reinterpret_cast<RtlGetVersionFunction>(GetProcAddress(module,"RtlGetVersion")))
+            (void)get_version(&version);
+
+    bool elevated=false;
+    HANDLE token=nullptr;
+    if(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token)){
+        TOKEN_ELEVATION elevation{}; DWORD size=0;
+        if(GetTokenInformation(token,TokenElevation,&elevation,sizeof(elevation),&size)) elevated=elevation.TokenIsElevated!=0;
+        CloseHandle(token);
+    }
+    std::ostringstream output;
+    output<<"platform=windows-x64 os="<<version.dwMajorVersion<<'.'<<version.dwMinorVersion<<" build="<<version.dwBuildNumber
+          <<" pid="<<process_id()<<" elevated="<<(elevated?1:0);
+    return output.str();
 }
 void wait_socket(std::intptr_t raw,bool writing,std::chrono::steady_clock::time_point deadline){
     const SOCKET socket=static_cast<SOCKET>(raw);
