@@ -109,6 +109,19 @@ int main() {
             check(nd::detail::is_network_upstream(false,42424)&&!nd::detail::is_network_upstream(true,42424),"protocol-specific upstream registration");
         }
         check(!nd::detail::is_network_upstream(false,42424),"reference-counted upstream removal");
+
+        nd::Config fast_path=nd::default_config();
+        check(nd::should_reinject_udp_immediately(fast_path,ipv4_query()),"Process/server_id=0 bypasses worker queue");
+        fast_path.rules.front().action=nd::Action::bypass;
+        check(nd::should_reinject_udp_immediately(fast_path,ipv4_query()),"Bypass action bypasses worker queue");
+        fast_path.rules.front().action=nd::Action::block;
+        check(!nd::should_reinject_udp_immediately(fast_path,ipv4_query()),"Block remains on worker queue");
+        fast_path.rules.front().action=nd::Action::process;
+        fast_path.rules.front().server_id=1002;
+        nd::Server custom; custom.id=1002; custom.name="Custom"; custom.ip="1.1.1.1";
+        fast_path.servers.push_back(custom);
+        check(!nd::should_reinject_udp_immediately(fast_path,ipv4_query()),"Custom Process remains on worker queue");
+
         tcp_proxy_roundtrip();
         const auto dns=dns_response(); const auto v4=nd::make_intercepted_udp_response(ipv4_query(),dns);
         check(v4[0]==0x45&&read16(v4.data()+2)==v4.size(),"IPv4 length");

@@ -32,7 +32,8 @@ std::string quote(const std::filesystem::path& path) {
 }
 }
 
-void enable_autostart(const std::filesystem::path& executable, const std::filesystem::path& config) {
+void enable_autostart(const std::filesystem::path& executable, const std::filesystem::path& config,
+                      const std::filesystem::path&) {
     if (!std::filesystem::is_regular_file(executable)) {
         throw Error("AUTOSTART", "NativeDNS executable does not exist");
     }

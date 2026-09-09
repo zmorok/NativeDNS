@@ -6,6 +6,7 @@
 #include <QPlainTextEdit>
 #include <QSystemTrayIcon>
 #include <QTimer>
+#include <atomic>
 #include <filesystem>
 #include <nativedns/config.hpp>
 
@@ -32,14 +33,13 @@ private:
     void importConfiguration();
     void exportConfiguration();
     void startCore(bool transparent=true);
-    void stopCore();
     void shutdownCoreForExit();
     bool waitForCoreShutdown(int timeoutMs);
     void exitApplication();
     void refreshStatus();
     void refreshLogs();
     void setStatusText(const QString& text,bool error=false);
-    void applyLogLine(const QString& line,unsigned level);
+    void appendLogLines(const QString& payload);
     std::filesystem::path configPath() const;
 
     nd::Config config_;
@@ -51,9 +51,10 @@ private:
     QElapsedTimer coreLaunchTimer_;
     uint64_t logSequence_=0;
     bool exiting_=false;
-    bool background_=false;
     bool hideToTray_=true;
     bool trayAvailable_=false;
     bool coreLaunchPending_=false;
     bool coreShutdownAttempted_=false;
+    std::atomic_bool statusRefreshPending_=false;
+    std::atomic_bool logRefreshPending_=false;
 };

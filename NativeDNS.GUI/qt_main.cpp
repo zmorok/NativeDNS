@@ -59,7 +59,11 @@ int main(int argc,char** argv){
         "QMenuBar, QMenu, QToolBar, QToolButton, QStatusBar { color: #202020; }"
         "QMenuBar, QToolBar, QStatusBar { background-color: #f5f5f5; }"
         "QMenu { background-color: #ffffff; }"
+        "QMenuBar::item:selected, QMenu::item:selected { background-color: #0078d7; color: #ffffff; }"
         "QMenu::item:disabled, QToolButton:disabled { color: #7d7d7d; }"
+        "QToolButton:hover, QPushButton:hover, QTabBar::tab:hover { background-color: #dcecf9; border-color: #7eb4dd; }"
+        "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { background-color: #e5f1fb; color: #202020; }"
+        "QComboBox QAbstractItemView::item:selected { background-color: #0078d7; color: #ffffff; }"
     );
 
     const bool background=app.arguments().contains("--background");

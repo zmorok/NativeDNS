@@ -52,5 +52,8 @@ private:
 Packet make_intercepted_udp_response(const Packet& captured, const Packet& dns_response);
 Packet make_reflected_tcp_packet(const Packet& captured, uint16_t proxy_port, bool toward_proxy,
                                  uint16_t intercepted_port = 53);
+// Returns true only when the captured UDP DNS query can be safely reinjected
+// without entering the bounded routing worker queue.
+bool should_reinject_udp_immediately(const Config& config, const Packet& captured);
 #endif
 }

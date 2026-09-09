@@ -122,11 +122,15 @@ Expected behavior:
 
 - a second GUI launch activates the existing instance;
 - `Hide to tray` is persisted as a boolean UI setting;
+- CoreHost starts automatically with every GUI instance and remains active while the GUI is visible or in the tray;
+- there are no interactive Start/Stop controls; only a full application exit shuts CoreHost down;
 - close hides the window only when tray mode is enabled and a tray is available;
 - otherwise close performs a full application exit and shuts down CoreHost;
 - explicit Exit always performs full shutdown.
 
 The tray icon is an application resource, not an empty platform-provided icon.
+
+On Windows, autostart uses separate Task Scheduler entries: a highest-privilege hidden CoreHost task and an unprivileged delayed GUI task. This keeps interception privileged without elevating the Qt application or exposing a CoreHost console window.
 
 ## Configuration persistence
 

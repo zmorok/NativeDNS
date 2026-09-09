@@ -7,6 +7,7 @@
 namespace nd {
 namespace {
 constexpr wchar_t task_name[]=L"NativeDNS Core";
+constexpr wchar_t gui_task_name[]=L"NativeDNS GUI";
 
 template<class T> struct ComPtr {
     T* value=nullptr;
@@ -72,9 +73,12 @@ std::wstring quote_argument(const std::wstring& value) {
 }
 }
 
-void enable_autostart(const std::filesystem::path& executable,const std::filesystem::path& config) {
+void enable_autostart(const std::filesystem::path& executable,const std::filesystem::path& config,
+                      const std::filesystem::path& gui_executable) {
+    const auto gui=gui_executable.empty()?executable.parent_path()/L"NativeDNS.exe":gui_executable;
     if(!std::filesystem::is_regular_file(executable)) throw Error("AUTOSTART","NativeDNS executable does not exist");
     if(!std::filesystem::is_regular_file(config)) throw Error("AUTOSTART","Autostart config does not exist");
+    if(!std::filesystem::is_regular_file(gui)) throw Error("AUTOSTART","NativeDNS GUI executable does not exist");
     (void)load_config(config);
     Scheduler scheduler;
     ComPtr<ITaskDefinition> definition;
@@ -133,6 +137,52 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     ComPtr<IRegisteredTask> registered;
     check(scheduler.root->RegisterTaskDefinition(name.value,definition.value,TASK_CREATE_OR_UPDATE,empty,empty,
         TASK_LOGON_INTERACTIVE_TOKEN,empty,registered.put()),"Register NativeDNS autostart task");
+
+    ComPtr<ITaskDefinition> gui_definition;
+    check(scheduler.service->NewTask(0,gui_definition.put()),"Create GUI task definition");
+    ComPtr<IRegistrationInfo> gui_registration;
+    check(gui_definition->get_RegistrationInfo(gui_registration.put()),"Open GUI task registration info");
+    Bstr gui_author(L"NativeDNS"),gui_description(L"Starts the NativeDNS desktop application in the system tray.");
+    check(gui_registration->put_Author(gui_author.value),"Set GUI task author");
+    check(gui_registration->put_Description(gui_description.value),"Set GUI task description");
+    ComPtr<IPrincipal> gui_principal;
+    check(gui_definition->get_Principal(gui_principal.put()),"Open GUI task principal");
+    check(gui_principal->put_LogonType(TASK_LOGON_INTERACTIVE_TOKEN),"Set GUI task logon type");
+    check(gui_principal->put_RunLevel(TASK_RUNLEVEL_LUA),"Keep GUI task unprivileged");
+    ComPtr<ITaskSettings> gui_settings;
+    check(gui_definition->get_Settings(gui_settings.put()),"Open GUI task settings");
+    check(gui_settings->put_Enabled(VARIANT_TRUE),"Enable GUI task");
+    check(gui_settings->put_Hidden(VARIANT_TRUE),"Hide GUI task metadata");
+    check(gui_settings->put_StartWhenAvailable(VARIANT_TRUE),"Enable delayed GUI start");
+    check(gui_settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE),"Allow GUI task on battery");
+    check(gui_settings->put_StopIfGoingOnBatteries(VARIANT_FALSE),"Keep GUI task on battery");
+    check(gui_settings->put_MultipleInstances(TASK_INSTANCES_IGNORE_NEW),"Set single GUI task instance");
+    Bstr gui_execution_limit(L"PT0S");
+    check(gui_settings->put_ExecutionTimeLimit(gui_execution_limit.value),"Remove GUI task execution limit");
+    ComPtr<ITriggerCollection> gui_triggers;
+    check(gui_definition->get_Triggers(gui_triggers.put()),"Open GUI task triggers");
+    ComPtr<ITrigger> gui_trigger;
+    check(gui_triggers->Create(TASK_TRIGGER_LOGON,gui_trigger.put()),"Create GUI logon trigger");
+    ComPtr<ILogonTrigger> gui_logon;
+    check(gui_trigger->QueryInterface(IID_PPV_ARGS(gui_logon.put())),"Configure GUI logon trigger");
+    Bstr gui_trigger_id(L"NativeDNS GUI user logon"),gui_delay(L"PT15S");
+    check(gui_logon->put_Id(gui_trigger_id.value),"Set GUI logon trigger id");
+    check(gui_logon->put_Delay(gui_delay.value),"Set GUI logon delay");
+    ComPtr<IActionCollection> gui_actions;
+    check(gui_definition->get_Actions(gui_actions.put()),"Open GUI task actions");
+    ComPtr<IAction> gui_action;
+    check(gui_actions->Create(TASK_ACTION_EXEC,gui_action.put()),"Create GUI executable action");
+    ComPtr<IExecAction> gui_execute;
+    check(gui_action->QueryInterface(IID_PPV_ARGS(gui_execute.put())),"Configure GUI executable action");
+    const auto absolute_gui=std::filesystem::absolute(gui).lexically_normal();
+    Bstr gui_path(absolute_gui.wstring()),gui_arguments(L"--background"),gui_working_directory(absolute_gui.parent_path().wstring());
+    check(gui_execute->put_Path(gui_path.value),"Set GUI task executable");
+    check(gui_execute->put_Arguments(gui_arguments.value),"Set GUI task arguments");
+    check(gui_execute->put_WorkingDirectory(gui_working_directory.value),"Set GUI task working directory");
+    Bstr gui_name(gui_task_name);
+    ComPtr<IRegisteredTask> gui_registered;
+    check(scheduler.root->RegisterTaskDefinition(gui_name.value,gui_definition.value,TASK_CREATE_OR_UPDATE,empty,empty,
+        TASK_LOGON_INTERACTIVE_TOKEN,empty,gui_registered.put()),"Register NativeDNS GUI autostart task");
 }
 
 void disable_autostart() {
@@ -140,11 +190,23 @@ void disable_autostart() {
     Bstr name(task_name);
     const HRESULT result=scheduler.root->DeleteTask(name.value,0);
     if(FAILED(result)&&result!=HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) check(result,"Delete NativeDNS autostart task");
+    Bstr gui_name(gui_task_name);
+    const HRESULT gui_result=scheduler.root->DeleteTask(gui_name.value,0);
+    if(FAILED(gui_result)&&gui_result!=HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) check(gui_result,"Delete NativeDNS GUI autostart task");
 }
 
 AutostartStatus autostart_status() {
     Scheduler scheduler;
-    Bstr name(task_name);
+    Bstr core_name(task_name);
+    ComPtr<IRegisteredTask> core_task;
+    const HRESULT core_found=scheduler.root->GetTask(core_name.value,core_task.put());
+    if(core_found==HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) return {};
+    check(core_found,"Read NativeDNS Core autostart task");
+    VARIANT_BOOL core_enabled=VARIANT_FALSE;
+    check(core_task->get_Enabled(&core_enabled),"Read Core autostart enabled state");
+    if(core_enabled!=VARIANT_TRUE) return {};
+
+    Bstr name(gui_task_name);
     ComPtr<IRegisteredTask> task;
     const HRESULT found=scheduler.root->GetTask(name.value,task.put());
     if(found==HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) return {};

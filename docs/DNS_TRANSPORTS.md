@@ -77,3 +77,5 @@ Rules are applied before upstream I/O.
 - `Block` returns the configured blocking behavior.
 
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
+
+On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID `0` are reinjected directly from the WinDivert receive loop. They never wait behind custom-upstream work in the routing worker queue. This is also the path that lets the operating-system resolver complete hostname lookup for DoH/DoT endpoints when neither `ip` nor `bootstrap` is configured. Explicit bootstrap behavior and configuration semantics are unchanged.

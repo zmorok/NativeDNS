@@ -123,6 +123,15 @@ Packet make_intercepted_udp_response(const Packet& captured,const Packet& dns_re
     return result;
 }
 
+bool should_reinject_udp_immediately(const Config& config,const Packet& captured) {
+    const auto view=udp_view(captured);
+    const Packet query(captured.begin()+static_cast<ptrdiff_t>(view.payload),captured.end());
+    const auto question=parse_question(query);
+    if(question.flags&0x8000) throw Error("DNS_MALFORMED","Cannot route a reply as a query");
+    const auto& rule=match_rule(config,question.name);
+    return rule.action==Action::bypass||(rule.action==Action::process&&rule.server_id==0);
+}
+
 Packet make_reflected_tcp_packet(const Packet& captured,uint16_t proxy_port,bool toward_proxy,uint16_t intercepted_port) {
     const auto view=tcp_view(captured);
     if(!proxy_port||!intercepted_port) throw Error("INTERCEPT_PACKET","TCP reflection port is zero");
@@ -221,6 +230,11 @@ struct WinDivertInterception::Impl {
                     const auto source_port=read16(packet.data()+view.udp);
                     const bool upstream=detail::is_network_upstream(false,source_port);
                     if(upstream) { logger.write(Level::debug,"WINDIVERT_UPSTREAM_BYPASS","source_port="+std::to_string(source_port)); inject(packet,address); continue; }
+                    if(should_reinject_udp_immediately(config,packet)) {
+                        logger.write(Level::debug,"WINDIVERT_RULE_FAST_PATH","Bypass/Original DNS query reinjected before worker queue");
+                        inject(packet,address);
+                        continue;
+                    }
                     std::lock_guard lock(queue_mutex);
                     if(jobs.size()>=4096) { logger.write(Level::errors_only,"WINDIVERT_QUEUE","Routing queue is full; DNS packet dropped"); continue; }
                     jobs.push_back({std::move(packet),address}); queue_changed.notify_one();

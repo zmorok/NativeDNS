@@ -18,7 +18,7 @@ nd::Server default_original(){
 void usage(){
     std::cout
         <<"NativeDNSCoreHost --config <file> [--transparent] [--port N]\n"
-        <<"NativeDNSCoreHost --register-autostart <config>\n"
+        <<"NativeDNSCoreHost --register-autostart <config> [--gui-executable <file>]\n"
         <<"NativeDNSCoreHost --unregister-autostart\n";
 }
 }
@@ -27,6 +27,7 @@ int main(int argc,char** argv){
     try{
         std::filesystem::path config_path;
         std::filesystem::path autostart_config;
+        std::filesystem::path autostart_gui;
         bool transparent=false;
         bool register_autostart=false;
         bool unregister_autostart=false;
@@ -42,6 +43,7 @@ int main(int argc,char** argv){
                 autostart_config=argv[++i];
             }
             else if(arg=="--unregister-autostart")unregister_autostart=true;
+            else if(arg=="--gui-executable"&&i+1<argc)autostart_gui=argv[++i];
             else if(arg=="--help"){usage();return 0;}
             else {
                 std::cerr<<"Unknown or incomplete argument: "<<arg<<"\n";
@@ -54,7 +56,7 @@ int main(int argc,char** argv){
             throw nd::Error("AUTOSTART","Conflicting autostart operations");
 
         if(register_autostart){
-            nd::enable_autostart(nd::platform::executable_path(),autostart_config);
+            nd::enable_autostart(nd::platform::executable_path(),autostart_config,autostart_gui);
             return 0;
         }
         if(unregister_autostart){
