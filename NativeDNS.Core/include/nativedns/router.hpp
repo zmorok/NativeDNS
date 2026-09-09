@@ -1,5 +1,6 @@
 #pragma once
 #include <nativedns/dns.hpp>
+#include <optional>
 namespace nd {
 enum class Disposition { reply, forward_original, silent_drop };
 struct RouteResult {
@@ -9,6 +10,8 @@ struct RouteResult {
     Action action = Action::process;
     std::string error_code, message;
 };
+std::string route_log_message(const Question& question, const Rule& rule, const Server* server,
+                              std::optional<double> elapsed_ms = std::nullopt);
 // Immutable validated configuration. Original destination belongs to the interception backend.
 class Router {
 public:

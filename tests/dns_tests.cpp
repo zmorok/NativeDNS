@@ -163,6 +163,11 @@ int main() {
         nd::Logger route_log; nd::Router router(config,route_log);
         auto routed = router.route(query,original.server()); selected.verify();
         check(routed.server_id == 1002 && nd::parse_response(routed.packet,q).addresses.size() == 1,"Rule uses selected real upstream");
+        const auto route_events=route_log.snapshot(nd::Level::normal);
+        check(route_events.size()==1&&route_events[0].code=="DNS_ROUTE"&&
+              route_events[0].message.find("example.com [A] - process : server=loopback (UDP) (DNS over UDP), rule=selected, time=")!=std::string::npos,
+              "combined readable route log");
+        check(nd::dns_type_name(28)=="AAAA"&&nd::dns_type_name(65)=="HTTPS"&&nd::dns_type_name(65280)=="TYPE65280","DNS type log names");
         const auto default_query = nd::make_query("iana.org");
         routed = router.route(default_query,original.server()); original.verify();
         check(routed.rule_id == 1 && routed.server_id == 0 && nd::parse_response(routed.packet,nd::parse_question(default_query)).addresses.size() == 1,"Default original endpoint");

@@ -39,6 +39,23 @@ std::string name(std::span<const uint8_t> p, size_t& offset) {
 }
 void append_word(Packet& p, uint16_t value) { p.push_back(static_cast<uint8_t>(value >> 8)); p.push_back(static_cast<uint8_t>(value)); }
 }
+std::string dns_type_name(uint16_t type) {
+    switch(type) {
+    case 1:return "A";
+    case 2:return "NS";
+    case 5:return "CNAME";
+    case 6:return "SOA";
+    case 12:return "PTR";
+    case 15:return "MX";
+    case 16:return "TXT";
+    case 28:return "AAAA";
+    case 33:return "SRV";
+    case 64:return "SVCB";
+    case 65:return "HTTPS";
+    case 255:return "ANY";
+    default:return "TYPE"+std::to_string(type);
+    }
+}
 Packet make_query(const std::string& hostname, uint16_t type) {
     auto host = normalize_host(hostname);
     const uint16_t id = platform::secure_random_u16();
