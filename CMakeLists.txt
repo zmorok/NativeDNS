@@ -96,7 +96,8 @@ install(FILES
 install(FILES "${CMAKE_SOURCE_DIR}/packaging/NativeDNS.xml" DESTINATION examples COMPONENT Runtime)
 if(UNIX AND NOT APPLE AND NATIVEDNS_BUILD_GUI)
   install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/io.nativedns.NativeDNS.desktop" DESTINATION share/applications COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/nativedns.svg" DESTINATION share/icons/hicolor/scalable/apps COMPONENT Runtime)
+  # Keep the installed desktop/AppImage artwork identical to the Qt window and tray icon.
+  install(FILES "${CMAKE_SOURCE_DIR}/NativeDNS.GUI/resources/nativedns.svg" DESTINATION share/icons/hicolor/scalable/apps COMPONENT Runtime)
 endif()
 install(FILES
   "${CMAKE_SOURCE_DIR}/docs/ARCHITECTURE.md"

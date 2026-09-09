@@ -11,7 +11,7 @@ set(NATIVEDNS_GUI_SOURCES
   resources.qrc
 )
 if(WIN32)
-  list(APPEND NATIVEDNS_GUI_SOURCES platform_launcher_windows.cpp)
+  list(APPEND NATIVEDNS_GUI_SOURCES platform_launcher_windows.cpp windows_resources.rc)
 else()
   list(APPEND NATIVEDNS_GUI_SOURCES platform_launcher_linux.cpp)
 endif()
