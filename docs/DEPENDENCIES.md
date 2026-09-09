@@ -49,6 +49,8 @@ Used for transparent DNS packet interception/reinjection.
 
 Windows packages deploy the official x64 WinDivert DLL and signed driver.
 
+WinDivert installs its kernel service on demand. During shutdown NativeDNS closes its interception handle first, then stops the driver only when the registered service points to the NativeDNS-bundled `WinDivert64.sys`. A service owned by another application is left untouched.
+
 ## Qt 6 Widgets
 
 GUI only.

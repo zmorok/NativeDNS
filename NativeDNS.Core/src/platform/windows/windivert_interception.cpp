@@ -1,6 +1,7 @@
 #include <nativedns/interception.hpp>
 #include <nativedns/dns_network.hpp>
 #include <nativedns/firewall.hpp>
+#include <nativedns/platform.hpp>
 #include <nativedns/tcp_dns_proxy.hpp>
 #include <windivert.h>
 #include <windows.h>
@@ -11,9 +12,49 @@
 #include <cstring>
 #include <deque>
 #include <thread>
+#include <cwctype>
 
 namespace nd {
 namespace {
+std::wstring normalized_driver_path(std::wstring path){
+    if(path.starts_with(L"\\??\\"))path.erase(0,4);
+    std::replace(path.begin(),path.end(),L'/',L'\\');
+    std::transform(path.begin(),path.end(),path.begin(),[](wchar_t value){return static_cast<wchar_t>(std::towlower(value));});
+    return path;
+}
+bool windivert_service_belongs_to_application(){
+    const SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
+    if(!manager)return false;
+    const SC_HANDLE service=OpenServiceW(manager,L"WinDivert",SERVICE_QUERY_CONFIG);
+    if(!service){const bool missing=GetLastError()==ERROR_SERVICE_DOES_NOT_EXIST;CloseServiceHandle(manager);return missing;}
+    DWORD required=0;
+    (void)QueryServiceConfigW(service,nullptr,0,&required);
+    std::vector<uint8_t> storage(required);
+    const auto config=reinterpret_cast<QUERY_SERVICE_CONFIGW*>(storage.data());
+    const bool queried=required&&QueryServiceConfigW(service,config,required,&required);
+    bool owned=false;
+    if(queried&&config->lpBinaryPathName){
+        const auto expected=(platform::executable_path().parent_path()/L"WinDivert64.sys").wstring();
+        owned=normalized_driver_path(config->lpBinaryPathName)==normalized_driver_path(expected);
+    }
+    CloseServiceHandle(service);CloseServiceHandle(manager);
+    return owned;
+}
+bool stop_windivert_service() noexcept{
+    const SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
+    if(!manager)return false;
+    const SC_HANDLE service=OpenServiceW(manager,L"WinDivert",SERVICE_STOP|SERVICE_QUERY_STATUS);
+    if(!service){const bool gone=GetLastError()==ERROR_SERVICE_DOES_NOT_EXIST;CloseServiceHandle(manager);return gone;}
+    SERVICE_STATUS status{};
+    bool stopped=ControlService(service,SERVICE_CONTROL_STOP,&status)!=FALSE||GetLastError()==ERROR_SERVICE_NOT_ACTIVE;
+    for(unsigned attempt=0;stopped&&status.dwCurrentState!=SERVICE_STOPPED&&attempt<40;++attempt){
+        Sleep(50);
+        stopped=QueryServiceStatus(service,&status)!=FALSE;
+    }
+    stopped=stopped&&(status.dwCurrentState==SERVICE_STOPPED||status.dwCurrentState==0);
+    CloseServiceHandle(service);CloseServiceHandle(manager);
+    return stopped;
+}
 uint16_t read16(const uint8_t* bytes) { return static_cast<uint16_t>((bytes[0] << 8) | bytes[1]); }
 void write16(uint8_t* bytes,uint16_t value) { bytes[0]=static_cast<uint8_t>(value>>8); bytes[1]=static_cast<uint8_t>(value); }
 uint32_t checksum_add(uint32_t sum,const uint8_t* bytes,size_t size) {
@@ -176,7 +217,7 @@ struct WinDivertInterception::Impl {
     struct Job { Packet packet; WINDIVERT_ADDRESS address{}; };
     std::mutex queue_mutex; std::condition_variable queue_changed; std::deque<Job> jobs;
     std::jthread receiver; std::vector<std::jthread> workers;
-    uint16_t tcp_proxy_port=0,intercepted_tcp_port;
+    uint16_t tcp_proxy_port=0,intercepted_tcp_port; bool stop_driver_on_release=false;
     Impl(Config value,Logger& output,uint16_t target):config(std::move(value)),logger(output),router(config,logger),tcp_proxy(router,logger,target),intercepted_tcp_port(target) { validate(config); }
     template<class T> T symbol(const char* name) {
         auto address=GetProcAddress(module,name); if(!address) throw Error("WINDIVERT_LOAD",std::string("Missing WinDivert export: ")+name);
@@ -230,8 +271,13 @@ struct WinDivertInterception::Impl {
                     const auto source_port=read16(packet.data()+view.udp);
                     const bool upstream=detail::is_network_upstream(false,source_port);
                     if(upstream) { logger.write(Level::debug,"WINDIVERT_UPSTREAM_BYPASS","source_port="+std::to_string(source_port)); inject(packet,address); continue; }
+                    const auto captured_question=parse_question(Packet(packet.begin()+static_cast<ptrdiff_t>(view.payload),packet.end()));
+                    const auto& captured_rule=match_rule(config,captured_question.name);
+                    logger.write(Level::debug,"DNS_CAPTURE","transport=udp name="+captured_question.name+" rule="+captured_rule.name+" action="+action_name(captured_rule.action)+" server="+std::to_string(captured_rule.server_id));
                     if(should_reinject_udp_immediately(config,packet)) {
-                        logger.write(Level::debug,"WINDIVERT_RULE_FAST_PATH","Bypass/Original DNS query reinjected before worker queue");
+                        const auto original=original_server(packet,view);
+                        logger.write(Level::normal,"DNS_ROUTE",route_log_message(captured_question,captured_rule,&original));
+                        logger.write(Level::debug,"WINDIVERT_RULE_FAST_PATH",captured_question.name+" bypass/original query reinjected before worker queue");
                         inject(packet,address);
                         continue;
                     }
@@ -265,6 +311,11 @@ struct WinDivertInterception::Impl {
         tcp_proxy.stop(); tcp_proxy_port=0;
         if(handle!=INVALID_HANDLE_VALUE) { close(handle); handle=INVALID_HANDLE_VALUE; }
         if(module) { FreeLibrary(module); module=nullptr; }
+        if(stop_driver_on_release){
+            if(stop_windivert_service())logger.write(Level::verbose,"WINDIVERT_DRIVER_STOPPED","NativeDNS WinDivert driver service stopped");
+            else logger.write(Level::verbose,"WINDIVERT_DRIVER_RETAINED","WinDivert service is still in use or could not be stopped");
+            stop_driver_on_release=false;
+        }
     }
 };
 
@@ -277,8 +328,12 @@ void WinDivertInterception::start() {
     p.state=State::starting; p.error_code.clear(); p.error_message.clear();
     try {
         p.tcp_proxy_port=p.tcp_proxy.start();
+        p.logger.write(Level::verbose,"TCP_PROXY_STARTED","TCP reflection proxy listening on port="+std::to_string(p.tcp_proxy_port));
+        try{p.stop_driver_on_release=windivert_service_belongs_to_application();}
+        catch(...){p.stop_driver_on_release=false;}
         p.module=LoadLibraryExW(L"WinDivert.dll",nullptr,LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         if(!p.module) throw Error("WINDIVERT_LOAD","Cannot load WinDivert.dll: "+std::to_string(GetLastError()));
+        p.logger.write(Level::verbose,"WINDIVERT_LOADED","WinDivert.dll loaded successfully");
         p.open=p.symbol<Impl::Open>("WinDivertOpen"); p.recv=p.symbol<Impl::Recv>("WinDivertRecv"); p.send=p.symbol<Impl::Send>("WinDivertSend");
         p.shutdown=p.symbol<Impl::Shutdown>("WinDivertShutdown"); p.close=p.symbol<Impl::Close>("WinDivertClose"); p.set_param=p.symbol<Impl::SetParam>("WinDivertSetParam");
         p.compile=p.symbol<Impl::Compile>("WinDivertHelperCompileFilter"); p.calc_checksums=p.symbol<Impl::CalcChecksums>("WinDivertHelperCalcChecksums");
@@ -292,11 +347,13 @@ void WinDivertInterception::start() {
             const auto error=GetLastError();
             throw Error(error==ERROR_ACCESS_DENIED?"ELEVATION_REQUIRED":"WINDIVERT_OPEN","WinDivertOpen failed: "+std::to_string(error));
         }
+        p.logger.write(Level::verbose,"WINDIVERT_HANDLE_OPEN","WinDivert network handle opened");
         if(!p.set_param(p.handle,WINDIVERT_PARAM_QUEUE_TIME,WINDIVERT_PARAM_QUEUE_TIME_MAX)||
            !p.set_param(p.handle,WINDIVERT_PARAM_QUEUE_LENGTH,8192)||
            !p.set_param(p.handle,WINDIVERT_PARAM_QUEUE_SIZE,WINDIVERT_PARAM_QUEUE_SIZE_MAX))
             throw Error("WINDIVERT_QUEUE","Cannot configure WinDivert queue: "+std::to_string(GetLastError()));
         p.firewall.enable(p.tcp_proxy_port);
+        p.logger.write(Level::verbose,"FIREWALL_RULE_ACTIVE","TCP proxy firewall rule enabled");
         p.state=State::running;
         for(unsigned i=0;i<4;++i) p.workers.emplace_back([&p]{p.worker_loop();});
         p.receiver=std::jthread([&p]{p.receive_loop();});
