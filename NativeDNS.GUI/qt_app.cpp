@@ -486,7 +486,7 @@ void NativeDnsWindow::appendLogLines(const QString& payload){
         if(fields.size()<4)continue;
         bool ok=false;
         const auto seq=fields[0].toULongLong(&ok);
-        if(ok)logSequence_=std::max(logSequence_,seq);
+        if(ok)logSequence_=std::max(logSequence_,static_cast<uint64_t>(seq));
         QTextCharFormat format;
         format.setForeground(fields[1].toUInt()==0?QColor(190,0,0):palette().color(QPalette::Text));
         cursor.insertText(fields.mid(3).join('\t')+'\n',format);

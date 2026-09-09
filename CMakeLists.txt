@@ -98,8 +98,16 @@ if(UNIX AND NOT APPLE AND NATIVEDNS_BUILD_GUI)
   install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/io.nativedns.NativeDNS.desktop" DESTINATION share/applications COMPONENT Runtime)
   install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/nativedns.svg" DESTINATION share/icons/hicolor/scalable/apps COMPONENT Runtime)
 endif()
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/docs/" DESTINATION docs COMPONENT Runtime
-  FILES_MATCHING PATTERN "*.md")
+install(FILES
+  "${CMAKE_SOURCE_DIR}/docs/ARCHITECTURE.md"
+  "${CMAKE_SOURCE_DIR}/docs/BUILD.md"
+  "${CMAKE_SOURCE_DIR}/docs/CONFIG_FORMAT.md"
+  "${CMAKE_SOURCE_DIR}/docs/DEPENDENCIES.md"
+  "${CMAKE_SOURCE_DIR}/docs/DNS_TRANSPORTS.md"
+  "${CMAKE_SOURCE_DIR}/docs/IPC_PROTOCOL.md"
+  "${CMAKE_SOURCE_DIR}/docs/LINUX_INTERCEPTION.md"
+  "${CMAKE_SOURCE_DIR}/docs/PLATFORM_MATRIX.md"
+  DESTINATION docs COMPONENT Runtime)
 
 if(WIN32)
   set(CPACK_GENERATOR ZIP)

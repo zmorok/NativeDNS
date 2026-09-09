@@ -6,7 +6,9 @@ BUILD="$ROOT/build/linux/$CONFIG"
 APPDIR="$ROOT/out/linux/$CONFIG/AppDir"
 
 find_tool() {
-  local env_name="$1" fallback="$2" value="${!env_name:-}"
+  local env_name="$1"
+  local fallback="$2"
+  local value="${!env_name-}"
   if [[ -n "$value" && -x "$value" ]]; then printf '%s\n' "$value"; return; fi
   if command -v "$fallback" >/dev/null 2>&1; then command -v "$fallback"; return; fi
   if [[ -x "$ROOT/tools/$fallback" ]]; then printf '%s\n' "$ROOT/tools/$fallback"; return; fi

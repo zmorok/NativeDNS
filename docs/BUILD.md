@@ -137,6 +137,11 @@ ctest --preset linux-core-debug
 ./scripts/linux/build-release.sh [standalone|portable|appimage|deb|all]
 ```
 
+Without an output argument, the Debug and Release scripts build, test and stage
+the `standalone` tree. Use `all` (or `build-all.sh`) only when the optional
+portable, AppImage and Debian packages are required. Run build scripts as the
+desktop user; runtime elevation is handled separately by CoreHost.
+
 Output forms:
 
 - `standalone`: installed runtime tree;
