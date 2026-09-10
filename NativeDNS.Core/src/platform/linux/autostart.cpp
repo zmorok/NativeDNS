@@ -88,4 +88,8 @@ AutostartStatus autostart_status() {
     }
     return result;
 }
+
+bool start_autostart_core(const std::filesystem::path&, const std::filesystem::path&) {
+    return false;
+}
 }

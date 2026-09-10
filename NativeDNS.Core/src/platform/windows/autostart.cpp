@@ -86,7 +86,7 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
 
     ComPtr<IRegistrationInfo> registration;
     check(definition->get_RegistrationInfo(registration.put()),"Open task registration info");
-    Bstr author(L"NativeDNS"),description(L"Starts the NativeDNS transparent DNS Core at user logon and restarts it after failures.");
+    Bstr author(L"NativeDNS"),description(L"Starts the NativeDNS transparent DNS Core on demand for the desktop application.");
     check(registration->put_Author(author.value),"Set task author");
     check(registration->put_Description(description.value),"Set task description");
 
@@ -107,16 +107,6 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     Bstr restart_interval(L"PT1M"),execution_limit(L"PT0S");
     check(settings->put_RestartInterval(restart_interval.value),"Set task restart interval");
     check(settings->put_ExecutionTimeLimit(execution_limit.value),"Remove task execution limit");
-
-    ComPtr<ITriggerCollection> triggers;
-    check(definition->get_Triggers(triggers.put()),"Open task triggers");
-    ComPtr<ITrigger> trigger;
-    check(triggers->Create(TASK_TRIGGER_LOGON,trigger.put()),"Create logon trigger");
-    ComPtr<ILogonTrigger> logon;
-    check(trigger->QueryInterface(IID_PPV_ARGS(logon.put())),"Configure logon trigger");
-    Bstr trigger_id(L"NativeDNS user logon"),delay(L"PT5S");
-    check(logon->put_Id(trigger_id.value),"Set logon trigger id");
-    check(logon->put_Delay(delay.value),"Set logon trigger delay");
 
     ComPtr<IActionCollection> actions;
     check(definition->get_Actions(actions.put()),"Open task actions");
@@ -165,7 +155,7 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     check(gui_triggers->Create(TASK_TRIGGER_LOGON,gui_trigger.put()),"Create GUI logon trigger");
     ComPtr<ILogonTrigger> gui_logon;
     check(gui_trigger->QueryInterface(IID_PPV_ARGS(gui_logon.put())),"Configure GUI logon trigger");
-    Bstr gui_trigger_id(L"NativeDNS GUI user logon"),gui_delay(L"PT15S");
+    Bstr gui_trigger_id(L"NativeDNS GUI user logon"),gui_delay(L"PT5S");
     check(gui_logon->put_Id(gui_trigger_id.value),"Set GUI logon trigger id");
     check(gui_logon->put_Delay(gui_delay.value),"Set GUI logon delay");
     ComPtr<IActionCollection> gui_actions;
@@ -197,22 +187,42 @@ void disable_autostart() {
 
 AutostartStatus autostart_status() {
     Scheduler scheduler;
+    AutostartStatus result;
+
     Bstr core_name(task_name);
     ComPtr<IRegisteredTask> core_task;
     const HRESULT core_found=scheduler.root->GetTask(core_name.value,core_task.put());
-    if(core_found==HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) return {};
-    check(core_found,"Read NativeDNS Core autostart task");
     VARIANT_BOOL core_enabled=VARIANT_FALSE;
-    check(core_task->get_Enabled(&core_enabled),"Read Core autostart enabled state");
-    if(core_enabled!=VARIANT_TRUE) return {};
+    if(core_found!=HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)){
+        check(core_found,"Read NativeDNS Core autostart task");
+        check(core_task->get_Enabled(&core_enabled),"Read Core autostart enabled state");
+    }
 
     Bstr name(gui_task_name);
     ComPtr<IRegisteredTask> task;
     const HRESULT found=scheduler.root->GetTask(name.value,task.put());
-    if(found==HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)) return {};
-    check(found,"Read NativeDNS autostart task");
     VARIANT_BOOL enabled=VARIANT_FALSE;
-    check(task->get_Enabled(&enabled),"Read autostart enabled state");
+    if(found!=HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)){
+        check(found,"Read NativeDNS autostart task");
+        check(task->get_Enabled(&enabled),"Read autostart enabled state");
+    }
+
+    result.enabled=core_enabled==VARIANT_TRUE||enabled==VARIANT_TRUE;
+    if(!result.enabled)return result;
+
+    bool core_is_on_demand=false;
+    if(core_enabled==VARIANT_TRUE){
+        ComPtr<ITaskDefinition> core_definition;
+        check(core_task->get_Definition(core_definition.put()),"Read Core autostart definition");
+        ComPtr<ITriggerCollection> core_triggers;
+        check(core_definition->get_Triggers(core_triggers.put()),"Read Core autostart triggers");
+        LONG trigger_count=0;
+        check(core_triggers->get_Count(&trigger_count),"Count Core autostart triggers");
+        core_is_on_demand=trigger_count==0;
+    }
+    result.needs_repair=core_enabled!=VARIANT_TRUE||enabled!=VARIANT_TRUE||!core_is_on_demand;
+    if(enabled!=VARIANT_TRUE)return result;
+
     ComPtr<ITaskDefinition> definition;
     check(task->get_Definition(definition.put()),"Read autostart definition");
     ComPtr<IActionCollection> actions;
@@ -224,11 +234,45 @@ AutostartStatus autostart_status() {
     OutBstr path,arguments;
     check(execute->get_Path(path.put()),"Read autostart executable");
     check(execute->get_Arguments(arguments.put()),"Read autostart arguments");
-    AutostartStatus result;
-    result.enabled=enabled==VARIANT_TRUE;
     if(path.value) result.executable=path.value;
     if(arguments.value) result.arguments=narrow(arguments.value);
     return result;
+}
+
+bool start_autostart_core(const std::filesystem::path& executable,const std::filesystem::path& config) {
+    Scheduler scheduler;
+    Bstr name(task_name);
+    ComPtr<IRegisteredTask> task;
+    const HRESULT found=scheduler.root->GetTask(name.value,task.put());
+    if(found==HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))return false;
+    check(found,"Read NativeDNS Core task");
+
+    VARIANT_BOOL enabled=VARIANT_FALSE;
+    check(task->get_Enabled(&enabled),"Read NativeDNS Core task state");
+    if(enabled!=VARIANT_TRUE)return false;
+
+    ComPtr<ITaskDefinition> definition;
+    check(task->get_Definition(definition.put()),"Read NativeDNS Core task definition");
+    ComPtr<IActionCollection> actions;
+    check(definition->get_Actions(actions.put()),"Read NativeDNS Core task actions");
+    ComPtr<IAction> action;
+    check(actions->get_Item(1,action.put()),"Read NativeDNS Core task action");
+    ComPtr<IExecAction> execute;
+    check(action->QueryInterface(IID_PPV_ARGS(execute.put())),"Read NativeDNS Core task executable");
+    OutBstr path,arguments;
+    check(execute->get_Path(path.put()),"Read NativeDNS Core executable path");
+    check(execute->get_Arguments(arguments.put()),"Read NativeDNS Core arguments");
+
+    const auto absolute_executable=std::filesystem::absolute(executable).lexically_normal();
+    const auto absolute_config=std::filesystem::absolute(config).lexically_normal();
+    const std::wstring expected_arguments=L"--config "+quote_argument(absolute_config.wstring())+L" --transparent";
+    if(!path.value||!arguments.value||_wcsicmp(path.value,absolute_executable.c_str())!=0||expected_arguments!=arguments.value)
+        return false;
+
+    auto empty=empty_variant();
+    ComPtr<IRunningTask> running;
+    check(task->Run(empty,running.put()),"Start NativeDNS Core task");
+    return true;
 }
 
 }
