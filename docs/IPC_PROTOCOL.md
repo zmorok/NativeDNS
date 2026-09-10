@@ -70,6 +70,10 @@ Current operations include:
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
 
+After writing a new configuration or changing servers/rules, the GUI sends `Restart`.
+CoreHost then stops its current interception backend, reloads the configured XML file,
+and starts a fresh Router/interception state in the same privileged process.
+
 Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in milliseconds, code, and message. The GUI formats that timestamp in local time.
 
 ## Lifecycle

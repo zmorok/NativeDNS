@@ -86,18 +86,20 @@ int main(int argc,char** argv){
             }
         }
 
-        auto config=nd::load_config(config_path);
-        nd::CoreHost host(
-            std::move(config),
-            default_original(),
-            port,
-            nd::core_pipe_name,
-            transparent?nd::InterceptionMode::transparent:nd::InterceptionMode::local_proxy);
-        host.start();
-        host.wait_for_shutdown();
-        const bool restart=host.restart_requested();
-        host.stop();
-        return restart?23:0;
+        for(;;){
+            auto config=nd::load_config(config_path);
+            nd::CoreHost host(
+                std::move(config),
+                default_original(),
+                port,
+                nd::core_pipe_name,
+                transparent?nd::InterceptionMode::transparent:nd::InterceptionMode::local_proxy);
+            host.start();
+            host.wait_for_shutdown();
+            const bool restart=host.restart_requested();
+            host.stop();
+            if(!restart)return 0;
+        }
     }catch(const nd::Error& e){
         log_startup_failure(e.code.c_str(),e.what());
         std::cerr<<e.code<<": "<<e.what()<<"\n";
