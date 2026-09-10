@@ -5,6 +5,7 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QAction>
 #include <QActionGroup>
 #include <QCheckBox>
@@ -37,6 +38,7 @@
 #include <QBrush>
 #include <QColor>
 #include <QFileInfo>
+#include <QFrame>
 #include <QSignalBlocker>
 #include <QSettings>
 #include <QScrollBar>
@@ -53,6 +55,8 @@
 #include <stdexcept>
 
 namespace {
+constexpr auto repositoryUrl="https://github.com/zmorok/NativeDNS";
+
 QString q(const std::string& value){return QString::fromUtf8(value.c_str(),static_cast<int>(value.size()));}
 std::string s(const QString& value){const auto bytes=value.toUtf8();return std::string(bytes.constData(),static_cast<size_t>(bytes.size()));}
 std::filesystem::path fsPath(const QString& value){
@@ -70,12 +74,74 @@ QString qPath(const std::filesystem::path& value){
 #endif
 }
 QString protocolText(nd::Protocol p){return q(nd::protocol_name(p));}
-QString actionText(nd::Action a){return q(nd::action_name(a));}
 nd::Protocol protocolFrom(int index){static const nd::Protocol values[]{nd::Protocol::udp,nd::Protocol::tcp,nd::Protocol::doh,nd::Protocol::dot,nd::Protocol::doh3,nd::Protocol::doq,nd::Protocol::dnscrypt,nd::Protocol::anonymized_dnscrypt};return values[std::clamp(index,0,7)];}
 int protocolIndex(nd::Protocol p){for(int i=0;i<8;++i)if(protocolFrom(i)==p)return i;return 0;}
 QString joinPatterns(const std::vector<std::string>& patterns){QStringList list;for(const auto& p:patterns)list<<q(p);return list.join(";\n");}
 uint32_t nextServerId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.servers)id=std::max(id,v.id);return id+1;}
 uint32_t nextRuleId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.rules)id=std::max(id,v.id);return id+1;}
+
+class AnchoredComboBox final:public QComboBox{
+public:
+    using QComboBox::QComboBox;
+protected:
+    void showPopup() override{
+        QComboBox::showPopup();
+        QPointer<QWidget> popup=view()->window();
+        QTimer::singleShot(0,this,[this,popup]{
+            if(!popup)return;
+            popup->setMinimumWidth(width());
+            popup->move(mapToGlobal(QPoint(0,height())));
+        });
+    }
+};
+
+void positionDialog(QDialog& dialog,QWidget* parent){
+    if(!parent)return;
+    const auto center=parent->window()->frameGeometry().center();
+    dialog.move(center-QPoint(dialog.width()/2,dialog.height()/2));
+}
+
+void showAboutDialog(QWidget* parent){
+    QDialog dialog(parent);
+    dialog.setWindowTitle("About");
+    dialog.setWindowIcon(QApplication::windowIcon());
+    dialog.setModal(true);
+
+    auto* icon=new QLabel(&dialog);
+    icon->setPixmap(QApplication::windowIcon().pixmap(64,64));
+    icon->setAlignment(Qt::AlignTop|Qt::AlignHCenter);
+
+    auto* description=new QLabel("<b>NativeDNS</b><br>Cross-platform DNS client<br>Qt 6 + native C++ Core",&dialog);
+    description->setTextFormat(Qt::RichText);
+
+    auto* summary=new QHBoxLayout;
+    summary->addWidget(icon);
+    summary->addSpacing(10);
+    summary->addWidget(description,1);
+
+    auto* separator=new QFrame(&dialog);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+
+    const auto version=QCoreApplication::applicationVersion().toHtmlEscaped();
+    auto* details=new QLabel("Version "+version+" &nbsp;&nbsp; <a href=\""+QString(repositoryUrl)+"\">GitHub repository</a>",&dialog);
+    details->setTextFormat(Qt::RichText);
+    details->setTextInteractionFlags(Qt::TextBrowserInteraction);
+    details->setOpenExternalLinks(true);
+
+    auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok,&dialog);
+    QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);
+
+    auto* root=new QVBoxLayout(&dialog);
+    root->addLayout(summary);
+    root->addWidget(separator);
+    root->addWidget(details);
+    root->addWidget(buttons);
+    dialog.setFixedSize(dialog.sizeHint());
+    positionDialog(dialog,parent);
+    dialog.exec();
+}
+
 QString friendlyCoreStatus(const QString& raw){
     const auto parts=raw.split(' ',Qt::SkipEmptyParts);
     if(parts.isEmpty())return "Core: Unknown";
@@ -97,7 +163,7 @@ bool editServer(QWidget* parent,nd::Server& server){
     QDialog dialog(parent);dialog.setWindowTitle(server.id?"DNS Server":"Add DNS Server");dialog.resize(520,390);
     auto* form=new QFormLayout;
     QLineEdit name(q(server.name)),ip(q(server.ip)),host(q(server.hostname)),url(q(server.url)),port(server.port?QString::number(server.port):QString()),bootstrap,publicKey(q(server.public_key)),provider(q(server.provider_name)),relay(q(server.relay));
-    QComboBox protocol;for(int i=0;i<8;++i)protocol.addItem(protocolText(protocolFrom(i)));protocol.setCurrentIndex(protocolIndex(server.protocol));
+    AnchoredComboBox protocol;for(int i=0;i<8;++i)protocol.addItem(protocolText(protocolFrom(i)));protocol.setCurrentIndex(protocolIndex(server.protocol));
     QCheckBox enabled("Enabled"),dnssec("DNSSEC supported");enabled.setChecked(server.enabled);dnssec.setChecked(server.dnssec_supported);
     bootstrap.setText([&]{QStringList x;for(const auto& v:server.bootstrap)x<<q(v);return x.join(';');}());
     form->addRow("Name:",&name);form->addRow("Protocol:",&protocol);form->addRow("IP:",&ip);form->addRow("Port:",&port);form->addRow("Hostname:",&host);form->addRow("URL:",&url);form->addRow("Bootstrap:",&bootstrap);form->addRow("Public key:",&publicKey);form->addRow("Provider:",&provider);form->addRow("Relay:",&relay);form->addRow(&enabled);form->addRow(&dnssec);
@@ -105,6 +171,7 @@ bool editServer(QWidget* parent,nd::Server& server){
     QObject::connect(&protocol,&QComboBox::currentIndexChanged,&dialog,[&]{update();});update();
     auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     auto* root=new QVBoxLayout(&dialog);root->addLayout(form);root->addWidget(buttons);
+    positionDialog(dialog,parent);
     if(dialog.exec()!=QDialog::Accepted)return false;
     server.name=s(name.text().trimmed());server.protocol=protocolFrom(protocol.currentIndex());server.ip=s(ip.text().trimmed());server.hostname=s(host.text().trimmed());server.url=s(url.text().trimmed());server.port=static_cast<uint16_t>(port.text().toUInt());server.enabled=enabled.isChecked();server.dnssec_supported=dnssec.isChecked();server.public_key=s(publicKey.text().trimmed());server.provider_name=s(provider.text().trimmed());server.relay=s(relay.text().trimmed());server.bootstrap.clear();for(const auto& part:bootstrap.text().split(';',Qt::SkipEmptyParts))server.bootstrap.push_back(s(part.trimmed()));
     return true;
@@ -129,7 +196,7 @@ private:
 
 bool editRule(QWidget* parent,nd::Config& config,nd::Rule& rule){
     QDialog dialog(parent);dialog.setWindowTitle(rule.is_default?"Default Rule":"DNS Rule");dialog.resize(560,420);auto* form=new QFormLayout;
-    QLineEdit name(q(rule.name));QPlainTextEdit hosts;hosts.setPlainText(joinPatterns(rule.patterns));hosts.setMinimumHeight(150);QComboBox action;action.addItems({"process","bypass","block"});action.setCurrentIndex(rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2);QComboBox server;server.addItem("Original/System",0);for(const auto& v:config.servers)server.addItem(q(v.name),v.id);const int found=server.findData(rule.server_id);if(found>=0)server.setCurrentIndex(found);QCheckBox enabled("Enabled");enabled.setChecked(rule.enabled);QComboBox block;block.addItems({"0.0.0.0 / ::","NXDOMAIN","REFUSED","Silent drop"});block.setCurrentIndex(static_cast<int>(rule.block_mode));form->addRow("Name:",&name);form->addRow("Hostnames:",&hosts);form->addRow("Action:",&action);form->addRow("DNS Server:",&server);form->addRow("Block mode:",&block);form->addRow(&enabled);auto update=[&]{server.setEnabled(action.currentIndex()==0);block.setEnabled(action.currentIndex()==2);name.setEnabled(!rule.is_default);hosts.setEnabled(!rule.is_default);enabled.setEnabled(!rule.is_default);};QObject::connect(&action,&QComboBox::currentIndexChanged,&dialog,[&]{update();});update();auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);auto* root=new QVBoxLayout(&dialog);root->addLayout(form);root->addWidget(buttons);if(dialog.exec()!=QDialog::Accepted)return false;rule.name=s(name.text().trimmed());rule.patterns=nd::split_patterns(s(hosts.toPlainText()));rule.enabled=enabled.isChecked();rule.action=action.currentIndex()==0?nd::Action::process:action.currentIndex()==1?nd::Action::bypass:nd::Action::block;rule.server_id=rule.action==nd::Action::process?server.currentData().toUInt():0;rule.block_mode=static_cast<nd::BlockMode>(block.currentIndex());return true;
+    QLineEdit name(q(rule.name));QPlainTextEdit hosts;hosts.setPlainText(joinPatterns(rule.patterns));hosts.setMinimumHeight(150);AnchoredComboBox action;action.addItems({"process","bypass","block"});action.setCurrentIndex(rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2);AnchoredComboBox server;server.addItem("Original/System",0);for(const auto& v:config.servers)server.addItem(q(v.name),v.id);const int found=server.findData(rule.server_id);if(found>=0)server.setCurrentIndex(found);QCheckBox enabled("Enabled");enabled.setChecked(rule.enabled);AnchoredComboBox block;block.addItems({"0.0.0.0 / ::","NXDOMAIN","REFUSED","Silent drop"});block.setCurrentIndex(static_cast<int>(rule.block_mode));form->addRow("Name:",&name);form->addRow("Hostnames:",&hosts);form->addRow("Action:",&action);form->addRow("DNS Server:",&server);form->addRow("Block mode:",&block);form->addRow(&enabled);auto update=[&]{server.setEnabled(action.currentIndex()==0);block.setEnabled(action.currentIndex()==2);name.setEnabled(!rule.is_default);hosts.setEnabled(!rule.is_default);enabled.setEnabled(!rule.is_default);};QObject::connect(&action,&QComboBox::currentIndexChanged,&dialog,[&]{update();});update();auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);auto* root=new QVBoxLayout(&dialog);root->addLayout(form);root->addWidget(buttons);positionDialog(dialog,parent);if(dialog.exec()!=QDialog::Accepted)return false;rule.name=s(name.text().trimmed());rule.patterns=nd::split_patterns(s(hosts.toPlainText()));rule.enabled=enabled.isChecked();rule.action=action.currentIndex()==0?nd::Action::process:action.currentIndex()==1?nd::Action::bypass:nd::Action::block;rule.server_id=rule.action==nd::Action::process?server.currentData().toUInt():0;rule.block_mode=static_cast<nd::BlockMode>(block.currentIndex());return true;
 }
 
 class RulesDialog final:public QDialog{
@@ -141,7 +208,58 @@ public:
 private:
     template<class F>void apply(F fn){try{nd::ConfigEditor editor(config_);fn(editor);config_=editor.get();changed_();reload();}catch(const std::exception& e){QMessageBox::critical(this,"NativeDNS",e.what());}}
     void move(int dir){const int row=table_->currentRow();if(row<0)return;const auto id=config_.rules[static_cast<size_t>(row)].id;apply([&](nd::ConfigEditor& e){e.move_rule(id,dir);});const int target=std::clamp(row+dir,0,table_->rowCount()-1);table_->selectRow(target);}
-    void reload(){table_->setRowCount(static_cast<int>(config_.rules.size()));for(int r=0;r<table_->rowCount();++r){const auto& v=config_.rules[static_cast<size_t>(r)];auto* enabled=new QTableWidgetItem(v.enabled?"✓":"");if(!v.enabled)enabled->setForeground(QBrush(Qt::gray));table_->setItem(r,0,enabled);table_->setItem(r,1,new QTableWidgetItem(q(v.name)));table_->setItem(r,2,new QTableWidgetItem(actionText(v.action)));QString server="—";if(v.action==nd::Action::process){if(!v.server_id)server="Original/System";else for(const auto& s:config_.servers)if(s.id==v.server_id)server=q(s.name);}table_->setItem(r,3,new QTableWidgetItem(server));}}
+    void reload(uint32_t selectedId=0){
+        table_->setRowCount(static_cast<int>(config_.rules.size()));
+        int selectedRow=-1;
+        for(int r=0;r<table_->rowCount();++r){
+            const auto& v=config_.rules[static_cast<size_t>(r)];
+            if(v.id==selectedId)selectedRow=r;
+            auto* enabled=new QTableWidgetItem(v.enabled?"✓":"");
+            if(!v.enabled)enabled->setForeground(QBrush(Qt::gray));
+            table_->setItem(r,0,enabled);
+            table_->setItem(r,1,new QTableWidgetItem(q(v.name)));
+
+            auto* action=new AnchoredComboBox(table_);
+            action->addItems({"process","bypass","block"});
+            action->setCurrentIndex(v.action==nd::Action::process?0:v.action==nd::Action::bypass?1:2);
+            table_->setCellWidget(r,2,action);
+
+            auto* server=new AnchoredComboBox(table_);
+            server->addItem("Original/System",0);
+            for(const auto& candidate:config_.servers)server->addItem(q(candidate.name),candidate.id);
+            const int serverIndex=server->findData(v.server_id);
+            server->setCurrentIndex(serverIndex>=0?serverIndex:0);
+            server->setEnabled(v.action==nd::Action::process);
+            table_->setCellWidget(r,3,server);
+
+            connect(action,&QComboBox::currentIndexChanged,this,[this,id=v.id](int index){
+                updateRule(id,[index](nd::Rule& rule){
+                    rule.action=index==0?nd::Action::process:index==1?nd::Action::bypass:nd::Action::block;
+                    if(rule.action!=nd::Action::process)rule.server_id=0;
+                });
+            });
+            connect(server,&QComboBox::currentIndexChanged,this,[this,id=v.id,server](int){
+                updateRule(id,[server](nd::Rule& rule){if(rule.action==nd::Action::process)rule.server_id=server->currentData().toUInt();});
+            });
+        }
+        if(selectedRow>=0)table_->selectRow(selectedRow);
+    }
+    void updateRule(uint32_t id,const std::function<void(nd::Rule&)>& update){
+        try{
+            const auto found=std::find_if(config_.rules.begin(),config_.rules.end(),[id](const nd::Rule& rule){return rule.id==id;});
+            if(found==config_.rules.end())return;
+            auto rule=*found;
+            update(rule);
+            nd::ConfigEditor editor(config_);
+            editor.update_rule(std::move(rule));
+            config_=editor.get();
+            changed_();
+            reload(id);
+        }catch(const std::exception& e){
+            QMessageBox::critical(this,"NativeDNS",e.what());
+            reload(id);
+        }
+    }
     nd::Config& config_;std::function<void()> changed_;QTableWidget* table_=nullptr;
 };
 }
@@ -176,7 +294,7 @@ void NativeDnsWindow::showAndActivate(){
 }
 
 void NativeDnsWindow::buildUi(){
-    setWindowTitle("NativeDNS");
+    setWindowTitle("NativeDNS "+QCoreApplication::applicationVersion());
     setWindowIcon(QApplication::windowIcon());
     resize(900,560);
     setMinimumSize(680,420);
@@ -261,6 +379,22 @@ void NativeDnsWindow::buildUi(){
     hideToTray_=uiSettings.value("ui/hideToTray",true).toBool();
     hideToTrayAction_->setChecked(hideToTray_);
 
+    auto* other=menuBar()->addMenu("&Other");
+    auto* language=other->addMenu("Language");
+    auto* english=language->addAction("English");
+    english->setCheckable(true);
+    english->setChecked(true);
+    auto* russian=language->addAction("Русский");
+    russian->setEnabled(false);
+    russian->setToolTip("Russian translation is planned");
+    auto* theme=other->addMenu("Theme");
+    auto* light=theme->addAction("Light");
+    light->setCheckable(true);
+    light->setChecked(true);
+    auto* dark=theme->addAction("Dark");
+    dark->setEnabled(false);
+    dark->setToolTip("Dark theme is planned");
+
     auto* help=menuBar()->addMenu("&Help");
     auto* about=help->addAction("About NativeDNS");
 
@@ -323,9 +457,7 @@ void NativeDnsWindow::buildUi(){
         settings.setValue("ui/hideToTray",enabled);
     });
     connect(exit,&QAction::triggered,this,[this]{exitApplication();});
-    connect(about,&QAction::triggered,this,[this]{
-        QMessageBox::about(this,"NativeDNS","NativeDNS\nCross-platform DNS client\nQt 6 + native C++ Core");
-    });
+    connect(about,&QAction::triggered,this,[this]{showAboutDialog(this);});
 
     connect(autostart,&QAction::toggled,this,[this,autostart](bool enabled){try{
 #ifdef _WIN32
@@ -389,8 +521,8 @@ void NativeDnsWindow::applyFileLogging(){
         // The setting is persisted and will be applied when CoreHost starts.
     }
 }
-void NativeDnsWindow::openServers(){ServerDialog dialog(this,config_,[this]{saveConfiguration();});dialog.exec();}
-void NativeDnsWindow::openRules(){RulesDialog dialog(this,config_,[this]{saveConfiguration();});dialog.exec();}
+void NativeDnsWindow::openServers(){ServerDialog dialog(this,config_,[this]{saveConfiguration();});positionDialog(dialog,this);dialog.exec();}
+void NativeDnsWindow::openRules(){RulesDialog dialog(this,config_,[this]{saveConfiguration();});positionDialog(dialog,this);dialog.exec();}
 void NativeDnsWindow::importConfiguration(){const auto file=QFileDialog::getOpenFileName(this,"Import Configuration",{},"DNS configuration (*.xml);;All files (*)");if(file.isEmpty())return;try{const auto path=fsPath(file);try{config_=nd::load_config(path);}catch(const nd::Error&){config_=nd::import_yoga(path).config;}saveConfiguration();QMessageBox::information(this,"NativeDNS","Configuration imported.");}catch(const std::exception& e){QMessageBox::critical(this,"Import",e.what());}}
 void NativeDnsWindow::exportConfiguration(){const auto file=QFileDialog::getSaveFileName(this,"Export Configuration","NativeDNS.xml","XML (*.xml)");if(file.isEmpty())return;try{nd::save_config(config_,fsPath(file));}catch(const std::exception& e){QMessageBox::critical(this,"Export",e.what());}}
 
@@ -537,9 +669,11 @@ void NativeDnsWindow::refreshLogs(){
 }
 void NativeDnsWindow::appendLogLines(const QString& payload){
     if(payload.isEmpty())return;
-    const bool follow=log_->verticalScrollBar()->value()>=log_->verticalScrollBar()->maximum()-2;
+    auto* scrollBar=log_->verticalScrollBar();
+    const int scrollPosition=scrollBar->value();
+    const bool follow=scrollPosition>=scrollBar->maximum()-2;
     log_->setUpdatesEnabled(false);
-    auto cursor=log_->textCursor();
+    auto cursor=QTextCursor(log_->document());
     cursor.movePosition(QTextCursor::End);
     cursor.beginEditBlock();
     for(const auto& line:payload.split('\n',Qt::SkipEmptyParts)){
@@ -561,9 +695,8 @@ void NativeDnsWindow::appendLogLines(const QString& payload){
         cursor.insertText('['+timestamp+"] "+fields.mid(messageField).join('\t')+'\n',format);
     }
     cursor.endEditBlock();
-    log_->setTextCursor(cursor);
     log_->setUpdatesEnabled(true);
-    if(follow)log_->verticalScrollBar()->setValue(log_->verticalScrollBar()->maximum());
+    scrollBar->setValue(follow?scrollBar->maximum():std::min(scrollPosition,scrollBar->maximum()));
     log_->viewport()->update();
 }
 void NativeDnsWindow::setStatusText(const QString& text,bool error){

@@ -47,6 +47,7 @@ QPalette nativeDnsLightPalette(){
 int main(int argc,char** argv){
     QApplication app(argc,argv);
     app.setApplicationName("NativeDNS");
+    app.setApplicationVersion(QStringLiteral(NATIVEDNS_VERSION));
     app.setOrganizationName("NativeDNS");
     app.setQuitOnLastWindowClosed(false);
     app.setStyle(QStyleFactory::create("Fusion"));

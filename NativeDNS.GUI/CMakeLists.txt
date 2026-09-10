@@ -23,6 +23,7 @@ else()
 endif()
 set_target_properties(NativeDNS.GUI PROPERTIES OUTPUT_NAME NativeDNS)
 target_link_libraries(NativeDNS.GUI PRIVATE NativeDNS.Core.Internal Qt6::Widgets Qt6::Network)
+target_compile_definitions(NativeDNS.GUI PRIVATE NATIVEDNS_VERSION="${PROJECT_VERSION}")
 
 if(WIN32)
   target_link_libraries(NativeDNS.GUI PRIVATE shell32)
