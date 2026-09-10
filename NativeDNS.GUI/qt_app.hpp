@@ -26,8 +26,10 @@ protected:
 
 private:
     void buildUi();
+    void retranslateUi();
     void loadConfiguration();
-    void saveConfiguration();
+    bool saveConfiguration();
+    bool applyConfiguration();
     void applyFileLogging();
     void openServers();
     void openRules();
@@ -53,6 +55,7 @@ private:
     uint64_t logSequence_=0;
     bool exiting_=false;
     bool hideToTray_=true;
+    bool darkTheme_=false;
     bool trayAvailable_=false;
     bool coreLaunchPending_=false;
     bool coreShutdownAttempted_=false;

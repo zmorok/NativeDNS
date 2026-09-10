@@ -63,7 +63,7 @@ if ($Target -in @('standalone','all')) {
 }
 
 $needsPortableStage = $Target -in @('portable','installer','all')
-$portableStage = Join-Path $portableOutput 'NativeDNS-0.1.0-windows-x64-portable'
+$portableStage = Join-Path $portableOutput 'NativeDNS-0.3.0-windows-x64-portable'
 if ($needsPortableStage) {
     $portableArguments = @{
         Configuration = $Configuration
@@ -90,7 +90,7 @@ if ($Target -in @('installer','all')) {
         & $iscc "/DStageDir=$portableStage" "/DOutputDir=$installerOutput" "/DConfiguration=$Configuration" (Join-Path $PSScriptRoot 'NativeDNS.iss')
     }
     $configurationSuffix = if ($Configuration -eq 'Debug') { '-debug' } else { '' }
-    $installer = Join-Path $installerOutput "NativeDNS-0.1.0-windows-x64-setup$configurationSuffix.exe"
+    $installer = Join-Path $installerOutput "NativeDNS-0.3.0-windows-x64-setup$configurationSuffix.exe"
     if (-not (Test-Path -LiteralPath $installer)) { throw "Installer output is missing: $installer" }
     $installerHash = Get-Sha256Hex $installer
     [IO.File]::WriteAllText("$installer.sha256","$installerHash  $([IO.Path]::GetFileName($installer))`n",[Text.UTF8Encoding]::new($false))

@@ -7,6 +7,7 @@ set(CMAKE_AUTORCC ON)
 set(NATIVEDNS_GUI_SOURCES
   qt_main.cpp
   qt_app.cpp
+  ui_preferences.cpp
   single_instance.cpp
   resources.qrc
 )

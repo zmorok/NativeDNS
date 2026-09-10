@@ -47,6 +47,7 @@ Owns:
 - Rules editor;
 - tray integration;
 - user-facing autostart control;
+- persistent light/dark theme and English/Russian UI preferences;
 - import/export workflow.
 
 The GUI does not implement DNS protocol logic.
@@ -130,13 +131,14 @@ Expected behavior:
 
 The tray icon is an application resource, not an empty platform-provided icon.
 
-On Windows, autostart uses separate Task Scheduler entries: a highest-privilege hidden CoreHost task and an unprivileged delayed GUI task. This keeps interception privileged without elevating the Qt application or exposing a CoreHost console window.
+On Windows, autostart starts `NativeDNS.exe --background` without a visible window or console. The tray application then launches the registered elevated CoreHost on demand. This keeps interception privileged without elevating the Qt GUI, and avoids starting CoreHost without its tray owner.
 
 ## Configuration persistence
 
 NativeDNS uses a versioned UTF-8 XML configuration.
 
 Writes are validated before publishing. Atomic file publication is implemented behind platform-specific filesystem primitives.
+The DNS Servers and Rules dialogs edit private working copies. `OK` validates and publishes the complete copy, while `Close` or the window close button discards all unapplied changes.
 
 ## Dependencies and ABI
 

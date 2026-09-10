@@ -36,6 +36,7 @@ Platform integration:
 - **Linux:** POSIX sockets, Unix Domain Sockets, nftables redirect backend, XDG autostart, `pkexec` for privileged CoreHost startup.
 
 The production desktop UI uses **Qt 6 Widgets** on both platforms.
+The GUI provides persistent light/dark themes and English/Russian interface languages under `Other`.
 
 ## Application lifecycle
 
@@ -46,6 +47,7 @@ NativeDNS is designed around one GUI instance and one CoreHost instance.
 - With `Hide to tray` enabled, closing the window hides it while the tray icon and CoreHost remain available.
 - With `Hide to tray` disabled, closing the window exits the GUI and shuts down CoreHost.
 - Explicit `Exit` always shuts down both GUI and CoreHost.
+- With autostart enabled, Windows starts `NativeDNS.exe --background`; the tray application then starts the registered elevated CoreHost on demand. CoreHost does not start at logon without the tray application.
 
 The GUI itself should run as the normal desktop user. Privileged interception is handled by the separate non-Qt CoreHost process.
 

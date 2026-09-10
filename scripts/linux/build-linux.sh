@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 CONFIG="${1:-release}"
 TARGET="${2:-standalone}"
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 case "$CONFIG" in
   debug) PRESET=linux-debug; SUFFIX=-debug ;;
