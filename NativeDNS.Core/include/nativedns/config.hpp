@@ -12,6 +12,10 @@ public:
 std::wstring widen(const std::string& text);
 std::string narrow(const std::wstring& text);
 std::string normalize_host(const std::string& text, bool pattern = false);
+// Canonicalize the printable-ASCII DNS names supported by the wire/rules
+// layer. Unlike a TLS/URL hostname, DNS labels may contain underscores and
+// other service-label characters.
+std::string normalize_dns_name(const std::string& text, bool pattern = false);
 std::vector<std::string> split_patterns(const std::string& text);
 bool host_matches(const std::string& normalized_host, const std::string& normalized_pattern);
 void validate(const Config& config);

@@ -32,7 +32,9 @@ int main() {
         }
         check(config.servers[2].ip == "195.133.25.16" && config.servers[2].url == "https://dns.comss.one/dns-query", "DoH identity vs endpoint");
         check(!imported.warnings.empty(), "Unsupported settings surfaced");
-        check(nd::normalize_host("ПРИМЕР.РФ.") == "xn--e1afmkfd.xn--p1ai", "IDN");
+        check(nd::normalize_host("XN--E1AFMKFD.XN--P1AI.") == "xn--e1afmkfd.xn--p1ai", "canonical IDN A-label");
+        fails([&] { (void)nd::normalize_host("ПРИМЕР.РФ"); });
+        check(nd::normalize_dns_name("_LDAP._TCP.Example.com") == "_ldap._tcp.example.com", "DNS service labels");
         check(nd::host_matches("a.b.example.com", "*.example.com"), "Wildcard subdomains");
         check(!nd::host_matches("example.com", "*.example.com"), "Wildcard excludes apex");
         check(!nd::host_matches("notexample.com", "*.example.com"), "Wildcard label boundary");
@@ -40,6 +42,10 @@ int main() {
         for (const auto& bad : {"", "bad..name", "a..", "-abc.org", "abc-.org", "a b.org", "a/b", "*.com"})
             fails([&] { (void)nd::normalize_host(bad); });
         check(nd::split_patterns(" A.COM;\r\n*.B.COM; ").size() == 2, "Pattern delimiters");
+        for(const auto* service:{"_ldap._tcp.example.com","_dmarc.example.com","_acme-challenge.example.com","selector._domainkey.example.com"}) {
+            auto service_config=nd::default_config();service_config.rules.insert(service_config.rules.begin(),nd::Rule{42,"service",true,false,{service},nd::Action::block});
+            nd::validate(service_config);check(nd::match_rule(service_config,service).id==42,"DNS service rule match");
+        }
         nd::ConfigEditor editor(config);
         fails([&] { editor.remove_rule(16); }); fails([&] { editor.move_rule(16, -1); });
         fails([&] { editor.remove_server(1002); }); check(editor.get() == config, "Mutation rollback");

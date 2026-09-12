@@ -23,6 +23,8 @@ The DNS parser validates:
 - record lengths;
 - transaction/question matching.
 
+The wire and routing layer supports printable ASCII DNS labels, including service-label underscores used by SRV, DMARC, DKIM, and ACME. TLS hostnames and other Internet-host inputs remain restricted to canonical ASCII LDH/A-label form. Unicode input is rejected by Core; callers must apply a complete IDNA/UTS #46 implementation and provide an `xn--` A-label rather than relying on partial in-house Punycode conversion.
+
 The server tester performs a real DNS query and measures monotonic RTT.
 
 A successful TCP connection by itself is not considered a successful DNS server test.

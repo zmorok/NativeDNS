@@ -155,6 +155,8 @@ int main() {
 #endif
     try {
         auto query = nd::make_query("example.com"); const auto q = nd::parse_question(query);
+        for(const auto* service:{"_ldap._tcp.example.com","_dmarc.example.com","_acme-challenge.example.com","selector._domainkey.example.com"})
+            check(nd::parse_question(nd::make_query(service,33)).name==service,"DNS service name wire round trip");
         const auto servfail=nd::make_error_response(query,2);const auto servfail_parsed=nd::parse_response(servfail,q);
         check(servfail_parsed.rcode==2&&servfail.size()==q.end,"bounded SERVFAIL preserves the DNS question");
         check(nd::client_udp_payload_size(query)==512,"legacy UDP DNS payload limit");

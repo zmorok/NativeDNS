@@ -3,7 +3,6 @@
 #include <nativedns/platform.hpp>
 #include <algorithm>
 #include <set>
-#include <limits>
 
 namespace nd {
 namespace {
@@ -32,46 +31,29 @@ void append_utf8(std::string& out,uint32_t cp) {
     else if(cp<=0xFFFF) { out.push_back(static_cast<char>(0xE0|(cp>>12))); out.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); out.push_back(static_cast<char>(0x80|(cp&0x3F))); }
     else { out.push_back(static_cast<char>(0xF0|(cp>>18))); out.push_back(static_cast<char>(0x80|((cp>>12)&0x3F))); out.push_back(static_cast<char>(0x80|((cp>>6)&0x3F))); out.push_back(static_cast<char>(0x80|(cp&0x3F))); }
 }
-char puny_digit(uint32_t d){ return static_cast<char>(d<26?'a'+d:'0'+(d-26)); }
-uint32_t unicode_lower(uint32_t cp){
-    if(cp>='A'&&cp<='Z') return cp+32;
-    if((cp>=0x00C0&&cp<=0x00D6)||(cp>=0x00D8&&cp<=0x00DE)) return cp+32;
-    if(cp>=0x0400&&cp<=0x040F) return cp+0x50;
-    if(cp>=0x0410&&cp<=0x042F) return cp+0x20;
-    if((cp>=0x0391&&cp<=0x03A1)||(cp>=0x03A3&&cp<=0x03AB)) return cp+0x20;
-    return cp;
-}
-uint32_t adapt_bias(uint64_t delta,uint32_t points,bool first) {
-    delta=first?delta/700:delta/2; delta+=delta/points; uint32_t k=0;
-    while(delta>455) { delta/=35; k+=36; }
-    return k+static_cast<uint32_t>((36*delta)/(delta+38));
-}
-std::string punycode_label(const std::string& input) {
-    auto cps=decode_utf8(input); for(auto& cp:cps) cp=unicode_lower(cp); bool ascii_only=true; for(auto cp:cps) if(cp>=128) ascii_only=false;
-    if(ascii_only) return input;
-    std::string out="xn--"; size_t basic=0;
-    for(auto cp:cps) if(cp<128) { char c=static_cast<char>(cp); if(c>='A'&&c<='Z') c=static_cast<char>(c+32); out.push_back(c); ++basic; }
-    size_t handled=basic; if(basic) out.push_back('-');
-    uint32_t n=128,bias=72; uint64_t delta=0;
-    while(handled<cps.size()) {
-        uint32_t m=std::numeric_limits<uint32_t>::max(); for(auto cp:cps) if(cp>=n&&cp<m) m=cp;
-        if(m==std::numeric_limits<uint32_t>::max()) throw Error("HOST","Invalid IDN label");
-        delta+=(static_cast<uint64_t>(m)-n)*(handled+1); n=m;
-        for(auto cp:cps) {
-            if(cp<n) ++delta;
-            if(cp!=n) continue;
-            uint64_t q=delta;
-            for(uint32_t k=36;;k+=36) {
-                const uint32_t t=k<=bias?1:(k>=bias+26?26:k-bias);
-                if(q<t) break;
-                out.push_back(puny_digit(t+static_cast<uint32_t>((q-t)%(36-t)))); q=(q-t)/(36-t);
-            }
-            out.push_back(puny_digit(static_cast<uint32_t>(q)));
-            bias=adapt_bias(delta,static_cast<uint32_t>(handled+1),handled==basic); delta=0; ++handled;
+std::string normalize_ascii_name(const std::string& text,bool pattern,bool hostname) {
+    auto first=text.find_first_not_of(" \t\r\n");if(first==std::string::npos)throw Error("HOST","Empty DNS name");
+    std::string value=text.substr(first,text.find_last_not_of(" \t\r\n")-first+1);if(value.back()=='.')value.pop_back();if(value.empty())throw Error("HOST","Empty DNS name");
+    std::string result;size_t start=0;
+    while(start<value.size()) {
+        const auto end=value.find('.',start);auto label=value.substr(start,end==std::string::npos?std::string::npos:end-start);
+        if(label.empty())throw Error("HOST","Empty DNS label");
+        if(label.size()>63)throw Error("HOST","DNS label exceeds 63 bytes");
+        for(char& character:label) {
+            const auto byte=static_cast<unsigned char>(character);
+            if(character>='A'&&character<='Z')character=static_cast<char>(character+('a'-'A'));
+            const bool wildcard=pattern&&(character=='*'||character=='?');
+            const bool ldh=(character>='a'&&character<='z')||(character>='0'&&character<='9')||character=='-';
+            if(hostname&&!ldh&&!wildcard)throw Error("HOST","Hostname must use canonical ASCII A-label syntax");
+            if(!hostname&&(byte<=32||byte>=127||character=='.'||(!pattern&&(character=='*'||character=='?'))))
+                throw Error("HOST","Unsupported DNS label character");
         }
-        ++delta; ++n;
+        if(hostname&&(label.front()=='-'||label.back()=='-'))throw Error("HOST","Hyphen at DNS label boundary");
+        if(!result.empty())result+='.';result+=label;
+        if(end==std::string::npos)break;start=end+1;if(start==value.size())throw Error("HOST","Multiple trailing dots");
     }
-    return out;
+    if(result.size()>253)throw Error("HOST","DNS name exceeds 253 bytes");
+    return result;
 }
 }
 std::wstring widen(const std::string& text) {
@@ -99,33 +81,12 @@ std::string narrow(const std::wstring& text) {
     return out;
 }
 std::string normalize_host(const std::string& text,bool pattern) {
-    auto first=text.find_first_not_of(" \t\r\n"); if(first==std::string::npos) throw Error("HOST","Empty hostname");
-    std::string host=text.substr(first,text.find_last_not_of(" \t\r\n")-first+1); if(host.back()=='.') host.pop_back(); if(host.empty()) throw Error("HOST","Empty hostname");
-    std::string result; size_t start=0;
-    while(start<host.size()) {
-        const auto end=host.find('.',start); std::string label=host.substr(start,end==std::string::npos?std::string::npos:end-start);
-        if(label.empty()) throw Error("HOST","Empty DNS label");
-        const bool wildcard=label.find('*')!=std::string::npos||label.find('?')!=std::string::npos;
-        if(wildcard&&!pattern) throw Error("HOST","Wildcard in query hostname");
-        if(!wildcard) label=punycode_label(label);
-        if(label.size()>63) throw Error("HOST","DNS label exceeds 63 bytes");
-        for(char& c:label) {
-            if(c>='A'&&c<='Z') c=static_cast<char>(c+32);
-            if(!((c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='-'||(pattern&&(c=='*'||c=='?')))) throw Error("HOST","Invalid character in hostname/pattern");
-        }
-        if(label.front()=='-'||label.back()=='-') throw Error("HOST","Hyphen at DNS label boundary");
-        if(!result.empty()) result+='.';
-        result+=label;
-        if(end==std::string::npos) break;
-        start=end+1;
-        if(start==host.size()) throw Error("HOST","Multiple trailing dots");
-    }
-    if(result.size()>253) throw Error("HOST","DNS name exceeds 253 bytes");
-    return result;
+    return normalize_ascii_name(text,pattern,true);
 }
+std::string normalize_dns_name(const std::string& text,bool pattern){return normalize_ascii_name(text,pattern,false);}
 std::vector<std::string> split_patterns(const std::string& text) {
     std::vector<std::string> result; size_t begin=0;
-    while(begin<text.size()) { auto end=text.find_first_of(";\r\n",begin); const auto value=text.substr(begin,end==std::string::npos?std::string::npos:end-begin); if(value.find_first_not_of(" \t")!=std::string::npos) result.push_back(normalize_host(value,true)); if(end==std::string::npos) break; begin=end+1; }
+    while(begin<text.size()) { auto end=text.find_first_of(";\r\n",begin); const auto value=text.substr(begin,end==std::string::npos?std::string::npos:end-begin); if(value.find_first_not_of(" \t")!=std::string::npos) result.push_back(normalize_dns_name(value,true)); if(end==std::string::npos) break; begin=end+1; }
     return result;
 }
 bool host_matches(const std::string& host,const std::string& pattern) {
@@ -184,16 +145,16 @@ void validate(const Config& config) {
         if (rule.is_default != (i == config.rules.size() - 1)) throw Error("DEFAULT", "Exactly one Default must be last");
         if (rule.is_default && (!rule.enabled || rule.patterns != std::vector<std::string>{"*"})) throw Error("DEFAULT", "Default must be enabled and match all");
         if (rule.patterns.empty() || rule.patterns.size() > 4096) throw Error("PATTERN", "Missing or excessive patterns");
-        for (const auto& pattern : rule.patterns) (void)normalize_host(pattern, true);
+        for (const auto& pattern : rule.patterns) (void)normalize_dns_name(pattern, true);
         if (rule.action == Action::process && rule.server_id && !ids.contains(rule.server_id)) throw Error("SERVER_REFERENCE", "Rule references missing server");
         if (rule.action != Action::process && rule.server_id) throw Error("SERVER_REFERENCE", "Non-Process rule cannot select server");
     }
 }
 const Rule& match_rule(const Config& config, const std::string& hostname) {
-    const auto host = normalize_host(hostname);
+    const auto host = normalize_dns_name(hostname);
     for (const auto& rule : config.rules) {
         if (!rule.enabled) continue;
-        for (const auto& pattern : rule.patterns) if (host_matches(host, normalize_host(pattern, true))) return rule;
+        for (const auto& pattern : rule.patterns) if (host_matches(host, normalize_dns_name(pattern, true))) return rule;
     }
     throw Error("DEFAULT", "No matching rule: invalid configuration");
 }

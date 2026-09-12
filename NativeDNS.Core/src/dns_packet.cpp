@@ -57,7 +57,7 @@ std::string dns_type_name(uint16_t type) {
     }
 }
 Packet make_query(const std::string& hostname, uint16_t type) {
-    auto host = normalize_host(hostname);
+    auto host = normalize_dns_name(hostname);
     const uint16_t id = platform::secure_random_u16();
     Packet result;
     append_word(result, id); append_word(result, 0x0100); append_word(result, 1);
