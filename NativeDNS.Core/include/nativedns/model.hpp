@@ -18,6 +18,7 @@ struct Server {
     uint16_t port = 0; // transport default
     bool dnssec_supported = false;
     uint32_t timeout_ms = 3000;
+    bool allow_direct_certificate_fallback = false;
     std::vector<uint32_t> fallback_ids;
     std::vector<std::string> bootstrap, hashes;
     std::string public_key, provider_name, relay;

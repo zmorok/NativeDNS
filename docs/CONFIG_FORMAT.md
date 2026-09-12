@@ -64,6 +64,7 @@ Server fields include:
 - hashes/pins;
 - DNSCrypt public key/provider;
 - anonymized DNSCrypt relay;
+- explicit Anonymized DNSCrypt direct-certificate-fallback policy;
 - imported metadata.
 
 Server ID `0` is reserved as the original/system destination sentinel and is not a normal configured server.

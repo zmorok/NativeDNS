@@ -25,4 +25,6 @@ Packet build_dnscrypt_query(const Packet& request, const DnsCryptCertificate& ce
     size_t minimum_wire_size = 512);
 Packet open_dnscrypt_response(const Packet& response, std::span<const uint8_t, 32> shared_key,
     std::span<const uint8_t, 12> client_nonce, uint16_t encryption_system = 2);
+Packet build_anonymized_dnscrypt_packet(const Packet& payload,const Server& server);
+Packet build_anonymized_dnscrypt_certificate_packet(const Packet& request,const Server& server);
 }

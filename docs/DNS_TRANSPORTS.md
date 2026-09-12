@@ -63,9 +63,11 @@ The implementation handles provider certificate retrieval/verification, authenti
 
 ## Anonymized DNSCrypt
 
-The provider certificate is obtained directly from the resolver.
+Provider certificate queries are padded to 512 bytes with EDNS(0) padding, wrapped with the Anonymized DNSCrypt target header, and sent through the configured relay. Direct certificate retrieval is disabled by default because it reveals the client address to the resolver; it is used only when `directCertificateFallback` is explicitly enabled and the relay path fails.
 
-Encrypted DNSCrypt packets are sent through the configured anonymizing relay. The relay should not receive the plaintext query or provider private material.
+Encrypted DNSCrypt packets are sent through the configured anonymizing relay. The relay does not receive plaintext application queries or provider private material.
+
+DNSCrypt query plaintext uses ISO/IEC 7816-4 padding (`0x80`, then zeroes). UDP uses a full-packet minimum of 512 bytes while keeping plaintext on a 64-byte boundary. TCP randomly chooses one of the valid 1..256-byte padding lengths that puts the plaintext on a 64-byte boundary and still keeps the complete packet within 4,096 bytes.
 
 ## DoH3 / DoQ
 

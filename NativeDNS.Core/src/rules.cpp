@@ -129,6 +129,8 @@ void validate(const Config& config) {
         if (server.protocol == Protocol::dnscrypt || server.protocol == Protocol::anonymized_dnscrypt) {
             validate_dnscrypt_server(server);
         }
+        if(server.allow_direct_certificate_fallback&&server.protocol!=Protocol::anonymized_dnscrypt)
+            throw Error("CONFIG","Direct certificate fallback applies only to Anonymized DNSCrypt");
         if (server.protocol == Protocol::dot || server.protocol == Protocol::doq) (void)normalize_host(server.hostname);
         if (server.protocol == Protocol::doh || server.protocol == Protocol::doh3) {
             if (!server.url.starts_with("https://") || server.url.find_first_of("\r\n\t ") != std::string::npos || server.url.find('@') != std::string::npos)

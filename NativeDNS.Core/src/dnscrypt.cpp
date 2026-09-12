@@ -94,27 +94,31 @@ Server relay_endpoint(const Server& server) {
         throw Error("ENDPOINT", "DNSCrypt relay requires a numeric IP");
     return relay;
 }
-Packet anonymize(const Packet& encrypted, const Server& server) {
-    static constexpr uint8_t magic[10]{0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0,0};
-    Packet result(std::begin(magic), std::end(magic));
-    std::array<uint8_t, 16> address{}; bool ipv6=false;
-    if (!platform::parse_ip(server.ip,address,ipv6)) throw Error("ENDPOINT", "Anonymized DNSCrypt target requires a numeric IP");
-    if (!ipv6) { address[10]=0xff; address[11]=0xff; }
-    result.insert(result.end(), address.begin(), address.end());
-    const uint16_t port = server.port ? server.port : 443;
-    result.push_back(static_cast<uint8_t>(port >> 8)); result.push_back(static_cast<uint8_t>(port));
-    result.insert(result.end(), encrypted.begin(), encrypted.end());
-    return result;
+Packet padded_certificate_request(Packet request) {
+    constexpr size_t target=512,opt_overhead=15;
+    if(request.size()+opt_overhead>target)throw Error("DNSCRYPT_SIZE","DNSCrypt certificate name is too large to pad");
+    const size_t padding=target-request.size()-opt_overhead;
+    request[10]=0;request[11]=1;
+    request.insert(request.end(),{0,0,41,4,208,0,0,0,0,static_cast<uint8_t>((padding+4)>>8),static_cast<uint8_t>(padding+4),0,12,static_cast<uint8_t>(padding>>8),static_cast<uint8_t>(padding)});
+    request.insert(request.end(),padding,0);return request;
 }
 std::vector<Packet> fetch_certificates(const Server& server, const Packet& request, const Question& question,
                                        detail::NetworkClock::time_point deadline) {
-    auto target = endpoint(server);
+    const bool anonymized=server.protocol==Protocol::anonymized_dnscrypt;
+    const auto exchange=[&](bool through_relay) {
+        const auto outgoing=through_relay?build_anonymized_dnscrypt_certificate_packet(request,server):request;
+        const auto target=through_relay?relay_endpoint(server):endpoint(server);
+        try{return detail::exchange_network(outgoing,target,false,deadline);}
+        catch(const Error& error){if(!retryable(error))throw;return detail::exchange_network(outgoing,target,true,deadline);}
+    };
     Packet response;
-    try { response = detail::exchange_network(request, target, false, deadline); }
-    catch (const Error& error) { if (!retryable(error)) throw; response = detail::exchange_network(request, target, true, deadline); }
+    try{response=exchange(anonymized);}
+    catch(const Error&){if(!anonymized||!server.allow_direct_certificate_fallback)throw;response=exchange(false);}
     auto parsed = parse_response(response, question);
     if (parsed.truncated) {
-        response = detail::exchange_network(request, target, true, deadline);
+        const auto outgoing=anonymized?build_anonymized_dnscrypt_certificate_packet(request,server):request;
+        const auto target=anonymized?relay_endpoint(server):endpoint(server);
+        response = detail::exchange_network(outgoing, target, true, deadline);
         parsed = parse_response(response, question);
     }
     if (parsed.rcode) throw Error("DNSCRYPT_CERT", "Certificate lookup failed with RCODE " + std::to_string(parsed.rcode));
@@ -173,9 +177,15 @@ public:
         auto perform = [&](bool tcp) {
             std::array<uint8_t, 12> nonce{}; randombytes_buf(nonce.data(), nonce.size());
             size_t target = 512;
-            if (tcp) target += static_cast<size_t>(randombytes_uniform(4)) * 64;
+            if (tcp) {
+                const size_t minimum_padding=64-(request.size()%64);
+                const size_t maximum_padding=std::min<size_t>(256,4096-query_overhead-request.size());
+                if(minimum_padding>maximum_padding)throw Error("DNSCRYPT_SIZE","DNSCrypt TCP query cannot be padded within protocol bounds");
+                const auto choices=static_cast<uint32_t>(1+(maximum_padding-minimum_padding)/64);
+                target=query_overhead+request.size()+minimum_padding+static_cast<size_t>(randombytes_uniform(choices))*64;
+            }
             auto encrypted = build_dnscrypt_query(request, cert, client_secret, nonce, target);
-            Packet outgoing = anonymized_ ? anonymize(encrypted, server) : encrypted;
+            Packet outgoing = anonymized_ ? build_anonymized_dnscrypt_packet(encrypted, server) : encrypted;
             auto destination = anonymized_ ? relay_endpoint(server) : endpoint(server);
             auto response = detail::exchange_network(outgoing, destination, tcp, deadline);
             return open_dnscrypt_response(response, shared, nonce, cert.encryption_system);
@@ -192,6 +202,15 @@ private:
     bool anonymized_;
 };
 }
+
+Packet build_anonymized_dnscrypt_packet(const Packet& payload,const Server& server) {
+    static constexpr uint8_t magic[10]{0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0,0};
+    Packet result(std::begin(magic),std::end(magic));std::array<uint8_t,16> address{};bool ipv6=false;
+    if(!platform::parse_ip(server.ip,address,ipv6))throw Error("ENDPOINT","Anonymized DNSCrypt target requires a numeric IP");
+    if(!ipv6){address[10]=0xff;address[11]=0xff;}result.insert(result.end(),address.begin(),address.end());
+    const uint16_t port=server.port?server.port:443;result.push_back(static_cast<uint8_t>(port>>8));result.push_back(static_cast<uint8_t>(port));result.insert(result.end(),payload.begin(),payload.end());return result;
+}
+Packet build_anonymized_dnscrypt_certificate_packet(const Packet& request,const Server& server){return build_anonymized_dnscrypt_packet(padded_certificate_request(request),server);}
 
 std::array<uint8_t, 32> parse_dnscrypt_provider_key(const std::string& text) {
     std::string hex;

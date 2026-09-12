@@ -73,6 +73,13 @@ int main(int argc, char**) {
             "b3a74ae409b0f16374dd64cbd6d47d801725b014ce9ddaf6f1aa30688c8efcbf"
             "de1d5d1d");
         check(nd::build_dnscrypt_query(dns_query, selected, client_secret, client_nonce, 324) == expected_query, "encrypted query vector");
+        constexpr size_t dnscrypt_overhead=68;
+        const auto udp_padded=nd::build_dnscrypt_query(dns_query,selected,client_secret,client_nonce,512);
+        check(udp_padded.size()>=512&&(udp_padded.size()-dnscrypt_overhead)%64==0,"DNSCrypt UDP minimum and 64-byte plaintext padding");
+        for(const size_t plaintext:{size_t{64},size_t{128},size_t{192},size_t{256}}) {
+            const auto padded=nd::build_dnscrypt_query(dns_query,selected,client_secret,client_nonce,dnscrypt_overhead+plaintext);
+            const auto padding=plaintext-dns_query.size();check(padded.size()==dnscrypt_overhead+plaintext&&padding>=1&&padding<=256,"DNSCrypt TCP padding candidates");
+        }
 
         const auto encrypted_response = hex(
             "7236666e76576a38a0a1a2a3a4a5a6a7a8a9aaabc0c1c2c3c4c5c6c7c8c9cacb"
@@ -94,6 +101,12 @@ int main(int argc, char**) {
         configured.ip = "94.140.14.14"; configured.port = 5443;
         configured.public_key = "d1:2b:47:f2:52:dc:f2:c2:bb:f8:99:10:86:ea:f7:9c:e4:49:5d:8b:16:c8:a0:c4:32:2e:52:ca:3f:39:08:73";
         configured.provider_name = "2.dnscrypt.default.ns1.adguard.com";
+        auto anonymous=configured;anonymous.protocol=nd::Protocol::anonymized_dnscrypt;anonymous.ip="192.0.2.2";anonymous.relay="192.0.2.3:444";
+        const auto certificate_query=nd::make_query(anonymous.provider_name,16);
+        const auto relayed_certificate=nd::build_anonymized_dnscrypt_certificate_packet(certificate_query,anonymous);
+        check(relayed_certificate.size()==540&&std::all_of(relayed_certificate.begin(),relayed_certificate.begin()+8,[](uint8_t byte){return byte==0xff;}),"Anonymized certificate relay envelope");
+        check(relayed_certificate[20]==0xff&&relayed_certificate[21]==0xff&&relayed_certificate[22]==192&&relayed_certificate[25]==2&&relayed_certificate[26]==0x15&&relayed_certificate[27]==0x43,"Anonymized certificate target endpoint");
+        nd::Packet inner(relayed_certificate.begin()+28,relayed_certificate.end());check(nd::parse_question(inner).name==anonymous.provider_name&&nd::client_udp_payload_size(inner)==1232,"Padded certificate DNS query remains parseable");
         config.servers.push_back(configured); config.rules.front().server_id = 1; nd::validate(config);
         config.servers.front().public_key = "00";
         try { nd::validate(config); check(false, "short provider key accepted"); }
@@ -102,6 +115,9 @@ int main(int argc, char**) {
         config.servers.front().relay = "relay.example:443";
         try { nd::validate(config); check(false, "hostname relay accepted"); }
         catch (const nd::Error& error) { check(error.code == "ENDPOINT", "relay validation error"); }
+        config.servers.front()=configured;config.servers.front().allow_direct_certificate_fallback=true;
+        try{nd::validate(config);check(false,"direct certificate fallback accepted for non-anonymized server");}
+        catch(const nd::Error& error){check(error.code=="CONFIG","direct certificate fallback validation error");}
         if (argc > 1) {
             configured.timeout_ms = 5000;
             const auto direct = nd::test_server(configured);
