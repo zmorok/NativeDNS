@@ -19,6 +19,7 @@ option(NATIVEDNS_BUILD_TOOLS "Build developer CLI tools" ON)
 option(NATIVEDNS_ANALYZE "Enable compiler static analysis where supported" OFF)
 option(NATIVEDNS_LIVE_TESTS "Enable external DNS integration tests" OFF)
 option(NATIVEDNS_FUZZING "Build Clang libFuzzer targets" OFF)
+option(NATIVEDNS_STRESS_TESTS "Build and register local proxy stress/benchmark tests" OFF)
 
 if(MSVC)
   # Qt's official MSVC builds use the dynamic CRT. Keep every NativeDNS

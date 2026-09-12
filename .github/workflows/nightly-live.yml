@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev libsodium-dev pkg-config
-      - run: cmake -S . -B build/live -G Ninja -DNATIVEDNS_BUILD_GUI=OFF -DNATIVEDNS_BUILD_TOOLS=OFF -DNATIVEDNS_LIVE_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+      - run: cmake -S . -B build/live -G Ninja -DNATIVEDNS_BUILD_GUI=OFF -DNATIVEDNS_BUILD_TOOLS=OFF -DNATIVEDNS_LIVE_TESTS=ON -DNATIVEDNS_STRESS_TESTS=ON -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build/live -j2
+      - run: ctest --test-dir build/live -L stress --output-on-failure
       - run: ctest --test-dir build/live -L live --output-on-failure
