@@ -34,11 +34,26 @@ CoreHost::~CoreHost(){stop();}
 void CoreHost::start(){
     std::lock_guard lock(mutex_);if(interception_->status().state!=State::stopped)throw Error("LIFECYCLE","Core is not stopped");shutdown_requested_=false;restart_requested_=false;
     stopped_=false;
-    logger_.write(Level::verbose,"INTERCEPTION_STARTING","Starting DNS interception backend");
-    try{interception_->start();}catch(const std::exception& error){logger_.write(Level::errors_only,"INTERCEPTION_START_FAILED",error.what());throw;}
-    logger_.write(Level::verbose,"IPC_STARTING","Starting command and live-log IPC endpoints");
-    try{ipc_->start();log_ipc_->start();}catch(const std::exception& error){logger_.write(Level::errors_only,"IPC_START_FAILED",error.what());if(ipc_)ipc_->stop();interception_->stop();throw;}
-    const auto value=interception_->status();logger_.write(Level::normal,"CORE_STARTED","Core host started; port="+std::to_string(value.port)+" transparent="+(value.transparent?"1":"0"));
+    const char* stage="interception";
+    try{
+        logger_.write(Level::verbose,"INTERCEPTION_STARTING","Starting DNS interception backend");
+        interception_->start();
+        stage="command IPC";
+        logger_.write(Level::verbose,"IPC_STARTING","Starting command and live-log IPC endpoints");
+        ipc_->start();
+        stage="log IPC";
+        log_ipc_->start();
+        const auto value=interception_->status();logger_.write(Level::normal,"CORE_STARTED","Core host started; port="+std::to_string(value.port)+" transparent="+(value.transparent?"1":"0"));
+    }catch(...){
+        const auto failure=std::current_exception();
+        try{std::rethrow_exception(failure);}catch(const std::exception& error){logger_.write(Level::errors_only,"CORE_START_FAILED",std::string("stage=")+stage+" error="+error.what());}catch(...){logger_.write(Level::errors_only,"CORE_START_FAILED",std::string("stage=")+stage+" error=unknown");}
+        if(log_ipc_)log_ipc_->stop();
+        if(ipc_)ipc_->stop();
+        if(interception_)interception_->stop();
+        stopped_=true;
+        logger_.write(Level::verbose,"CORE_START_ROLLBACK","Released resources acquired before "+std::string(stage)+" startup failure");
+        std::rethrow_exception(failure);
+    }
 }
 void CoreHost::stop(){
     if(stopped_.exchange(true))return;

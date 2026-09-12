@@ -60,6 +60,32 @@ int main() {
         server.start(); check(nd::pipe_request(name,nd::IpcOperation::ping).status==0,"restart"); server.stop(); server.stop();
         failed=false; try { (void)nd::pipe_request(name,nd::IpcOperation::ping,{},50); } catch(const nd::Error&) { failed=true; }
         check(failed,"unavailable host failure");
+        auto rollback_config=nd::default_config();rollback_config.logging.file_enabled=false;rollback_config.rules.back().action=nd::Action::block;
+        nd::Server rollback_original;rollback_original.name="unused";rollback_original.ip="127.0.0.1";rollback_original.port=1;
+        {
+            const auto blocked_name=name+".BlockedCommand";
+            nd::PipeServer blocker(blocked_name,[](nd::IpcOperation,const std::string&){return nd::IpcResponse{};});blocker.start();
+            nd::CoreHost retrying(rollback_config,rollback_original,0,blocked_name);
+            failed=false;try{retrying.start();}catch(const nd::Error&){failed=true;}
+            check(failed&&retrying.status().state==nd::State::stopped,"command IPC failure rolls back interception");
+            blocker.stop();retrying.start();check(retrying.status().state==nd::State::running,"host retries after command IPC failure");retrying.stop();
+        }
+        {
+            const auto retry_name=name+".BlockedLog";
+            nd::PipeServer blocker(retry_name+".logs",[](nd::IpcOperation,const std::string&){return nd::IpcResponse{};});blocker.start();
+            nd::CoreHost retrying(rollback_config,rollback_original,0,retry_name);
+            failed=false;try{retrying.start();}catch(const nd::Error&){failed=true;}
+            check(failed&&retrying.status().state==nd::State::stopped,"log IPC failure rolls back command IPC and interception");
+            blocker.stop();retrying.start();check(retrying.status().state==nd::State::running,"host retries after log IPC failure");retrying.stop();
+        }
+        {
+            nd::CoreHost port_owner(rollback_config,rollback_original,0,name+".PortOwner");port_owner.start();
+            const auto occupied_port=port_owner.status().port;
+            nd::CoreHost retrying(rollback_config,rollback_original,occupied_port,name+".PortRetry");
+            failed=false;try{retrying.start();}catch(const nd::Error&){failed=true;}
+            check(failed&&retrying.status().state==nd::State::stopped,"interception failure rolls back partial local proxy startup");
+            port_owner.stop();retrying.start();check(retrying.status().state==nd::State::running,"host retries after interception failure");retrying.stop();
+        }
         const auto host_name=name+".Host";
         const auto host_log_name=host_name+".logs";
         const auto log_directory=std::filesystem::current_path()/("ipc-log-test-"+std::to_string(nd::platform::process_id()));

@@ -22,11 +22,12 @@ std::wstring normalized_driver_path(std::wstring path){
     std::transform(path.begin(),path.end(),path.begin(),[](wchar_t value){return static_cast<wchar_t>(std::towlower(value));});
     return path;
 }
-bool windivert_service_belongs_to_application(){
+enum class WinDivertServiceOwner { missing, application, foreign_or_unknown };
+WinDivertServiceOwner windivert_service_owner(){
     const SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
-    if(!manager)return false;
+    if(!manager)return WinDivertServiceOwner::foreign_or_unknown;
     const SC_HANDLE service=OpenServiceW(manager,L"WinDivert",SERVICE_QUERY_CONFIG);
-    if(!service){const bool missing=GetLastError()==ERROR_SERVICE_DOES_NOT_EXIST;CloseServiceHandle(manager);return missing;}
+    if(!service){const bool missing=GetLastError()==ERROR_SERVICE_DOES_NOT_EXIST;CloseServiceHandle(manager);return missing?WinDivertServiceOwner::missing:WinDivertServiceOwner::foreign_or_unknown;}
     DWORD required=0;
     (void)QueryServiceConfigW(service,nullptr,0,&required);
     std::vector<uint8_t> storage(required);
@@ -38,7 +39,7 @@ bool windivert_service_belongs_to_application(){
         owned=normalized_driver_path(config->lpBinaryPathName)==normalized_driver_path(expected);
     }
     CloseServiceHandle(service);CloseServiceHandle(manager);
-    return owned;
+    return owned?WinDivertServiceOwner::application:WinDivertServiceOwner::foreign_or_unknown;
 }
 bool stop_windivert_service() noexcept{
     const SC_HANDLE manager=OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
@@ -362,8 +363,10 @@ struct WinDivertInterception::Impl {
         if(handle!=INVALID_HANDLE_VALUE) { close(handle); handle=INVALID_HANDLE_VALUE; }
         if(module) { FreeLibrary(module); module=nullptr; }
         if(stop_driver_on_release){
-            if(stop_windivert_service())logger.write(Level::verbose,"WINDIVERT_DRIVER_STOPPED","NativeDNS WinDivert driver service stopped");
-            else logger.write(Level::verbose,"WINDIVERT_DRIVER_RETAINED","WinDivert service is still in use or could not be stopped");
+            const auto owner=windivert_service_owner();
+            if(owner==WinDivertServiceOwner::application&&stop_windivert_service())logger.write(Level::verbose,"WINDIVERT_DRIVER_STOPPED","NativeDNS WinDivert driver service stopped");
+            else if(owner==WinDivertServiceOwner::missing)logger.write(Level::verbose,"WINDIVERT_DRIVER_STOPPED","NativeDNS WinDivert driver service was already removed");
+            else logger.write(Level::verbose,"WINDIVERT_DRIVER_RETAINED","WinDivert service is foreign, still in use, or ownership could not be verified");
             stop_driver_on_release=false;
         }
     }
@@ -381,7 +384,7 @@ void WinDivertInterception::start() {
         p.logger.write(Level::verbose,"FIREWALL_STALE_CLEANUP","Removed any stale TCP interception firewall rule");
         p.tcp_proxy_port=p.tcp_proxy.start();
         p.logger.write(Level::verbose,"TCP_PROXY_STARTED","TCP reflection proxy listening on port="+std::to_string(p.tcp_proxy_port));
-        try{p.stop_driver_on_release=windivert_service_belongs_to_application();}
+        try{const auto owner=windivert_service_owner();p.stop_driver_on_release=owner==WinDivertServiceOwner::missing||owner==WinDivertServiceOwner::application;}
         catch(...){p.stop_driver_on_release=false;}
         p.module=LoadLibraryExW(L"WinDivert.dll",nullptr,LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         if(!p.module) throw Error("WINDIVERT_LOAD","Cannot load WinDivert.dll: "+std::to_string(GetLastError()));
