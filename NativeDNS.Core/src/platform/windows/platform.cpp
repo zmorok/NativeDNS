@@ -3,6 +3,9 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#include <shlobj.h>
 #include <sodium.h>
 #include <vector>
 #include <cstring>
@@ -54,6 +57,49 @@ std::filesystem::path user_config_directory(){
     }
     return executable_path().parent_path();
 }
+bool is_elevated(){
+    HANDLE token=nullptr;
+    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))return false;
+    TOKEN_ELEVATION elevation{};DWORD size=0;
+    const bool result=GetTokenInformation(token,TokenElevation,&elevation,sizeof(elevation),&size)&&elevation.TokenIsElevated!=0;
+    CloseHandle(token);return result;
+}
+std::filesystem::path privileged_log_directory(){
+    PWSTR raw=nullptr;
+    if(SHGetKnownFolderPath(FOLDERID_ProgramData,KF_FLAG_DEFAULT,nullptr,&raw)!=S_OK||!raw)throw Error("LOG_SECURITY","Cannot resolve system data directory");
+    std::filesystem::path result=std::filesystem::path(raw)/L"NativeDNS"/L"Logs";CoTaskMemFree(raw);return result;
+}
+void prepare_privileged_log_directory(){
+    const auto logs=privileged_log_directory(),root=logs.parent_path();
+    HANDLE token=nullptr;
+    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))throw Error("LOG_SECURITY","Cannot inspect elevated token");
+    DWORD token_size=0;GetTokenInformation(token,TokenUser,nullptr,0,&token_size);std::vector<uint8_t> token_data(token_size);
+    if(!token_size||!GetTokenInformation(token,TokenUser,token_data.data(),token_size,&token_size)){CloseHandle(token);throw Error("LOG_SECURITY","Cannot read elevated user SID");}
+    CloseHandle(token);
+    wchar_t* user_sid=nullptr;
+    if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(token_data.data())->User.Sid,&user_sid))throw Error("LOG_SECURITY","Cannot format elevated user SID");
+    const std::wstring sddl=L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GR;;;"+std::wstring(user_sid)+L")S:(ML;OICI;NW;;;HI)";LocalFree(user_sid);
+    PSECURITY_DESCRIPTOR descriptor=nullptr;
+    if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr))throw Error("LOG_SECURITY","Cannot create protected log ACL");
+    PACL dacl=nullptr,sacl=nullptr;BOOL present=FALSE,defaulted=FALSE;
+    if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted)||!present||!GetSecurityDescriptorSacl(descriptor,&present,&sacl,&defaulted)||!present){LocalFree(descriptor);throw Error("LOG_SECURITY","Cannot inspect protected log ACL");}
+    try{
+        for(const auto& directory:{root,logs}){
+            if(!CreateDirectoryW(directory.c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)throw Error("LOG_SECURITY","Cannot create protected log directory: "+std::to_string(GetLastError()));
+            HANDLE handle=CreateFileW(directory.c_str(),FILE_READ_ATTRIBUTES|WRITE_DAC|WRITE_OWNER,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+            if(handle==INVALID_HANDLE_VALUE)throw Error("LOG_SECURITY","Cannot open protected log directory: "+std::to_string(GetLastError()));
+            FILE_ATTRIBUTE_TAG_INFO attributes{};
+            const bool reparse=!GetFileInformationByHandleEx(handle,FileAttributeTagInfo,&attributes,sizeof(attributes))||(attributes.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
+            DWORD admin_size=SECURITY_MAX_SID_SIZE;std::vector<uint8_t> admin_sid(admin_size);
+            const bool admin=CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admin_sid.data(),&admin_size)!=FALSE;
+            const DWORD applied=admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,admin_sid.data(),nullptr,dacl,sacl):ERROR_INVALID_SID;
+            CloseHandle(handle);
+            if(reparse)throw Error("LOG_SECURITY","Protected log directory must not be a reparse point");
+            if(applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot secure protected log directory: "+std::to_string(applied));
+        }
+    }catch(...){LocalFree(descriptor);throw;}
+    LocalFree(descriptor);
+}
 std::string system_summary(){
     using RtlGetVersionFunction=LONG (WINAPI*)(OSVERSIONINFOW*);
     OSVERSIONINFOW version{}; version.dwOSVersionInfoSize=sizeof(version);
@@ -61,16 +107,9 @@ std::string system_summary(){
         if(const auto get_version=reinterpret_cast<RtlGetVersionFunction>(GetProcAddress(module,"RtlGetVersion")))
             (void)get_version(&version);
 
-    bool elevated=false;
-    HANDLE token=nullptr;
-    if(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token)){
-        TOKEN_ELEVATION elevation{}; DWORD size=0;
-        if(GetTokenInformation(token,TokenElevation,&elevation,sizeof(elevation),&size)) elevated=elevation.TokenIsElevated!=0;
-        CloseHandle(token);
-    }
     std::ostringstream output;
     output<<"platform=windows-x64 os="<<version.dwMajorVersion<<'.'<<version.dwMinorVersion<<" build="<<version.dwBuildNumber
-          <<" pid="<<process_id()<<" elevated="<<(elevated?1:0);
+          <<" pid="<<process_id()<<" elevated="<<(is_elevated()?1:0);
     return output.str();
 }
 void wait_socket(std::intptr_t raw,bool writing,std::chrono::steady_clock::time_point deadline){

@@ -7,6 +7,7 @@
 namespace nd {
 namespace {
 std::filesystem::path file_log_directory(const LoggingSettings& settings){
+    if(platform::is_elevated()){platform::prepare_privileged_log_directory();return platform::privileged_log_directory();}
     auto directory=std::filesystem::path(settings.directory);
     if(directory.is_relative()) directory=platform::application_root_directory()/directory;
     return directory;

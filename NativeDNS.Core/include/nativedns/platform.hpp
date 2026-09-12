@@ -24,6 +24,9 @@ std::filesystem::path executable_path();
 // Linux packages place them in <root>/bin.
 std::filesystem::path application_root_directory();
 std::filesystem::path user_config_directory();
+bool is_elevated();
+std::filesystem::path privileged_log_directory();
+void prepare_privileged_log_directory();
 std::string system_summary();
 
 class ProcessInstanceLock {

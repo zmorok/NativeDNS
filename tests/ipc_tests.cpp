@@ -9,6 +9,7 @@
 #include <thread>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 namespace {
 std::filesystem::path find_diagnostic_log(const std::filesystem::path& directory) {
@@ -97,7 +98,8 @@ int main() {
         auto config=nd::default_config(); config.logging.file_enabled=false; config.logging.directory=log_directory.string(); config.rules.back().action=nd::Action::block;
         nd::Server original; original.name="unused"; original.ip="127.0.0.1"; original.port=1;
         nd::CoreHost host(config,original,0,host_name); host.start();
-        check(nd::pipe_request(host_name,nd::IpcOperation::configure_file_log,"1\t2").payload=="FILE_LOG_ENABLED","enable file log through IPC");
+        std::optional<std::filesystem::path> diagnostic_log;
+        if(!nd::platform::is_elevated())check(nd::pipe_request(host_name,nd::IpcOperation::configure_file_log,"1\t2").payload=="FILE_LOG_ENABLED","enable file log through IPC");
         response=nd::pipe_request(host_name,nd::IpcOperation::status);
         check(response.payload.starts_with("RUNNING") && response.payload.find("transparent=0")!=std::string::npos,"host status");
         check(nd::pipe_request(host_name,nd::IpcOperation::status,"unexpected").status==1,"reject payload for payload-free privileged operation");
@@ -105,9 +107,9 @@ int main() {
         const auto port=static_cast<uint16_t>(std::stoul(response.payload.substr(marker+5,finish-marker-5)));
         auto local=original; local.port=port;
         check(nd::test_server(local,"example.com").success,"host routes actual local DNS request");
-        const auto diagnostic_log=find_diagnostic_log(log_directory);
-        {
-            std::ifstream stream(diagnostic_log,std::ios::binary);
+        if(!nd::platform::is_elevated()){
+            diagnostic_log=find_diagnostic_log(log_directory);
+            std::ifstream stream(*diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});
             check(contents.find("[INFO]")!=std::string::npos&&contents.find("FILE_LOG_CONFIGURED")!=std::string::npos&&contents.find("DNS_ROUTE")!=std::string::npos,"runtime file log configuration");
         }
@@ -134,15 +136,14 @@ int main() {
         check(waiter.wait_for(std::chrono::seconds(2))==std::future_status::ready,"shutdown wake"); waiter.get(); host.stop();
         check(host.restart_requested(),"restart intent survives host stop");
         host.stop();
-        {
-            std::ifstream stream(diagnostic_log,std::ios::binary);
+        if(diagnostic_log){
+            std::ifstream stream(*diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});
             const auto first=contents.find("CORE_STOPPED");
             check(first!=std::string::npos&&contents.find("CORE_STOPPED",first+1)==std::string::npos,"host stop is logged once");
         }
         host.logger().configure_file(false,nd::Level::normal,{});
-        for(const auto& entry:std::filesystem::directory_iterator(log_directory))std::filesystem::remove(entry.path());
-        std::filesystem::remove(log_directory);
+        if(std::filesystem::exists(log_directory)){for(const auto& entry:std::filesystem::directory_iterator(log_directory))std::filesystem::remove(entry.path());std::filesystem::remove(log_directory);}
         std::cout << "cross-platform IPC protocol tests passed\n"; return 0;
     } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

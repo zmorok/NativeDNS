@@ -646,6 +646,8 @@ void NativeDnsWindow::buildUi(){
         try{
             auto directory=std::filesystem::path(config_.logging.directory);
             if(directory.is_relative())directory=nd::platform::application_root_directory()/directory;
+            const auto privileged=nd::platform::privileged_log_directory();
+            if(std::filesystem::is_directory(privileged))directory=privileged;
             std::filesystem::create_directories(directory);
             QDesktopServices::openUrl(QUrl::fromLocalFile(qPath(directory)));
         }catch(...){ }

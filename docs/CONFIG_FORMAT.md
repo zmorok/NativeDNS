@@ -25,7 +25,7 @@ The `Logging` element controls the live GUI log and the rotating diagnostic file
 - `screen`: live-log level (`0` errors, `1` normal, `2` verbose, `3` debug);
 - `file`: independently selected file-log level using the same values;
 - `enabled`: enables or disables the file sink;
-- `directory`: log directory. The default relative value `logs` is resolved from the staged application root. Each recording starts in a timestamped file such as `logs/NativeDNS-143705-12092026.log` (`HHmmss-ddMMyyyy`). Absolute paths remain supported.
+- `directory`: log directory for an unprivileged Core process. The default relative value `logs` is resolved from the staged application root, and absolute paths remain supported only without elevation. An elevated Core ignores this value and writes exclusively to the protected system directory (`%ProgramData%\\NativeDNS\\Logs` on Windows or `/var/log/nativedns` on Linux); reparse points and symbolic links are rejected. Each recording starts in a timestamped file such as `NativeDNS-143705-12092026.log` (`HHmmss-ddMMyyyy`).
 
 File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. It rotates at 4 MiB, gives each new segment its own recording-start timestamp, and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
 
