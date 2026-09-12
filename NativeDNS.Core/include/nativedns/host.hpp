@@ -29,6 +29,8 @@ private:
     std::string pipe_name_;
     std::string log_pipe_name_;
     Logger logger_;
+    std::filesystem::path file_log_path_;
+    bool file_log_enabled_ = false;
     std::shared_ptr<Router> router_;
     std::unique_ptr<IInterceptionProvider> interception_;
     std::unique_ptr<PipeServer> ipc_;

@@ -6,22 +6,22 @@
 
 namespace nd {
 namespace {
-std::filesystem::path file_log_path(const LoggingSettings& settings){
+std::filesystem::path file_log_directory(const LoggingSettings& settings){
     auto directory=std::filesystem::path(settings.directory);
     if(directory.is_relative()) directory=platform::application_root_directory()/directory;
-    return directory/"NativeDNS.log";
+    return directory;
 }
 }
 CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string pipe_name,InterceptionMode mode)
     :config_(std::move(config)),original_(std::move(original)),local_port_(local_port),pipe_name_(std::move(pipe_name)),
       log_pipe_name_(pipe_name_==core_pipe_name?core_log_pipe_name:pipe_name_+".logs"),logger_(4096){
     validate(config_);
-    const auto log_path=file_log_path(config_.logging);
-    try{logger_.configure_file(config_.logging.file_enabled,config_.logging.file,log_path);}
+    if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
+    try{logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;}
     catch(const std::exception& error){logger_.write(Level::errors_only,"FILE_LOG_INIT_FAILED",error.what());}
     logger_.write(Level::normal,"CORE_INITIALIZING","Core host initialization started");
     logger_.write(Level::normal,"SYSTEM_ENVIRONMENT",platform::system_summary());
-    logger_.write(Level::verbose,"CORE_PATHS","executable="+platform::executable_path().string()+" working_directory="+std::filesystem::current_path().string()+" log="+log_path.string());
+    logger_.write(Level::verbose,"CORE_PATHS","executable="+platform::executable_path().string()+" working_directory="+std::filesystem::current_path().string()+" log="+(file_log_path_.empty()?"disabled":file_log_path_.string()));
     logger_.write(Level::verbose,"CONFIG_SUMMARY","servers="+std::to_string(config_.servers.size())+" rules="+std::to_string(config_.rules.size())+" mode="+(mode==InterceptionMode::transparent?"transparent":"local_proxy"));
     router_=std::make_shared<Router>(config_,logger_);
     if(mode==InterceptionMode::transparent)interception_=make_platform_interception(config_,logger_,local_port_?local_port_:53);
@@ -71,10 +71,11 @@ IpcResponse CoreHost::handle(IpcOperation operation,const std::string& payload){
         uint64_t requested_level=0;
         auto[end,error]=std::from_chars(level_text.data(),level_text.data()+level_text.size(),requested_level);
         if(level_text.empty()||error!=std::errc{}||end!=level_text.data()+level_text.size()||requested_level>3)throw Error("IPC_PROTOCOL","file log level must be 0..3");
-        const auto path=file_log_path(config_.logging);
         const bool enabled=enabled_text=="1";
-        logger_.configure_file(enabled,static_cast<Level>(requested_level),path);
-        if(enabled)logger_.write(Level::normal,"FILE_LOG_CONFIGURED","path="+path.string()+" level="+level_text);
+        if(enabled&&!file_log_enabled_)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
+        logger_.configure_file(enabled,static_cast<Level>(requested_level),file_log_path_);
+        file_log_enabled_=enabled;
+        if(enabled)logger_.write(Level::normal,"FILE_LOG_CONFIGURED","path="+file_log_path_.string()+" level="+level_text);
         return{0,enabled?"FILE_LOG_ENABLED":"FILE_LOG_DISABLED"};
     }
     if(operation==IpcOperation::clear_display){logger_.clear_display();return{0,"DISPLAY_LOG_CLEARED"};}

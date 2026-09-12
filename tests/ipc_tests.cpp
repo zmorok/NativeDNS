@@ -10,6 +10,16 @@
 #include <filesystem>
 #include <fstream>
 
+namespace {
+std::filesystem::path find_diagnostic_log(const std::filesystem::path& directory) {
+    for(const auto& entry:std::filesystem::directory_iterator(directory)){
+        const auto name=entry.path().filename().string();
+        if(name.starts_with("NativeDNS-")&&name.ends_with(".log"))return entry.path();
+    }
+    throw std::runtime_error("timestamped diagnostic log not found");
+}
+}
+
 void check(bool value,const char* message) { if(!value) throw std::runtime_error(message); }
 int main() {
     try {
@@ -63,8 +73,9 @@ int main() {
         const auto port=static_cast<uint16_t>(std::stoul(response.payload.substr(marker+5,finish-marker-5)));
         auto local=original; local.port=port;
         check(nd::test_server(local,"example.com").success,"host routes actual local DNS request");
+        const auto diagnostic_log=find_diagnostic_log(log_directory);
         {
-            std::ifstream stream(log_directory/"NativeDNS.log",std::ios::binary);
+            std::ifstream stream(diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});
             check(contents.find("[INFO]")!=std::string::npos&&contents.find("FILE_LOG_CONFIGURED")!=std::string::npos&&contents.find("DNS_ROUTE")!=std::string::npos,"runtime file log configuration");
         }
@@ -92,7 +103,7 @@ int main() {
         check(host.restart_requested(),"restart intent survives host stop");
         host.stop();
         {
-            std::ifstream stream(log_directory/"NativeDNS.log",std::ios::binary);
+            std::ifstream stream(diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});
             const auto first=contents.find("CORE_STOPPED");
             check(first!=std::string::npos&&contents.find("CORE_STOPPED",first+1)==std::string::npos,"host stop is logged once");

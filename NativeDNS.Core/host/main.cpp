@@ -7,7 +7,8 @@ namespace {
 void log_startup_failure(const char* code,const std::string& message) noexcept{
     try{
         nd::Logger logger(16);
-        logger.configure_file(true,nd::Level::errors_only,nd::platform::application_root_directory()/"logs"/"NativeDNS.log");
+        logger.configure_file(true,nd::Level::errors_only,
+                              nd::timestamped_log_path(nd::platform::application_root_directory()/"logs"));
         logger.write(nd::Level::errors_only,code,message);
     }catch(...){ }
 }

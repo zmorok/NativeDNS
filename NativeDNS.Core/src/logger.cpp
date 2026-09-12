@@ -1,10 +1,12 @@
 #include <nativedns/logger.hpp>
 #include <nativedns/platform.hpp>
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 namespace nd {
 namespace {
 const char* level_name(Level level){
@@ -16,6 +18,50 @@ const char* level_name(Level level){
     }
     return "UNKNOWN";
 }
+bool is_timestamped_log_path(const std::filesystem::path& path) {
+    const auto name=path.filename().string();
+    if(name.size()!=29||!name.starts_with("NativeDNS-")||!name.ends_with(".log")||name[16]!='-')return false;
+    return std::all_of(name.begin()+10,name.begin()+16,[](unsigned char c){return std::isdigit(c);})
+        &&std::all_of(name.begin()+17,name.begin()+25,[](unsigned char c){return std::isdigit(c);});
+}
+void prune_timestamped_logs(const std::filesystem::path& directory,size_t keep) {
+    struct ExistingLog {
+        std::filesystem::path path;
+        std::filesystem::file_time_type modified;
+    };
+    std::vector<ExistingLog> files;
+    std::error_code error;
+    for(std::filesystem::directory_iterator it(directory,error),end;!error&&it!=end;it.increment(error)){
+        const bool regular=it->is_regular_file(error);
+        if(error)break;
+        if(!regular||!is_timestamped_log_path(it->path()))continue;
+        const auto modified=it->last_write_time(error);
+        if(error)break;
+        files.push_back({it->path(),modified});
+    }
+    if(error)throw std::runtime_error("cannot enumerate log files: "+error.message());
+    std::sort(files.begin(),files.end(),[](const auto& left,const auto& right){
+        return left.modified==right.modified?left.path.filename()<right.path.filename():left.modified<right.modified;
+    });
+    while(files.size()>keep){
+        std::filesystem::remove(files.front().path,error);
+        if(error)throw std::runtime_error("cannot remove old log file: "+error.message());
+        files.erase(files.begin());
+    }
+}
+}
+std::filesystem::path timestamped_log_path(const std::filesystem::path& directory,
+                                           std::chrono::system_clock::time_point started_at) {
+    for(unsigned collision=0;collision<=100;++collision){
+        const auto instant=std::chrono::system_clock::to_time_t(started_at+std::chrono::seconds(collision));
+        tm local{};
+        platform::local_time(instant,local);
+        std::ostringstream name;
+        name<<"NativeDNS-"<<std::put_time(&local,"%H%M%S-%d%m%Y")<<".log";
+        auto path=directory/name.str();
+        if(!std::filesystem::exists(path))return path;
+    }
+    throw std::runtime_error("cannot allocate a unique timestamped log file name");
 }
 Logger::Logger(size_t capacity) : capacity_(capacity) {
     if (!capacity) throw std::invalid_argument("log capacity must be positive");
@@ -73,6 +119,8 @@ void Logger::configure_file(bool enabled, Level level, std::filesystem::path pat
         if (!parent.empty()) std::filesystem::create_directories(parent);
         std::ofstream probe(path, std::ios::binary | std::ios::app);
         if (!probe) throw std::runtime_error("cannot open log file");
+        probe.close();
+        if(is_timestamped_log_path(path))prune_timestamped_logs(parent,static_cast<size_t>(retained_files)+1);
     }
     file_enabled_ = enabled; file_level_ = level; file_path_ = std::move(path);
     maximum_bytes_ = maximum_bytes; retained_files_ = retained_files;
@@ -88,6 +136,12 @@ void Logger::rotate_file(uint64_t incoming_bytes) {
     std::error_code error;
     const auto size = std::filesystem::file_size(file_path_, error);
     if (!error && size + incoming_bytes <= maximum_bytes_) return;
+    if(is_timestamped_log_path(file_path_)){
+        const auto directory=file_path_.parent_path();
+        file_path_=timestamped_log_path(directory);
+        prune_timestamped_logs(directory,retained_files_);
+        return;
+    }
     if (retained_files_ == 0) {
         std::ofstream stream(file_path_, std::ios::binary | std::ios::trunc);
         if (!stream) throw std::runtime_error("cannot truncate log file");

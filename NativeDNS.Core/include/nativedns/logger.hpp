@@ -7,6 +7,10 @@
 #include <filesystem>
 
 namespace nd {
+std::filesystem::path timestamped_log_path(
+    const std::filesystem::path& directory,
+    std::chrono::system_clock::time_point started_at = std::chrono::system_clock::now());
+
 struct LogEvent {
     uint64_t sequence;
     std::chrono::system_clock::time_point time;

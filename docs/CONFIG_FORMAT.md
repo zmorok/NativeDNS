@@ -25,11 +25,12 @@ The `Logging` element controls the live GUI log and the rotating diagnostic file
 - `screen`: live-log level (`0` errors, `1` normal, `2` verbose, `3` debug);
 - `file`: independently selected file-log level using the same values;
 - `enabled`: enables or disables the file sink;
-- `directory`: log directory. The default relative value `logs` is resolved from the staged application root, producing `logs/NativeDNS.log` beside the application folders. Absolute paths remain supported.
+- `directory`: log directory. The default relative value `logs` is resolved from the staged application root. Each recording starts in a timestamped file such as `logs/NativeDNS-143705-12092026.log` (`HHmmss-ddMMyyyy`). Absolute paths remain supported.
 
-File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. It rotates at 4 MiB and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
+File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. It rotates at 4 MiB, gives each new segment its own recording-start timestamp, and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
 
 GUI rows begin with local time in `[dd.MM HH:mm:ss]` form. File rows use `[dd.MM.yyyy HH:mm:ss]` so exported diagnostics retain the year.
+The GUI retains the newest 2,000 live-log rows; older rows are removed from the display only and remain available in the diagnostic file.
 
 At the normal level, each successful DNS operation is one combined route/result row containing the hostname, query type, action, readable server transport, matched rule, and elapsed upstream time. Verbose/debug levels add transport internals; failures remain separate error-level rows.
 

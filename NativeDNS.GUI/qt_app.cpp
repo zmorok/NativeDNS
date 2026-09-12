@@ -577,7 +577,8 @@ void NativeDnsWindow::buildUi(){
     log_->setReadOnly(true);
     log_->setLineWrapMode(QPlainTextEdit::NoWrap);
     log_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    log_->document()->setMaximumBlockCount(10000);
+    constexpr int maximumVisibleLogRows=2000;
+    log_->document()->setMaximumBlockCount(maximumVisibleLogRows);
     setCentralWidget(log_);
     coreStatus_=new QLabel(uiText("Core: unknown"),this);
     statusBar()->addPermanentWidget(coreStatus_);
