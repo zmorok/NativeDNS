@@ -1,5 +1,6 @@
 #pragma once
 #include <nativedns/config.hpp>
+#include <nativedns/platform.hpp>
 #include <atomic>
 #include <functional>
 #include <thread>
@@ -29,6 +30,7 @@ private:
     std::string startup_error_;
     std::condition_variable startup_cv_;
     bool startup_ready_ = false;
+    std::unique_ptr<platform::ProcessInstanceLock> owner_;
 };
 IpcResponse pipe_request(const std::string& name, IpcOperation operation,
                          const std::string& payload = {}, uint32_t timeout_ms = 3000);

@@ -1,12 +1,16 @@
 #include <nativedns/ipc.hpp>
+#include <nativedns/platform.hpp>
 #include <windows.h>
 #include <sddl.h>
+#include <algorithm>
+#include <memory>
 #include <vector>
 
 namespace nd {
 namespace {
 constexpr uint32_t magic = 0x31444e4e, max_payload = 1024 * 1024;
 constexpr size_t header_size = 20;
+std::string owner_name(const std::string& name){uint64_t hash=1469598103934665603ULL;for(const unsigned char value:name){hash^=value;hash*=1099511628211ULL;}return "NativeDNS.IPC."+std::to_string(hash);}
 void put16(uint8_t* out, uint16_t v) { out[0]=static_cast<uint8_t>(v); out[1]=static_cast<uint8_t>(v>>8); }
 void put32(uint8_t* out, uint32_t v) { for (unsigned i=0;i<4;++i) out[i]=static_cast<uint8_t>(v>>(i*8)); }
 void put64(uint8_t* out, uint64_t v) { for (unsigned i=0;i<8;++i) out[i]=static_cast<uint8_t>(v>>(i*8)); }
@@ -89,6 +93,8 @@ PipeServer::PipeServer(std::string name, Handler handler) : name_(std::move(name
 PipeServer::~PipeServer() { stop(); }
 void PipeServer::start() {
     if(running_.exchange(true)) throw Error("IPC_LIFECYCLE","Pipe server already running");
+    owner_=std::make_unique<platform::ProcessInstanceLock>(owner_name(name_));
+    if(!owner_->acquired()){owner_.reset();running_=false;throw Error("IPC_LIFECYCLE","Another IPC server owns this endpoint");}
     HANDLE event=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     HANDLE startup=CreateEventW(nullptr,TRUE,FALSE,nullptr);
     if(!event||!startup) { if(event) CloseHandle(event); if(startup) CloseHandle(startup); running_=false; throw Error("IPC_IO","Cannot create pipe lifecycle events"); }
@@ -103,15 +109,21 @@ void PipeServer::stop() {
     if(thread_.joinable()) thread_.join();
     if(native_stop_) CloseHandle(static_cast<HANDLE>(native_stop_)); native_stop_=nullptr;
     if(startup_event_) CloseHandle(static_cast<HANDLE>(startup_event_)); startup_event_=nullptr;
+    owner_.reset();
 }
 void PipeServer::run() {
     PSECURITY_DESCRIPTOR descriptor=nullptr;
     try {
         descriptor=current_user_descriptor(); SECURITY_ATTRIBUTES attributes{sizeof(attributes),descriptor,FALSE};
+        struct Worker { std::jthread thread;std::shared_ptr<std::atomic_bool> done; };
+        std::vector<Worker> workers;
+        const auto reap_workers=[&](bool all=false){
+            std::erase_if(workers,[&](const Worker& worker){return all||worker.done->load();});
+        };
         bool startup_signaled=false;
         while(running_) {
             HANDLE pipe=CreateNamedPipeW(widen(name_).c_str(),PIPE_ACCESS_DUPLEX|FILE_FLAG_OVERLAPPED,
-                PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,header_size+max_payload+4,header_size+max_payload,0,&attributes);
+                PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,16,header_size+max_payload+4,header_size+max_payload,0,&attributes);
             if(pipe==INVALID_HANDLE_VALUE) throw Error("IPC_IO","CreateNamedPipe: " + std::to_string(GetLastError()));
             if(!startup_signaled) { SetEvent(static_cast<HANDLE>(startup_event_)); startup_signaled=true; }
             HANDLE connected=CreateEventW(nullptr,TRUE,FALSE,nullptr);
@@ -125,23 +137,29 @@ void PipeServer::run() {
             const DWORD wait=WaitForMultipleObjects(2,waits,FALSE,INFINITE);
             if(wait==WAIT_OBJECT_0) { CancelIoEx(pipe,&overlap); WaitForSingleObject(connected,INFINITE); CloseHandle(connected); CloseHandle(pipe); break; }
             CloseHandle(connected);
-            try {
-                uint8_t header[header_size]{};
-                if(!async_transfer(pipe,header,sizeof(header),false,static_cast<HANDLE>(native_stop_))) { CloseHandle(pipe); break; }
-                if(get32(header)!=magic || get16(header+4)!=1) throw Error("IPC_PROTOCOL","Bad IPC magic/version");
-                const uint16_t operation=get16(header+6); const uint64_t request=get64(header+8); const uint32_t length=get32(header+16);
-                if(!request || length>max_payload || operation<1 || operation>10) throw Error("IPC_PROTOCOL","Invalid IPC request header");
-                std::string payload(length,'\0');
-                if(length && !async_transfer(pipe,reinterpret_cast<uint8_t*>(payload.data()),length,false,static_cast<HANDLE>(native_stop_))) { CloseHandle(pipe); break; }
-                IpcResponse response;
-                try { response=handler_(static_cast<IpcOperation>(operation),payload); }
-                catch(const Error& e) { response={1,e.code + ": " + e.what()}; }
-                catch(const std::exception& e) { response={2,std::string("INTERNAL: ")+e.what()}; }
-                auto output=frame(static_cast<uint16_t>(operation|0x8000),request,response.status,response.payload);
-                (void)async_transfer(pipe,output.data(),output.size(),true,static_cast<HANDLE>(native_stop_));
-            } catch(const std::exception&) { /* malformed/abandoned client is isolated */ }
-            FlushFileBuffers(pipe); DisconnectNamedPipe(pipe); CloseHandle(pipe);
+            reap_workers();
+            if(workers.size()>=16){DisconnectNamedPipe(pipe);CloseHandle(pipe);continue;}
+            auto done=std::make_shared<std::atomic_bool>(false);
+            workers.push_back({std::jthread([this,pipe,done] {
+                try {
+                    uint8_t header[header_size]{};
+                    if(!async_transfer(pipe,header,sizeof(header),false,static_cast<HANDLE>(native_stop_)))throw Error("IPC_STOPPED","IPC server is stopping");
+                    if(get32(header)!=magic || get16(header+4)!=1) throw Error("IPC_PROTOCOL","Bad IPC magic/version");
+                    const uint16_t operation=get16(header+6); const uint64_t request=get64(header+8); const uint32_t length=get32(header+16);
+                    if(!request || length>max_payload || operation<1 || operation>10) throw Error("IPC_PROTOCOL","Invalid IPC request header");
+                    std::string payload(length,'\0');
+                    if(length&&!async_transfer(pipe,reinterpret_cast<uint8_t*>(payload.data()),length,false,static_cast<HANDLE>(native_stop_)))throw Error("IPC_STOPPED","IPC server is stopping");
+                    IpcResponse response;
+                    try { response=handler_(static_cast<IpcOperation>(operation),payload); }
+                    catch(const Error& e) { response={1,e.code + ": " + e.what()}; }
+                    catch(const std::exception& e) { response={2,std::string("INTERNAL: ")+e.what()}; }
+                    auto output=frame(static_cast<uint16_t>(operation|0x8000),request,response.status,response.payload);
+                    (void)async_transfer(pipe,output.data(),output.size(),true,static_cast<HANDLE>(native_stop_));
+                } catch(const std::exception&) { /* malformed/abandoned client is isolated */ }
+                CloseHandle(pipe);done->store(true);
+            }),done});
         }
+        reap_workers(true);
     } catch(const std::exception& error) {
         { std::lock_guard lock(error_mutex_); startup_error_=error.what(); }
         running_=false;
@@ -163,7 +181,8 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
         if(error==ERROR_PIPE_BUSY) (void)WaitNamedPipeW(widen(name).c_str(),wait); else Sleep(wait);
     }
     try {
-        const uint64_t request=(static_cast<uint64_t>(GetCurrentProcessId())<<32) | (GetTickCount64() & 0xffffffffULL);
+        static std::atomic_uint64_t next_request{(static_cast<uint64_t>(platform::secure_random_u32())<<32)|platform::secure_random_u32()};
+        uint64_t request=next_request.fetch_add(1,std::memory_order_relaxed);if(!request)request=next_request.fetch_add(1,std::memory_order_relaxed);
         auto output=frame(static_cast<uint16_t>(operation),request,0,payload); timed_transfer(pipe,output.data(),output.size(),true,deadline);
         uint8_t header[header_size]{}; timed_transfer(pipe,header,sizeof(header),false,deadline);
         if(get32(header)!=magic || get16(header+4)!=1 || get16(header+6)!=(static_cast<uint16_t>(operation)|0x8000) || get64(header+8)!=request)

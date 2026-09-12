@@ -9,10 +9,12 @@
 #include <fcntl.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace nd {
@@ -20,6 +22,7 @@ namespace {
 constexpr uint32_t magic = 0x31444e4e;
 constexpr uint32_t max_payload = 1024 * 1024;
 constexpr size_t header_size = 20;
+std::string owner_name(const std::string& name){uint64_t hash=1469598103934665603ULL;for(const unsigned char value:name){hash^=value;hash*=1099511628211ULL;}return "NativeDNS.IPC."+std::to_string(hash);}
 
 void put16(uint8_t* out, uint16_t value) {
     out[0] = static_cast<uint8_t>(value);
@@ -90,6 +93,7 @@ public:
     Fd& operator=(const Fd&) = delete;
 
     int get() const { return value_; }
+    int release(){const int value=value_;value_=-1;return value;}
 
 private:
     int value_ = -1;
@@ -99,15 +103,16 @@ private:
     throw Error("IPC_IO", std::string(what) + ": " + std::strerror(errno));
 }
 
-void wait_fd(int fd, short events, std::chrono::steady_clock::time_point deadline) {
+void wait_fd(int fd, short events, std::chrono::steady_clock::time_point deadline,const std::atomic_bool* running=nullptr) {
     for (;;) {
+        if(running&&!*running)throw Error("IPC_STOPPED","IPC server is stopping");
         const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
         if (left <= 0) {
             throw Error("IPC_TIMEOUT", "IPC request timed out");
         }
 
         pollfd item{fd, events, 0};
-        const int result = poll(&item, 1, static_cast<int>(std::min<long long>(left, 1000)));
+        const int result = poll(&item, 1, static_cast<int>(std::min<long long>(left, running?100:1000)));
         if (result > 0) {
             if (item.revents & events) {
                 return;
@@ -124,10 +129,10 @@ void wait_fd(int fd, short events, std::chrono::steady_clock::time_point deadlin
     }
 }
 
-void transfer(int fd, uint8_t* data, size_t size, bool writing, std::chrono::steady_clock::time_point deadline) {
+void transfer(int fd, uint8_t* data, size_t size, bool writing, std::chrono::steady_clock::time_point deadline,const std::atomic_bool* running=nullptr) {
     size_t offset = 0;
     while (offset < size) {
-        wait_fd(fd, writing ? POLLOUT : POLLIN, deadline);
+        wait_fd(fd, writing ? POLLOUT : POLLIN, deadline,running);
         const auto count = writing
             ? send(fd, data + offset, size - offset, MSG_NOSIGNAL)
             : recv(fd, data + offset, size - offset, 0);
@@ -171,6 +176,8 @@ void PipeServer::start() {
     if (running_.exchange(true)) {
         throw Error("IPC_LIFECYCLE", "IPC server already running");
     }
+    owner_=std::make_unique<platform::ProcessInstanceLock>(owner_name(name_));
+    if(!owner_->acquired()){owner_.reset();running_=false;throw Error("IPC_LIFECYCLE","Another IPC server owns this endpoint");}
 
     {
         std::lock_guard lock(error_mutex_);
@@ -200,6 +207,7 @@ void PipeServer::stop() {
     }
     std::error_code error;
     std::filesystem::remove(name_, error);
+    owner_.reset();
 }
 
 void PipeServer::run() {
@@ -245,6 +253,9 @@ void PipeServer::run() {
         }
         startup_cv_.notify_all();
 
+        struct Worker { std::jthread thread;std::shared_ptr<std::atomic_bool> done; };
+        std::vector<Worker> workers;
+        const auto reap_workers=[&](bool all=false){std::erase_if(workers,[&](const Worker& worker){return all||worker.done->load();});};
         while (running_) {
             pollfd item{listener.get(), POLLIN, 0};
             const int poll_result = poll(&item, 1, 100);
@@ -266,10 +277,16 @@ void PipeServer::run() {
                 io_error("accept");
             }
 
-            try {
+            reap_workers();
+            if(workers.size()>=16)continue;
+            const int client_fd=client.get();
+            auto done=std::make_shared<std::atomic_bool>(false);
+            workers.push_back({std::jthread([this,client_fd,done] {
+              Fd client(client_fd);
+              try {
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 uint8_t header[header_size]{};
-                transfer(client.get(), header, sizeof(header), false, deadline);
+                transfer(client.get(), header, sizeof(header), false, deadline,&running_);
                 if (get32(header) != magic || get16(header + 4) != 1) {
                     throw Error("IPC_PROTOCOL", "Bad IPC magic/version");
                 }
@@ -283,7 +300,7 @@ void PipeServer::run() {
 
                 std::string payload(length, '\0');
                 if (length) {
-                    transfer(client.get(), reinterpret_cast<uint8_t*>(payload.data()), length, false, deadline);
+                    transfer(client.get(), reinterpret_cast<uint8_t*>(payload.data()), length, false, deadline,&running_);
                 }
 
                 IpcResponse response;
@@ -296,11 +313,15 @@ void PipeServer::run() {
                 }
 
                 auto output = frame(static_cast<uint16_t>(operation | 0x8000), request, response.status, response.payload);
-                transfer(client.get(), output.data(), output.size(), true, deadline);
+                transfer(client.get(), output.data(), output.size(), true, deadline,&running_);
             } catch (const std::exception&) {
                 // Malformed or disconnected clients are isolated from the server.
             }
+              done->store(true);
+            }),done});
+            (void)client.release();
         }
+        reap_workers(true);
     } catch (const std::exception& e) {
         std::lock_guard lock(error_mutex_);
         startup_error_ = e.what();
@@ -344,8 +365,8 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
         io_error("fcntl restore");
     }
 
-    const uint64_t request = (static_cast<uint64_t>(platform::process_id()) << 32) |
-        (platform::monotonic_millis() & 0xffffffffULL);
+    static std::atomic_uint64_t next_request{(static_cast<uint64_t>(platform::secure_random_u32())<<32)|platform::secure_random_u32()};
+    uint64_t request=next_request.fetch_add(1,std::memory_order_relaxed);if(!request)request=next_request.fetch_add(1,std::memory_order_relaxed);
     auto output = frame(static_cast<uint16_t>(operation), request, 0, payload);
     transfer(socket_fd.get(), output.data(), output.size(), true, deadline);
 

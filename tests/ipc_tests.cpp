@@ -51,6 +51,11 @@ int main() {
         }));
         for(auto& client:clients) client.get();
         check(calls==11,"handler call count");
+        auto slow=std::async(std::launch::async,[&]{return nd::pipe_request(name,nd::IpcOperation::clear_file_log,{},1000);});
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));const auto fast_start=std::chrono::steady_clock::now();
+        check(nd::pipe_request(name,nd::IpcOperation::ping,"parallel",500).payload=="pong:parallel","fast request during slow IPC handler");
+        check(std::chrono::steady_clock::now()-fast_start<std::chrono::milliseconds(200),"slow client must not block another IPC request");
+        check(slow.get().payload=="late","slow concurrent IPC request completes");
         bool failed=false; try { (void)nd::pipe_request(name,nd::IpcOperation::clear_file_log,{},50); } catch(const nd::Error& error) { failed=error.code=="IPC_TIMEOUT"; }
         check(failed,"whole-request deadline");
         failed=false; try { (void)nd::pipe_request(name,nd::IpcOperation::ping,std::string(1024*1024+1,'x')); } catch(const nd::Error&) { failed=true; }
@@ -95,6 +100,7 @@ int main() {
         check(nd::pipe_request(host_name,nd::IpcOperation::configure_file_log,"1\t2").payload=="FILE_LOG_ENABLED","enable file log through IPC");
         response=nd::pipe_request(host_name,nd::IpcOperation::status);
         check(response.payload.starts_with("RUNNING") && response.payload.find("transparent=0")!=std::string::npos,"host status");
+        check(nd::pipe_request(host_name,nd::IpcOperation::status,"unexpected").status==1,"reject payload for payload-free privileged operation");
         const auto marker=response.payload.find("port="); const auto finish=response.payload.find(' ',marker);
         const auto port=static_cast<uint16_t>(std::stoul(response.payload.substr(marker+5,finish-marker-5)));
         auto local=original; local.port=port;
