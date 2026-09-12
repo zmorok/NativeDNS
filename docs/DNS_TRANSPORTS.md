@@ -86,6 +86,8 @@ Before transparent interception starts, enabled DoH/DoT hostnames that have neit
 
 On Windows, every libcurl-created secure TCP socket is bound before connect and its ephemeral source port remains registered with the same self-bypass registry used by plain DNS until libcurl closes the socket. On Linux, secure sockets receive the NativeDNS `SO_MARK` used by the nftables loop-prevention rules.
 
+The Windows reflected-TCP listener must accept packets addressed to the original resolver IP, so it cannot bind only to loopback. Its exposure is limited by an executable- and ephemeral-port-specific firewall rule plus one-shot validation of recently captured client SYN tuples. Connections without such a tuple are rejected even if the firewall is unavailable. NativeDNS removes a stale rule both while constructing and immediately before starting interception, and removes the active rule during normal shutdown or partial-start rollback.
+
 On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID `0` are reinjected directly from the WinDivert receive loop. They never wait behind custom-upstream work in the routing worker queue. Explicit bootstrap queries use guarded plain DNS sockets and cannot be captured recursively.
 
 Custom upstream routing uses a bounded worker queue sized to absorb short bursts. Worker count scales with available processors within fixed limits. If the application queue is saturated, NativeDNS returns `SERVFAIL` and emits rate-limited saturation diagnostics instead of silently dropping the captured query or bypassing its rule.

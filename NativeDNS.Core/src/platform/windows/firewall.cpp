@@ -52,6 +52,10 @@ FirewallPortRule::FirewallPortRule() {
     const HRESULT result=CoInitializeEx(nullptr,COINIT_MULTITHREADED);
     if(SUCCEEDED(result)) com_initialized_=true;
     else if(result!=RPC_E_CHANGED_MODE) check(result,"Initialize COM for firewall");
+    // A previous process may have terminated without running its destructor.
+    // Removal is idempotent and is repeated by enable() to close the race
+    // between CoreHost construction and interception startup.
+    disable();
 }
 FirewallPortRule::~FirewallPortRule() {
     disable();
@@ -63,7 +67,8 @@ void FirewallPortRule::enable(uint16_t local_port) {
     disable();
     auto collection=rules();
     Bstr name(rule_name);
-    (void)collection->Remove(name.value);
+    const HRESULT removed=collection->Remove(name.value);
+    if(FAILED(removed)&&removed!=HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))check(removed,"Remove stale firewall rule");
     ComPtr<INetFwRule> rule;
     check(CoCreateInstance(__uuidof(NetFwRule),nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(rule.put())),"Create firewall rule");
     const auto path=executable_path();
@@ -85,7 +90,6 @@ void FirewallPortRule::enable(uint16_t local_port) {
 }
 
 void FirewallPortRule::disable() noexcept {
-    if(!enabled_) return;
     try {
         auto collection=rules();
         Bstr name(rule_name);

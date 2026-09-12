@@ -377,6 +377,8 @@ void WinDivertInterception::start() {
     if(p.state!=State::stopped) throw Error("LIFECYCLE","WinDivert interception is not stopped");
     p.state=State::starting; p.error_code.clear(); p.error_message.clear();
     try {
+        p.firewall.disable();
+        p.logger.write(Level::verbose,"FIREWALL_STALE_CLEANUP","Removed any stale TCP interception firewall rule");
         p.tcp_proxy_port=p.tcp_proxy.start();
         p.logger.write(Level::verbose,"TCP_PROXY_STARTED","TCP reflection proxy listening on port="+std::to_string(p.tcp_proxy_port));
         try{p.stop_driver_on_release=windivert_service_belongs_to_application();}

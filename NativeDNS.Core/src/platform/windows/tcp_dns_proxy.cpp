@@ -197,6 +197,10 @@ uint16_t TcpDnsProxy::start() {
                setsockopt(p.ipv6,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive)) ||
                setsockopt(p.ipv6,IPPROTO_IPV6,IPV6_V6ONLY,reinterpret_cast<const char*>(&ipv6_only),sizeof(ipv6_only)))
                 throw Error("TCP_PROXY_IO","Cannot secure TCP proxy listener");
+            // Reflection preserves the original resolver address, so the local
+            // stack cannot reach this listener through a loopback-only bind.
+            // Exposure is constrained by the per-run firewall rule and every
+            // accepted tuple must also have a recently captured SYN.
             sockaddr_in address4{}; address4.sin_family=AF_INET; address4.sin_port=htons(candidate); address4.sin_addr.s_addr=htonl(INADDR_ANY);
             sockaddr_in6 address6{}; address6.sin6_family=AF_INET6; address6.sin6_port=htons(candidate); address6.sin6_addr=in6addr_any;
             if(!bind(p.ipv4,reinterpret_cast<sockaddr*>(&address4),sizeof(address4)) &&
