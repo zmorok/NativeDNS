@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cstring>
 #include <mutex>
+#include <condition_variable>
 #include <optional>
 #include <unordered_map>
 
@@ -124,38 +125,6 @@ std::vector<Packet> fetch_certificates(const Server& server, const Packet& reque
     if (parsed.rcode) throw Error("DNSCRYPT_CERT", "Certificate lookup failed with RCODE " + std::to_string(parsed.rcode));
     return extract_dnscrypt_certificates(response);
 }
-DnsCryptCertificate load_certificate(const Server& server, detail::NetworkClock::time_point deadline) {
-    struct Entry { DnsCryptCertificate certificate; uint64_t refresh_at = 0; };
-    static std::mutex mutex;
-    static std::unordered_map<std::string, Entry> cache;
-    const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
-    const std::string key = server.ip + ":" + std::to_string(server.port ? server.port : 443) + "|" +
-                            server.provider_name + "|" + server.public_key;
-    std::optional<Entry> current;
-    {
-        const std::lock_guard lock(mutex);
-        const auto found = cache.find(key);
-        if (found != cache.end() && now <= found->second.certificate.valid_until) {
-            current = found->second;
-            if (now < found->second.refresh_at) return found->second.certificate;
-        }
-    }
-    DnsCryptCertificate certificate;
-    try {
-        auto request = make_query(server.provider_name, 16);
-        certificate = select_dnscrypt_certificate(fetch_certificates(server, request, parse_question(request), deadline),
-                                                   parse_dnscrypt_provider_key(server.public_key), now);
-    } catch (const Error&) {
-        if (current) return current->certificate;
-        throw;
-    }
-    {
-        const std::lock_guard lock(mutex);
-        cache[key] = Entry{certificate, std::min<uint64_t>(certificate.valid_until, now + 3600)};
-    }
-    return certificate;
-}
 class DnsCryptTransport final : public IDnsTransport {
 public:
     explicit DnsCryptTransport(bool anonymized) : anonymized_(anonymized) {}
@@ -199,7 +168,48 @@ public:
         return response;
     }
 private:
+    struct CertificateState {
+        std::optional<DnsCryptCertificate> certificate;
+        detail::NetworkClock::time_point refresh_after{};
+        bool refreshing=false;
+        std::condition_variable changed;
+    };
+    static uint64_t unix_time() {
+        const auto seconds=std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        if(seconds<0)throw Error("DNSCRYPT_CERT_TIME","System clock predates the Unix epoch");return static_cast<uint64_t>(seconds);
+    }
+    DnsCryptCertificate load_certificate(const Server& server,detail::NetworkClock::time_point deadline) {
+        const std::string key=protocol_name(server.protocol)+'|'+server.ip+':'+std::to_string(server.port?server.port:443)+'|'+server.provider_name+'|'+server.public_key+'|'+server.relay+'|'+(server.allow_direct_certificate_fallback?'1':'0');
+        std::shared_ptr<CertificateState> state;std::optional<DnsCryptCertificate> current;
+        {
+            std::unique_lock lock(cache_mutex_);
+            if(cache_.size()>=128)for(auto entry=cache_.begin();entry!=cache_.end()&&cache_.size()>=128;){if(entry->second.use_count()==1&&!entry->second->refreshing)entry=cache_.erase(entry);else ++entry;}
+            if(cache_.size()>=128&&!cache_.contains(key))throw Error("DNSCRYPT_CERT_CACHE","DNSCrypt certificate cache is full");
+            auto& slot=cache_[key];if(!slot)slot=std::make_shared<CertificateState>();state=slot;
+            for(;;) {
+                const auto now=unix_time();const auto steady=detail::NetworkClock::now();
+                const bool valid=state->certificate&&now>=state->certificate->valid_from&&now<state->certificate->valid_until;
+                if(valid&&steady<state->refresh_after)return *state->certificate;
+                if(!state->refreshing){state->refreshing=true;if(valid)current=state->certificate;break;}
+                if(state->changed.wait_until(lock,deadline)==std::cv_status::timeout)throw Error("TIMEOUT","DNSCrypt certificate refresh is busy");
+            }
+        }
+        try {
+            const auto now=unix_time();auto request=make_query(server.provider_name,16);
+            auto certificate=select_dnscrypt_certificate(fetch_certificates(server,request,parse_question(request),deadline),parse_dnscrypt_provider_key(server.public_key),now);
+            {
+                std::lock_guard lock(cache_mutex_);state->certificate=certificate;
+                const auto refresh_seconds=std::min<uint64_t>(3600,certificate.valid_until-now);state->refresh_after=detail::NetworkClock::now()+std::chrono::seconds(refresh_seconds);state->refreshing=false;
+            }
+            state->changed.notify_all();return certificate;
+        } catch(...) {
+            {std::lock_guard lock(cache_mutex_);state->refreshing=false;}
+            state->changed.notify_all();if(current)return *current;throw;
+        }
+    }
     bool anonymized_;
+    std::mutex cache_mutex_;
+    std::unordered_map<std::string,std::shared_ptr<CertificateState>> cache_;
 };
 }
 
@@ -240,7 +250,7 @@ void validate_dnscrypt_server(const Server& server) {
 DnsCryptCertificate select_dnscrypt_certificate(const std::vector<Packet>& blobs,
     std::span<const uint8_t, 32> provider_key, uint64_t unix_time) {
     sodium_ready();
-    bool found = false;
+    bool found = false,time_invalid=false;
     DnsCryptCertificate selected;
     for (const auto& blob : blobs) {
         if (blob.size() < classical_certificate_size || !std::equal(cert_magic.begin(), cert_magic.end(), blob.begin())) continue;
@@ -254,9 +264,11 @@ DnsCryptCertificate select_dnscrypt_certificate(const std::vector<Packet>& blobs
         candidate.serial = be32(blob, 112); candidate.valid_from = be32(blob, 116); candidate.valid_until = be32(blob, 120);
         if (candidate.encryption_system == 2 && std::all_of(candidate.client_magic.begin(), candidate.client_magic.begin() + 7,
                                                             [](uint8_t byte) { return byte == 0; })) continue;
-        if (candidate.valid_from >= candidate.valid_until || unix_time < candidate.valid_from || unix_time > candidate.valid_until) continue;
+        if(candidate.valid_from>=candidate.valid_until)continue;
+        if(unix_time<candidate.valid_from||unix_time>=candidate.valid_until){time_invalid=true;continue;}
         if (!found || candidate.serial > selected.serial) { selected = candidate; found = true; }
     }
+    if(!found&&time_invalid)throw Error("DNSCRYPT_CERT_TIME","Authenticated DNSCrypt certificate is not valid at system time "+std::to_string(unix_time));
     if (!found) throw Error("DNSCRYPT_CERT", "No valid supported DNSCrypt certificate");
     return selected;
 }

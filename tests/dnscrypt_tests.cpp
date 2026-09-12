@@ -3,6 +3,8 @@
 #include <cctype>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
+#include <atomic>
 
 namespace {
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -34,8 +36,11 @@ int main(int argc, char**) {
         auto tampered_certificate = certificate; tampered_certificate[80] ^= 1;
         try { (void)nd::select_dnscrypt_certificate({tampered_certificate}, provider, 0x68000001); check(false, "tampered certificate accepted"); }
         catch (const nd::Error& error) { check(error.code == "DNSCRYPT_CERT", "tampered certificate error"); }
-        try { (void)nd::select_dnscrypt_certificate({certificate}, provider, 0x68015181); check(false, "expired certificate accepted"); }
-        catch (const nd::Error& error) { check(error.code == "DNSCRYPT_CERT", "expired certificate error"); }
+        check(nd::select_dnscrypt_certificate({certificate},provider,0x68000000).serial==1,"certificate valid-from boundary");
+        try { (void)nd::select_dnscrypt_certificate({certificate}, provider, 0x68015180); check(false, "expiration boundary accepted"); }
+        catch (const nd::Error& error) { check(error.code == "DNSCRYPT_CERT_TIME", "certificate expiration boundary error"); }
+        try { (void)nd::select_dnscrypt_certificate({certificate}, provider, 0x67ffffff); check(false, "not-yet-valid certificate accepted"); }
+        catch (const nd::Error& error) { check(error.code == "DNSCRYPT_CERT_TIME", "certificate future clock diagnostic"); }
         const auto legacy_provider = nd::parse_dnscrypt_provider_key("d12b47f252dcf2c2bbf8991086eaf79ce4495d8b16c8a0c4322e52ca3f390873");
         const auto legacy_certificate = hex(
             "444e534300010000ffa8baa78437f87ca90038278f9050c4901340952d6ab7df"
@@ -123,11 +128,15 @@ int main(int argc, char**) {
             const auto direct = nd::test_server(configured);
             std::cout << "direct " << direct.success << " " << direct.rtt_ms << " " << direct.error_code << " " << direct.message << '\n';
             check(direct.success, "live DNSCrypt request failed");
+            const auto direct_configured=configured;
             configured.protocol = nd::Protocol::anonymized_dnscrypt;
             configured.relay = "94.198.41.235:443";
             const auto anonymized = nd::test_server(configured);
             std::cout << "anonymized " << anonymized.success << " " << anonymized.rtt_ms << " " << anonymized.error_code << " " << anonymized.message << '\n';
             check(anonymized.success, "live Anonymized DNSCrypt request failed");
+            auto transport=nd::make_transport(nd::Protocol::dnscrypt);std::vector<std::thread> refresh_clients;std::atomic_bool refresh_ok=true;
+            for(unsigned index=0;index<4;++index)refresh_clients.emplace_back([&,index]{try{const auto query=nd::make_query("refresh"+std::to_string(index)+".example");(void)nd::parse_response(transport->exchange(query,direct_configured),nd::parse_question(query));}catch(...){refresh_ok=false;}});
+            for(auto& client:refresh_clients)client.join();check(refresh_ok,"concurrent DNSCrypt certificate refresh failed");
         }
         std::cout << "DNSCrypt official vectors passed\n";
         return 0;

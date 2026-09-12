@@ -59,7 +59,7 @@ Certificate and hostname validation remain enabled.
 
 DNSCrypt uses libsodium.
 
-The implementation handles provider certificate retrieval/verification, authenticated encryption, nonce/key handling, padding validation, and cached provider certificates.
+The implementation handles provider certificate retrieval/verification, authenticated encryption, nonce/key handling, padding validation, and cached provider certificates. Certificate caches are bounded and owned by the Router's DNSCrypt transport rather than process-global state; replacing a Router releases them. Cache keys include endpoint, provider key, protocol, relay, and direct-fallback policy. Concurrent refreshes for one key are coalesced. Refresh scheduling uses a monotonic clock, while signed Unix validity timestamps necessarily use system time and produce `DNSCRYPT_CERT_TIME` diagnostics for not-yet-valid or expired authenticated certificates.
 
 ## Anonymized DNSCrypt
 
