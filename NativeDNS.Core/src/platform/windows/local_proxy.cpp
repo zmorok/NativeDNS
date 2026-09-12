@@ -48,7 +48,7 @@ struct LocalProxy::Impl {
         if (result.disposition == Disposition::silent_drop) return {};
         if (result.disposition == Disposition::forward_original) {
             logger.write(Level::normal,"DNS_BYPASS","Forwarding intact request to original fallback " + original.ip);
-            return make_transport(original.protocol)->exchange(request,original);
+            return router->exchange(request,original);
         }
         return result.packet;
     }

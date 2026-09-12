@@ -1,5 +1,7 @@
 #pragma once
 #include <nativedns/dns.hpp>
+#include <array>
+#include <mutex>
 #include <optional>
 namespace nd {
 enum class Disposition { reply, forward_original, silent_drop };
@@ -17,8 +19,11 @@ class Router {
 public:
     explicit Router(Config config, Logger& logger);
     RouteResult route(const Packet& request, const Server& original) const;
+    Packet exchange(const Packet& request, const Server& server) const;
 private:
     Config config_;
     Logger& logger_;
+    mutable std::array<std::once_flag,8> transport_once_;
+    mutable std::array<std::unique_ptr<IDnsTransport>,8> transports_;
 };
 }

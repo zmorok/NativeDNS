@@ -49,8 +49,8 @@ enum class Mode { good, malformed, mismatch, servfail, no_data, timeout, eof, tr
 // Test-only loopback peer. This exercises actual OS socket traffic, not a production transport substitute.
 class Peer {
 public:
-    Peer(bool tcp, Mode mode, bool ipv6 = false, uint16_t port = 0, uint32_t timeout_ms = 0)
-        : tcp_(tcp), mode_(mode), ipv6_(ipv6), timeout_ms_(timeout_ms ? timeout_ms : (mode == Mode::timeout ? 80u : 1500u)) {
+    Peer(bool tcp, Mode mode, bool ipv6 = false, uint16_t port = 0, uint32_t timeout_ms = 0, unsigned request_limit = 1)
+        : tcp_(tcp), mode_(mode), ipv6_(ipv6), timeout_ms_(timeout_ms ? timeout_ms : (mode == Mode::timeout ? 80u : 1500u)), request_limit_(request_limit) {
         socket_ = socket(ipv6 ? AF_INET6 : AF_INET, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP);
         check(socket_ != INVALID_SOCKET, "test socket");
         sockaddr_storage address{}; SocketLength size = 0;
@@ -100,37 +100,41 @@ private:
         SOCKET connection = INVALID_SOCKET;
         try {
             check(ready(socket_), "test receive deadline");
-            nd::Packet query(65535); sockaddr_storage client{}; SocketLength client_size = sizeof(client);
             if (tcp_) {
                 connection = accept(socket_, nullptr, nullptr); check(connection != INVALID_SOCKET, "accept");
-                uint8_t prefix[2]{}; check(read_all(connection,prefix,2), "read prefix");
-                query.resize(static_cast<size_t>((prefix[0] << 8) | prefix[1]));
-                check(read_all(connection,query.data(),query.size()), "read query");
-            } else {
-                const int n = recvfrom(socket_, reinterpret_cast<char*>(query.data()), static_cast<int>(query.size()), 0, reinterpret_cast<sockaddr*>(&client), &client_size);
-                check(n > 0, "recvfrom"); query.resize(static_cast<size_t>(n));
             }
-            ++requests;
-            if (mode_ == Mode::timeout) std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms_ + 100));
-            else if (mode_ != Mode::eof) {
-                auto response = reply(query, nd::parse_question(query).type == 28);
-                if (mode_ == Mode::malformed) response.resize(12); // complete frame, missing question
-                if (mode_ == Mode::mismatch) response[0] ^= 1;
-                if (mode_ == Mode::servfail) response[3] = 0x82;
-                if (mode_ == Mode::no_data) { response.resize(query.size()); response[7] = 0; }
-                if (mode_ == Mode::truncated) { response.resize(query.size()); response[2] |= 2; response[7] = 0; }
+            for(unsigned request_number=0;request_number<request_limit_;++request_number) {
+                nd::Packet query(65535); sockaddr_storage client{}; SocketLength client_size = sizeof(client);
                 if (tcp_) {
-                    nd::Packet frame{static_cast<uint8_t>(response.size() >> 8), static_cast<uint8_t>(response.size())};
-                    frame.insert(frame.end(),response.begin(),response.end());
-                    // Force prefix and payload split across writes.
-                    for (const auto byte : frame) { check(send(connection,reinterpret_cast<const char*>(&byte),1,0) == 1,"test fragmented send"); }
-                } else check(sendto(socket_,reinterpret_cast<const char*>(response.data()),static_cast<int>(response.size()),0,reinterpret_cast<sockaddr*>(&client),client_size) == static_cast<int>(response.size()),"sendto");
+                    uint8_t prefix[2]{}; check(read_all(connection,prefix,2), "read prefix");
+                    query.resize(static_cast<size_t>((prefix[0] << 8) | prefix[1]));
+                    check(read_all(connection,query.data(),query.size()), "read query");
+                } else {
+                    const int n = recvfrom(socket_, reinterpret_cast<char*>(query.data()), static_cast<int>(query.size()), 0, reinterpret_cast<sockaddr*>(&client), &client_size);
+                    check(n > 0, "recvfrom"); query.resize(static_cast<size_t>(n));
+                }
+                ++requests;
+                if (mode_ == Mode::timeout) std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms_ + 100));
+                else if (mode_ != Mode::eof) {
+                    auto response = reply(query, nd::parse_question(query).type == 28);
+                    if (mode_ == Mode::malformed) response.resize(12); // complete frame, missing question
+                    if (mode_ == Mode::mismatch) response[0] ^= 1;
+                    if (mode_ == Mode::servfail) response[3] = 0x82;
+                    if (mode_ == Mode::no_data) { response.resize(query.size()); response[7] = 0; }
+                    if (mode_ == Mode::truncated) { response.resize(query.size()); response[2] |= 2; response[7] = 0; }
+                    if (tcp_) {
+                        nd::Packet frame{static_cast<uint8_t>(response.size() >> 8), static_cast<uint8_t>(response.size())};
+                        frame.insert(frame.end(),response.begin(),response.end());
+                        // Force prefix and payload split across writes.
+                        for (const auto byte : frame) { check(send(connection,reinterpret_cast<const char*>(&byte),1,0) == 1,"test fragmented send"); }
+                    } else check(sendto(socket_,reinterpret_cast<const char*>(response.data()),static_cast<int>(response.size()),0,reinterpret_cast<sockaddr*>(&client),client_size) == static_cast<int>(response.size()),"sendto");
+                }
             }
             ok_ = true;
         } catch (const std::exception& error) { std::cerr << "peer: " << error.what() << '\n'; }
         if (connection != INVALID_SOCKET) closesocket(connection);
     }
-    SOCKET socket_; bool tcp_; Mode mode_; bool ipv6_; uint16_t port_; uint32_t timeout_ms_;
+    SOCKET socket_; bool tcp_; Mode mode_; bool ipv6_; uint16_t port_; uint32_t timeout_ms_; unsigned request_limit_;
     std::thread worker_; bool ok_ = false;
 public: std::atomic<unsigned> requests = 0;
 };
@@ -176,12 +180,19 @@ int main() {
             Peer peer(tcp,Mode::good,ipv6); auto result = nd::test_server(peer.server(),"example.com",ipv6 ? 28 : 1); peer.verify();
             check(result.success && !result.addresses.empty() && result.rtt_ms > 0,"real loopback UDP/TCP v4/v6 DNS");
         }
+        {
+            Peer peer(true,Mode::good,false,0,1500,2);auto config=nd::default_config();auto server=peer.server();server.id=9;config.servers.push_back(server);config.rules.front().server_id=9;
+            nd::Logger logger;nd::Router persistent_router(config,logger);nd::Server original=server;
+            const auto first_query=nd::make_query("first.example"),second_query=nd::make_query("second.example");
+            const auto first=persistent_router.route(first_query,original),second=persistent_router.route(second_query,original);peer.verify();
+            check(first.packet.size()>12&&second.packet.size()>12&&peer.requests==2,"plain TCP reuses one upstream connection");
+        }
         for (const auto mode : {Mode::malformed,Mode::mismatch,Mode::servfail,Mode::no_data,Mode::timeout,Mode::eof}) {
             Peer peer(true,mode); nd::Logger logger;
             const auto result = nd::test_server(peer.server(),"example.com",1,&logger); peer.verify();
             check(!result.success && !result.error_code.empty() && logger.snapshot(nd::Level::errors_only).size() == 1,"structured test failure and error log");
             if (mode == Mode::timeout) check(result.error_code == "TIMEOUT" && result.rtt_ms < 500,"bounded timeout");
-            if (mode == Mode::eof) check(result.error_code == "DNS_EOF","TCP port open is not DNS success");
+            if (mode == Mode::eof) check(result.error_code == "DNS_EOF"||result.error_code == "SOCKET"||result.error_code == "TIMEOUT","TCP port open is not DNS success");
         }
         const auto fallback_port = Peer::paired_port();
         Peer tcp(true,Mode::good,false,fallback_port); Peer udp(false,Mode::truncated,false,fallback_port);

@@ -88,7 +88,7 @@ struct TcpDnsProxy::Impl {
         if(result.disposition==Disposition::silent_drop) return {};
         if(result.disposition==Disposition::forward_original) {
             logger.write(Level::normal,"DNS_BYPASS","Forwarding TCP request to original destination "+original.ip);
-            return make_transport(Protocol::tcp)->exchange(request,original);
+            return router.exchange(request,original);
         }
         return result.packet;
     }

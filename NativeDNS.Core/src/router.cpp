@@ -43,6 +43,12 @@ std::string route_log_message(const Question& question,const Rule& rule,const Se
     return output.str();
 }
 Router::Router(Config config, Logger& logger) : config_(std::move(config)), logger_(logger) { validate(config_); }
+Packet Router::exchange(const Packet& request,const Server& server) const {
+    const auto index=static_cast<size_t>(server.protocol);
+    if(index>=transports_.size()) throw Error("PROTOCOL","Invalid DNS transport");
+    std::call_once(transport_once_[index],[this,index,&server]{transports_[index]=make_transport(server.protocol);});
+    return transports_[index]->exchange(request,server);
+}
 RouteResult Router::route(const Packet& request, const Server& original) const {
     RouteResult result;
     Question question;
@@ -78,7 +84,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         selected_server=server;
         logger_.write(Level::verbose,"DNS_UPSTREAM","name="+question.name+" server="+server->name+" protocol="+protocol_name(server->protocol)+" address="+server->ip+" port="+std::to_string(server->port));
         exchange_started=std::chrono::steady_clock::now();
-        result.packet = make_transport(server->protocol)->exchange(request,*server);
+        result.packet = exchange(request,*server);
         const auto parsed = parse_response(result.packet,question);
         const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-exchange_started).count();
         if (parsed.rcode) {

@@ -11,7 +11,9 @@
 #include <cstring>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -69,7 +71,13 @@ NetworkUpstreamGuard::~NetworkUpstreamGuard() {
 bool is_network_upstream(bool tcp,uint16_t local_port) {
     const std::lock_guard lock(upstream_mutex); return upstream_sockets.contains({tcp,local_port});
 }
-Packet exchange_network(const Packet& request, const Server& server, bool tcp, Clock::time_point deadline) {
+}
+namespace {
+struct ConnectedSocket {
+    std::unique_ptr<Socket> socket;
+    std::unique_ptr<detail::NetworkUpstreamGuard> upstream;
+};
+ConnectedSocket connect_network(const Server& server,bool tcp,Clock::time_point deadline) {
     initialize();
     sockaddr_storage address{}; socklen_t address_size = 0;
     auto* v4 = reinterpret_cast<sockaddr_in*>(&address); auto* v6 = reinterpret_cast<sockaddr_in6*>(&address);
@@ -78,40 +86,51 @@ Packet exchange_network(const Packet& request, const Server& server, bool tcp, C
     } else if (inet_pton(AF_INET6, server.ip.c_str(), &v6->sin6_addr) == 1) {
         v6->sin6_family = AF_INET6; v6->sin6_port = htons(server.port ? server.port : 53); address_size = sizeof(*v6);
     } else throw Error("ENDPOINT", "DNS network transport requires a numeric IP");
-    Socket socket(::socket(address.ss_family, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP));
-    platform::configure_upstream_socket(socket.value);
-    const int flags = fcntl(socket.value,F_GETFL,0);
-    if(flags < 0 || fcntl(socket.value,F_SETFL,flags|O_NONBLOCK) < 0) socket_error("nonblocking");
+    auto socket=std::make_unique<Socket>(::socket(address.ss_family, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP));
+    platform::configure_upstream_socket(socket->value);
+    const int flags = fcntl(socket->value,F_GETFL,0);
+    if(flags < 0 || fcntl(socket->value,F_SETFL,flags|O_NONBLOCK) < 0) socket_error("nonblocking");
     sockaddr_storage local{}; socklen_t local_size = address.ss_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
     local.ss_family = address.ss_family;
-    if (bind(socket.value,reinterpret_cast<const sockaddr*>(&local),local_size) < 0) socket_error("local bind");
-    if (getsockname(socket.value,reinterpret_cast<sockaddr*>(&local),&local_size) < 0) socket_error("local endpoint");
+    if (bind(socket->value,reinterpret_cast<const sockaddr*>(&local),local_size) < 0) socket_error("local bind");
+    if (getsockname(socket->value,reinterpret_cast<sockaddr*>(&local),&local_size) < 0) socket_error("local endpoint");
     const uint16_t local_port = ntohs(address.ss_family == AF_INET ? reinterpret_cast<const sockaddr_in*>(&local)->sin_port
                                                                     : reinterpret_cast<const sockaddr_in6*>(&local)->sin6_port);
-    NetworkUpstreamGuard upstream(tcp,local_port);
-    if (connect(socket.value, reinterpret_cast<const sockaddr*>(&address), address_size) < 0) {
+    auto upstream=std::make_unique<detail::NetworkUpstreamGuard>(tcp,local_port);
+    if (connect(socket->value, reinterpret_cast<const sockaddr*>(&address), address_size) < 0) {
         if (errno != EINPROGRESS && errno != EWOULDBLOCK) socket_error("connect");
-        ready(socket.value, true, deadline);
+        ready(socket->value, true, deadline);
         int error = 0; socklen_t length = sizeof(error);
-        if (getsockopt(socket.value, SOL_SOCKET, SO_ERROR, &error, &length) < 0) socket_error("connect result");
+        if (getsockopt(socket->value, SOL_SOCKET, SO_ERROR, &error, &length) < 0) socket_error("connect result");
         if (error) throw Error("SOCKET", "Connect failed: " + std::string(std::strerror(error)));
     }
+    return{std::move(socket),std::move(upstream)};
+}
+Packet exchange_tcp(ConnectedSocket& connection,const Packet& request,Clock::time_point deadline) {
+    const auto socket=connection.socket->value;
+    Packet frame{static_cast<uint8_t>(request.size() >> 8), static_cast<uint8_t>(request.size())};
+    frame.insert(frame.end(), request.begin(), request.end());
+    transfer(socket, frame.data(), frame.size(), true, deadline);
+    uint8_t prefix[2]{}; transfer(socket, prefix, 2, false, deadline);
+    const size_t length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
+    if (length < 12) throw Error("DNS_MALFORMED", "Invalid TCP DNS frame length");
+    Packet response(length); transfer(socket, response.data(), response.size(), false, deadline); return response;
+}
+}
+namespace detail {
+Packet exchange_network(const Packet& request, const Server& server, bool tcp, Clock::time_point deadline) {
+    auto connection=connect_network(server,tcp,deadline);
+    const auto socket=connection.socket->value;
     if (tcp) {
-        Packet frame{static_cast<uint8_t>(request.size() >> 8), static_cast<uint8_t>(request.size())};
-        frame.insert(frame.end(), request.begin(), request.end());
-        transfer(socket.value, frame.data(), frame.size(), true, deadline);
-        uint8_t prefix[2]{}; transfer(socket.value, prefix, 2, false, deadline);
-        const size_t length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
-        if (length < 12) throw Error("DNS_MALFORMED", "Invalid TCP DNS frame length");
-        Packet response(length); transfer(socket.value, response.data(), response.size(), false, deadline); return response;
+        return exchange_tcp(connection,request,deadline);
     }
-    ready(socket.value, true, deadline);
-    const ssize_t sent = send(socket.value, request.data(), request.size(), MSG_NOSIGNAL);
+    ready(socket, true, deadline);
+    const ssize_t sent = send(socket, request.data(), request.size(), MSG_NOSIGNAL);
     if (sent < 0) socket_error("UDP send");
     if (sent != static_cast<ssize_t>(request.size())) throw Error("SOCKET", "Incomplete UDP send");
     Packet response(65535);
-    ready(socket.value, false, deadline);
-    const ssize_t received = recv(socket.value, response.data(), response.size(), 0);
+    ready(socket, false, deadline);
+    const ssize_t received = recv(socket, response.data(), response.size(), 0);
     if (received < 0) socket_error("UDP receive");
     response.resize(static_cast<size_t>(received)); return response;
 }
@@ -126,16 +145,49 @@ public:
         const auto q = parse_question(request);
         if (q.flags & 0x8000) throw Error("DNS_MALFORMED", "Expected query, not response");
         const auto deadline = Clock::now() + std::chrono::milliseconds(server.timeout_ms);
-        auto response = detail::exchange_network(request, server, tcp_, deadline);
+        auto response = tcp_ ? pooled_tcp(request,server,deadline) : detail::exchange_network(request, server, false, deadline);
         auto parsed = parse_response(response, q);
         if (parsed.truncated && !tcp_) {
-            response = detail::exchange_network(request, server, true, deadline);
+            response = pooled_tcp(request,server,deadline);
             parsed = parse_response(response, q);
         }
         if (parsed.truncated) throw Error("DNS_TRUNCATED", "Truncated response over TCP");
         return response;
     }
-private: bool tcp_;
+private:
+    struct Entry { bool busy=false;std::unique_ptr<ConnectedSocket> connection;Clock::time_point last_used{}; };
+    struct Lease {
+        PlainTransport& owner;std::shared_ptr<Entry> entry;
+        ~Lease(){std::lock_guard lock(owner.pool_mutex_);entry->busy=false;owner.pool_changed_.notify_one();}
+    };
+    Packet pooled_tcp(const Packet& request,const Server& server,Clock::time_point deadline) {
+        const auto key=server.ip+":"+std::to_string(server.port?server.port:53);
+        std::shared_ptr<Entry> selected;
+        {
+            std::unique_lock lock(pool_mutex_);auto& entries=pool_[key];
+            for(;;) {
+                const auto found=std::find_if(entries.begin(),entries.end(),[](const auto& entry){return !entry->busy;});
+                if(found!=entries.end()){selected=*found;selected->busy=true;break;}
+                if(entries.size()<4){selected=std::make_shared<Entry>();selected->busy=true;entries.push_back(selected);break;}
+                if(pool_changed_.wait_until(lock,deadline)==std::cv_status::timeout) throw Error("TIMEOUT","DNS TCP connection pool is busy");
+            }
+        }
+        Lease lease{*this,selected};
+        if(selected->connection&&Clock::now()-selected->last_used>std::chrono::seconds(30)) selected->connection.reset();
+        for(unsigned attempt=0;attempt<2;++attempt) {
+            try {
+                if(!selected->connection) selected->connection=std::make_unique<ConnectedSocket>(connect_network(server,true,deadline));
+                auto response=exchange_tcp(*selected->connection,request,deadline);selected->last_used=Clock::now();return response;
+            } catch(const Error& error) {
+                selected->connection.reset();
+                if(attempt||!(error.code=="TIMEOUT"||error.code=="SOCKET"||error.code=="DNS_EOF")) throw;
+            }
+        }
+        throw Error("SOCKET","DNS TCP retry failed");
+    }
+    bool tcp_;
+    std::mutex pool_mutex_;std::condition_variable pool_changed_;
+    std::map<std::string,std::vector<std::shared_ptr<Entry>>> pool_;
 };
 }
 std::unique_ptr<IDnsTransport> make_secure_transport(Protocol protocol);
