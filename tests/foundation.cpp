@@ -38,6 +38,7 @@ int main() {
         logger.configure_file(true,nd::Level::normal,path,1024,2);
         logger.write(nd::Level::debug,"DEBUG","must not reach file");
         for (int i = 0; i < 40; ++i) logger.write(nd::Level::normal,"NORMAL",std::string(70,'x'));
+        logger.flush_file();
         check(std::filesystem::exists(path) && std::filesystem::exists(path.string() + ".1"),"log rotation");
         {
             std::ifstream stream(path,std::ios::binary); std::string contents((std::istreambuf_iterator<char>(stream)),{});

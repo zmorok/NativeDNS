@@ -108,6 +108,7 @@ int main() {
         auto local=original; local.port=port;
         check(nd::test_server(local,"example.com").success,"host routes actual local DNS request");
         if(!nd::platform::is_elevated()){
+            host.logger().flush_file();
             diagnostic_log=find_diagnostic_log(log_directory);
             std::ifstream stream(*diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});

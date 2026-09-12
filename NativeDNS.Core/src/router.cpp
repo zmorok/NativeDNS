@@ -85,7 +85,7 @@ std::pair<Packet,const Server*> Router::exchange_group(const Packet& request,con
             last_code=error.code;last_message=error.what();
             unsigned failures=0;
             {std::lock_guard lock(health_mutex_);auto& state=health_[candidate->id];failures=++state.consecutive_failures;if(failures>=2){const auto shift=std::min(failures-2,3u);state.retry_after=std::chrono::steady_clock::now()+std::chrono::seconds(30u<<shift);}}
-            logger_.write(Level::verbose,"UPSTREAM_FAILOVER","server="+candidate->name+" failure="+last_code+" consecutive="+std::to_string(failures));
+            if(logger_.enabled(Level::verbose))logger_.write(Level::verbose,"UPSTREAM_FAILOVER","server="+candidate->name+" failure="+last_code+" consecutive="+std::to_string(failures));
         }
     }
     throw Error(last_code,"Fallback group exhausted: "+last_message);
@@ -103,14 +103,14 @@ std::pair<Packet,uint32_t> Router::exchange_cached(const Packet& request,const S
         for(auto entry=cache_.begin();entry!=cache_.end();)entry=entry->second.expires<=now?cache_.erase(entry):std::next(entry);
         if(const auto found=cache_.find(key);found!=cache_.end()) {
             const auto elapsed=static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(now-found->second.stored).count());
-            logger_.write(Level::debug,"DNS_CACHE_HIT","server="+primary.name);
+            if(logger_.enabled(Level::debug))logger_.write(Level::debug,"DNS_CACHE_HIT","server="+primary.name);
             return{age_dns_response(found->second.packet,transaction_id,elapsed),found->second.used_server_id};
         }
         const auto found=pending_.find(key);
         if(found!=pending_.end())pending=found->second;
         else {pending=std::make_shared<Pending>();pending_.emplace(key,pending);leader=true;}
         if(!leader) {
-            logger_.write(Level::debug,"DNS_COALESCED","server="+primary.name);
+            if(logger_.enabled(Level::debug))logger_.write(Level::debug,"DNS_COALESCED","server="+primary.name);
             pending->changed.wait(lock,[&]{return pending->done;});
             if(!pending->error_code.empty())throw Error(pending->error_code,pending->error_message);
             return{age_dns_response(pending->packet,transaction_id,0),pending->used_server_id};
@@ -152,11 +152,11 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         if (!rule.interface_id.empty() || rule.dnssec_validate || rule.dnssec_reject_unsigned)
             throw Error("NOT_IMPLEMENTED","Selected rule requires interface binding or local DNSSEC validation");
         if (rule.action == Action::bypass) {
-            logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,&original));
+            if(logger_.enabled(Level::normal))logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,&original));
             result.disposition = Disposition::forward_original; result.packet = request; return result;
         }
         if (rule.action == Action::block) {
-            logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,nullptr));
+            if(logger_.enabled(Level::normal))logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,nullptr));
             if (rule.block_mode == BlockMode::silent_drop) { result.disposition = Disposition::silent_drop; return result; }
             result.packet=make_block_response(request,rule.block_mode);return result;
         }
@@ -167,7 +167,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
             server = &*it;
         }
         selected_server=server;
-        logger_.write(Level::verbose,"DNS_UPSTREAM","name="+question.name+" server="+server->name+" protocol="+protocol_name(server->protocol)+" address="+server->ip+" port="+std::to_string(server->port));
+        if(logger_.enabled(Level::verbose))logger_.write(Level::verbose,"DNS_UPSTREAM","name="+question.name+" server="+server->name+" protocol="+protocol_name(server->protocol)+" address="+server->ip+" port="+std::to_string(server->port));
         exchange_started=std::chrono::steady_clock::now();
         auto exchanged=exchange_cached(request,*server,rule.server_id!=0);result.packet=std::move(exchanged.first);result.server_id=exchanged.second;
         if(result.server_id){const auto used=std::find_if(config_.servers.begin(),config_.servers.end(),[&](const Server& candidate){return candidate.id==result.server_id;});if(used!=config_.servers.end())selected_server=&*used;}
@@ -177,8 +177,8 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
             result.error_code = "DNS_RCODE"; result.message = "Upstream returned RCODE " + std::to_string(parsed.rcode);
             logger_.write(Level::errors_only,result.error_code,route_log_message(question,rule,server,elapsed)+", error="+result.message);
         } else {
-            logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,server,elapsed));
-            logger_.write(Level::debug,"DNS_REPLY_DETAIL",question.name+" bytes="+std::to_string(result.packet.size())+" addresses="+std::to_string(parsed.addresses.size()));
+            if(logger_.enabled(Level::normal))logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,server,elapsed));
+            if(logger_.enabled(Level::debug))logger_.write(Level::debug,"DNS_REPLY_DETAIL",question.name+" bytes="+std::to_string(result.packet.size())+" addresses="+std::to_string(parsed.addresses.size()));
         }
     } catch (const Error& error) {
         result.error_code = error.code; result.message = error.what();

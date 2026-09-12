@@ -65,28 +65,33 @@ std::filesystem::path timestamped_log_path(const std::filesystem::path& director
 }
 Logger::Logger(size_t capacity) : capacity_(capacity) {
     if (!capacity) throw std::invalid_argument("log capacity must be positive");
+    file_thread_=std::jthread([this]{file_loop();});
 }
+Logger::~Logger(){
+    file_enabled_=false;
+    try{FileTask task;task.kind=FileTask::Kind::stop;submit_file_task(std::move(task));}catch(...){}
+    if(file_thread_.joinable())file_thread_.join();
+}
+bool Logger::enabled(Level level) const noexcept{return level<=display_level_.load(std::memory_order_relaxed)||(file_enabled_.load(std::memory_order_relaxed)&&level<=file_level_.load(std::memory_order_relaxed));}
+void Logger::set_display_level(Level level){if(level>Level::debug)throw std::invalid_argument("invalid display logging level");display_level_=level;}
 void Logger::write(Level level, std::string code, std::string message) {
+    if(!enabled(level))return;
     for (char& c : message) if (static_cast<unsigned char>(c) < 32) c = ' ';
     for (char& c : code) if (static_cast<unsigned char>(c) < 32) c = ' ';
     if (message.size() > 4096) message.resize(4096);
     if (code.size() > 128) code.resize(128);
+    LogEvent event;
     {
         std::lock_guard lock(mutex_);
         events_.push_back({++sequence_, std::chrono::system_clock::now(), level, std::move(code), std::move(message)});
         if (events_.size() > capacity_) events_.pop_front();
-        if (file_enabled_ && level <= file_level_) {
-            try {
-                write_file(events_.back());
-            } catch (const std::exception& error) {
-                // Diagnostics must never take DNS routing down. Keep the failure
-                // visible through the live log and disable the broken sink.
-                file_enabled_ = false;
-                events_.push_back({++sequence_, std::chrono::system_clock::now(), Level::errors_only,
-                                   "FILE_LOG_FAILED", error.what()});
-                if (events_.size() > capacity_) events_.pop_front();
-            }
-        }
+        event=events_.back();
+    }
+    if(file_enabled_.load(std::memory_order_relaxed)&&level<=file_level_.load(std::memory_order_relaxed)){
+        bool queued=false;
+        {std::lock_guard lock(file_mutex_);if(file_tasks_.size()<8192){FileTask task;task.kind=FileTask::Kind::event;task.event=std::move(event);file_tasks_.push_back(std::move(task));queued=true;}}
+        if(queued)file_changed_.notify_one();
+        else{const auto dropped=++dropped_file_events_;if(dropped==1||(dropped&(dropped-1))==0)record_file_failure("file log queue is full; dropped events="+std::to_string(dropped));}
     }
     changed_.notify_all();
 }
@@ -112,25 +117,46 @@ void Logger::clear_display() { std::lock_guard lock(mutex_); events_.clear(); }
 void Logger::configure_file(bool enabled, Level level, std::filesystem::path path, uint64_t maximum_bytes, uint32_t retained_files) {
     if (level > Level::debug || maximum_bytes < 1024 || maximum_bytes > 1024ull * 1024 * 1024 || retained_files > 100)
         throw std::invalid_argument("invalid file logging settings");
-    std::lock_guard lock(mutex_);
-    if (enabled) {
-        if (path.empty()) throw std::invalid_argument("file log path is empty");
-        const auto parent = path.parent_path();
-        if (!parent.empty()) std::filesystem::create_directories(parent);
-        std::ofstream probe(path, std::ios::binary | std::ios::app);
-        if (!probe) throw std::runtime_error("cannot open log file");
-        probe.close();
-        if(is_timestamped_log_path(path))prune_timestamped_logs(parent,static_cast<size_t>(retained_files)+1);
-    }
-    file_enabled_ = enabled; file_level_ = level; file_path_ = std::move(path);
-    maximum_bytes_ = maximum_bytes; retained_files_ = retained_files;
+    if(enabled&&path.empty())throw std::invalid_argument("file log path is empty");
+    if(!enabled)file_enabled_=false;
+    FileTask task;task.kind=FileTask::Kind::configure;task.enabled=enabled;task.level=level;task.path=std::move(path);task.maximum_bytes=maximum_bytes;task.retained_files=retained_files;
+    submit_file_task(std::move(task));
 }
 void Logger::clear_file() {
-    std::lock_guard lock(mutex_);
-    if (file_path_.empty() || !std::filesystem::exists(file_path_)) return;
-    std::ofstream stream(file_path_, std::ios::binary | std::ios::trunc);
-    if (!stream) throw std::runtime_error("cannot clear log file");
-    stream.flush();
+    FileTask task;task.kind=FileTask::Kind::clear;submit_file_task(std::move(task));
+}
+void Logger::flush_file(){FileTask task;task.kind=FileTask::Kind::flush;submit_file_task(std::move(task));}
+void Logger::submit_file_task(FileTask task){
+    task.completion=std::make_shared<std::promise<void>>();auto completed=task.completion->get_future();
+    {std::lock_guard lock(file_mutex_);file_tasks_.push_back(std::move(task));}file_changed_.notify_one();completed.get();
+}
+void Logger::record_file_failure(const std::string& message){
+    std::lock_guard lock(mutex_);events_.push_back({++sequence_,std::chrono::system_clock::now(),Level::errors_only,"FILE_LOG_FAILED",message});if(events_.size()>capacity_)events_.pop_front();changed_.notify_all();
+}
+void Logger::file_loop(){
+    bool sink_enabled=false;
+    for(;;){
+        FileTask task;
+        {std::unique_lock lock(file_mutex_);file_changed_.wait(lock,[&]{return !file_tasks_.empty();});task=std::move(file_tasks_.front());file_tasks_.pop_front();}
+        try{
+            if(task.kind==FileTask::Kind::event){
+                std::vector<LogEvent> batch;batch.push_back(std::move(task.event));
+                {std::lock_guard lock(file_mutex_);while(batch.size()<256&&!file_tasks_.empty()&&file_tasks_.front().kind==FileTask::Kind::event){batch.push_back(std::move(file_tasks_.front().event));file_tasks_.pop_front();}}
+                if(sink_enabled)write_file_batch(batch);continue;
+            }
+            if(task.kind==FileTask::Kind::configure){
+                if(task.enabled){const auto parent=task.path.parent_path();if(!parent.empty())std::filesystem::create_directories(parent);std::ofstream probe(task.path,std::ios::binary|std::ios::app);if(!probe)throw std::runtime_error("cannot open log file");probe.close();if(is_timestamped_log_path(task.path))prune_timestamped_logs(parent,static_cast<size_t>(task.retained_files)+1);}
+                file_path_=std::move(task.path);maximum_bytes_=task.maximum_bytes;retained_files_=task.retained_files;file_level_=task.level;sink_enabled=task.enabled;file_enabled_=task.enabled;dropped_file_events_=0;
+            }else if(task.kind==FileTask::Kind::clear){if(!file_path_.empty()&&std::filesystem::exists(file_path_)){std::ofstream stream(file_path_,std::ios::binary|std::ios::trunc);if(!stream)throw std::runtime_error("cannot clear log file");stream.flush();if(!stream)throw std::runtime_error("cannot flush cleared log file");}}
+            else if(task.kind==FileTask::Kind::stop){if(task.completion)task.completion->set_value();return;}
+            if(task.completion)task.completion->set_value();
+        }catch(...){
+            const auto failure=std::current_exception();
+            sink_enabled=false;file_enabled_=false;
+            try{std::rethrow_exception(failure);}catch(const std::exception& error){record_file_failure(error.what());}catch(...){record_file_failure("unknown file logging failure");}
+            if(task.completion)task.completion->set_exception(failure);
+        }
+    }
 }
 void Logger::rotate_file(uint64_t incoming_bytes) {
     std::error_code error;
@@ -159,19 +185,16 @@ void Logger::rotate_file(uint64_t incoming_bytes) {
         }
     }
 }
-void Logger::write_file(const LogEvent& event) {
-    const auto instant = std::chrono::system_clock::to_time_t(event.time);
-    tm local{};
-    platform::local_time(instant, local);
-    std::ostringstream line;
-    line << '[' << std::put_time(&local, "%d.%m.%Y %H:%M:%S") << "] "
-         << event.sequence << " [" << level_name(event.level) << "] " << event.code << ' ' << event.message << "\r\n";
-    const auto text = line.str();
-    rotate_file(text.size());
-    std::ofstream stream(file_path_, std::ios::binary | std::ios::app);
-    if (!stream) throw std::runtime_error("cannot append log file");
-    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-    stream.flush();
-    if (!stream) throw std::runtime_error("cannot flush log file");
+void Logger::write_file_batch(const std::vector<LogEvent>& events) {
+    std::ofstream stream;
+    std::error_code error;uint64_t current=std::filesystem::file_size(file_path_,error);if(error)current=0;
+    for(const auto& event:events){
+        const auto instant=std::chrono::system_clock::to_time_t(event.time);tm local{};platform::local_time(instant,local);
+        std::ostringstream line;line<<'['<<std::put_time(&local,"%d.%m.%Y %H:%M:%S")<<"] "<<event.sequence<<" ["<<level_name(event.level)<<"] "<<event.code<<' '<<event.message<<"\r\n";const auto text=line.str();
+        if(current+text.size()>maximum_bytes_){if(stream.is_open()){stream.flush();if(!stream)throw std::runtime_error("cannot flush log file");stream.close();}rotate_file(text.size());error.clear();current=std::filesystem::file_size(file_path_,error);if(error)current=0;}
+        if(!stream.is_open()){stream.open(file_path_,std::ios::binary|std::ios::app);if(!stream)throw std::runtime_error("cannot append log file");}
+        stream.write(text.data(),static_cast<std::streamsize>(text.size()));if(!stream)throw std::runtime_error("cannot append log file");current+=text.size();
+    }
+    if(stream.is_open()){stream.flush();if(!stream)throw std::runtime_error("cannot flush log file");}
 }
 }

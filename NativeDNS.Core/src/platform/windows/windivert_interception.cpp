@@ -302,7 +302,7 @@ struct WinDivertInterception::Impl {
                             tcp_proxy.expect_connection(destination_ip(packet,view.ipv6),source_port);
                         else if(toward_proxy&&(flags&0x04)!=0)
                             tcp_proxy.forget_connection(destination_ip(packet,view.ipv6),source_port);
-                        logger.write(Level::debug,"WINDIVERT_TCP_REFLECT",std::string(toward_proxy?"to_proxy":"to_client")+" source_port="+std::to_string(source_port));
+                        if(logger.enabled(Level::debug))logger.write(Level::debug,"WINDIVERT_TCP_REFLECT",std::string(toward_proxy?"to_proxy":"to_client")+" source_port="+std::to_string(source_port));
                         auto reflected=make_reflected_tcp_packet(packet,tcp_proxy_port,toward_proxy,intercepted_tcp_port);
                         address.Outbound=0; address.IPChecksum=0; address.TCPChecksum=0;
                         if(!calc_checksums(reflected.data(),static_cast<UINT>(reflected.size()),&address,0))
@@ -313,14 +313,14 @@ struct WinDivertInterception::Impl {
                     const auto view=udp_view(packet);
                     const auto source_port=read16(packet.data()+view.udp);
                     const bool upstream=detail::is_network_upstream(false,source_port);
-                    if(upstream) { logger.write(Level::debug,"WINDIVERT_UPSTREAM_BYPASS","source_port="+std::to_string(source_port)); inject(packet,address); continue; }
+                    if(upstream) { if(logger.enabled(Level::debug))logger.write(Level::debug,"WINDIVERT_UPSTREAM_BYPASS","source_port="+std::to_string(source_port)); inject(packet,address); continue; }
                     const auto captured_question=parse_question(Packet(packet.begin()+static_cast<ptrdiff_t>(view.payload),packet.end()));
                     const auto& captured_rule=match_rule(config,captured_question.name);
-                    logger.write(Level::debug,"DNS_CAPTURE","transport=udp name="+captured_question.name+" rule="+captured_rule.name+" action="+action_name(captured_rule.action)+" server="+std::to_string(captured_rule.server_id));
+                    if(logger.enabled(Level::debug))logger.write(Level::debug,"DNS_CAPTURE","transport=udp name="+captured_question.name+" rule="+captured_rule.name+" action="+action_name(captured_rule.action)+" server="+std::to_string(captured_rule.server_id));
                     if(should_reinject_udp_immediately(config,packet)) {
                         const auto original=original_server(packet,view);
-                        logger.write(Level::normal,"DNS_ROUTE",route_log_message(captured_question,captured_rule,&original));
-                        logger.write(Level::debug,"WINDIVERT_RULE_FAST_PATH",captured_question.name+" bypass/original query reinjected before worker queue");
+                        if(logger.enabled(Level::normal))logger.write(Level::normal,"DNS_ROUTE",route_log_message(captured_question,captured_rule,&original));
+                        if(logger.enabled(Level::debug))logger.write(Level::debug,"WINDIVERT_RULE_FAST_PATH",captured_question.name+" bypass/original query reinjected before worker queue");
                         inject(packet,address);
                         continue;
                     }

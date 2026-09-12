@@ -87,7 +87,7 @@ struct TcpDnsProxy::Impl {
         auto result=router.route(request,original);
         if(result.disposition==Disposition::silent_drop) return {};
         if(result.disposition==Disposition::forward_original) {
-            logger.write(Level::normal,"DNS_BYPASS","Forwarding TCP request to original destination "+original.ip);
+            if(logger.enabled(Level::normal))logger.write(Level::normal,"DNS_BYPASS","Forwarding TCP request to original destination "+original.ip);
             return router.exchange(request,original);
         }
         return result.packet;
@@ -119,7 +119,7 @@ struct TcpDnsProxy::Impl {
                 logger.write(Level::errors_only,"TCP_PROXY_REJECT","Rejected connection without a captured SYN");
                 return;
             }
-            logger.write(Level::debug,"TCP_PROXY_ACCEPT","destination="+original.ip+":"+std::to_string(intercepted_port));
+            if(logger.enabled(Level::debug))logger.write(Level::debug,"TCP_PROXY_ACCEPT","destination="+original.ip+":"+std::to_string(intercepted_port));
             for(;;) {
                 uint8_t prefix[2]{};
                 if(!receive_exact(client,prefix,sizeof(prefix),true)) break;

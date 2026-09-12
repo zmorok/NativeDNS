@@ -73,6 +73,8 @@ Common sources contain:
 - Logger;
 - CoreHost command/log protocol.
 
+File logging is isolated from DNS routing threads. Producers append to a bounded in-memory queue, while a dedicated writer batches file output and performs rotation. Configuration, flush, and clear requests are ordered barriers in that queue, so lifecycle operations remain deterministic without putting filesystem latency on packet workers.
+
 Platform-specific networking headers should not leak into shared business logic.
 
 ## Platform boundary

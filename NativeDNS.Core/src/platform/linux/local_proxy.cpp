@@ -52,7 +52,7 @@ struct LocalProxy::Impl {
     Packet process(const Packet& request){
         auto result=router->route(request,original);
         if(result.disposition==Disposition::silent_drop) return {};
-        if(result.disposition==Disposition::forward_original){logger.write(Level::normal,"DNS_BYPASS","Forwarding intact request to original fallback "+original.ip);return router->exchange(request,original);}
+        if(result.disposition==Disposition::forward_original){if(logger.enabled(Level::normal))logger.write(Level::normal,"DNS_BYPASS","Forwarding intact request to original fallback "+original.ip);return router->exchange(request,original);}
         return result.packet;
     }
     void handle_udp(int fd,Packet packet,sockaddr_storage client,socklen_t size){
