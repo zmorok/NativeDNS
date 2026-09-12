@@ -79,3 +79,7 @@ Rules are applied before upstream I/O.
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
 
 On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID `0` are reinjected directly from the WinDivert receive loop. They never wait behind custom-upstream work in the routing worker queue. This is also the path that lets the operating-system resolver complete hostname lookup for DoH/DoT endpoints when neither `ip` nor `bootstrap` is configured. Explicit bootstrap behavior and configuration semantics are unchanged.
+
+Custom upstream routing uses a bounded worker queue sized to absorb short bursts. Worker count scales with available processors within fixed limits. If the application queue is saturated, NativeDNS returns `SERVFAIL` and emits rate-limited saturation diagnostics instead of silently dropping the captured query or bypassing its rule.
+
+IPv4 and IPv6 fragments are excluded from transparent interception and continue through the system network path unchanged. IPv6 Hop-by-Hop, Routing, Destination Options, atomic Fragment, and Authentication extension headers are parsed when they precede UDP or TCP DNS. A captured packet with an unsupported or malformed extension chain is logged and reinjected unchanged.

@@ -33,6 +33,12 @@ nd::Packet ipv6_query() {
     write16(packet.data()+40,50001); write16(packet.data()+42,53); write16(packet.data()+44,static_cast<uint16_t>(8+dns.size()));
     std::copy(dns.begin(),dns.end(),packet.begin()+48); return packet;
 }
+nd::Packet ipv6_extension_query() {
+    auto packet=ipv6_query();packet.insert(packet.begin()+40,8,0);
+    packet[6]=60;packet[40]=17;packet[41]=0;
+    write16(packet.data()+4,static_cast<uint16_t>(packet.size()-40));
+    return packet;
+}
 nd::Packet ipv4_tcp(uint16_t source,uint16_t destination) {
     nd::Packet packet(43);
     packet[0]=0x45; packet[8]=64; packet[9]=6; write16(packet.data()+2,static_cast<uint16_t>(packet.size()));
@@ -164,6 +170,12 @@ int main() {
         check(read16(v6.data()+40)==53&&read16(v6.data()+42)==50001,"IPv6 port swap");
         sum=add(0,v6.data()+8,32); const std::array<uint8_t,8> pseudo6{0,0,v6[44],v6[45],0,0,0,17}; sum=add(sum,pseudo6.data(),pseudo6.size()); sum=add(sum,v6.data()+40,v6.size()-40);
         check(folded(sum)==0xffff,"IPv6 UDP checksum");
+
+        const auto v6_extension=nd::make_intercepted_udp_response(ipv6_extension_query(),dns);
+        check(v6_extension[6]==60&&v6_extension[40]==17&&read16(v6_extension.data()+48)==53&&read16(v6_extension.data()+50)==50001,"IPv6 destination-options DNS response");
+        sum=add(0,v6_extension.data()+8,32);const std::array<uint8_t,8> extension_pseudo{0,0,v6_extension[52],v6_extension[53],0,0,0,17};
+        sum=add(sum,extension_pseudo.data(),extension_pseudo.size());sum=add(sum,v6_extension.data()+48,v6_extension.size()-48);
+        check(folded(sum)==0xffff,"IPv6 extension UDP checksum");
 
         const auto tcp4=nd::make_reflected_tcp_packet(ipv4_tcp(51000,53),34010,true);
         check(std::equal(tcp4.begin()+12,tcp4.begin()+16,std::array<uint8_t,4>{8,8,8,8}.begin()),"IPv4 TCP destination reflection source");

@@ -73,6 +73,18 @@ Packet make_query(const std::string& hostname, uint16_t type) {
     result.push_back(0); append_word(result, type); append_word(result, 1);
     return result;
 }
+
+Packet make_error_response(const Packet& request,uint16_t rcode) {
+    if(rcode>15) throw Error("DNS_MALFORMED","DNS response code is out of range");
+    const auto question=parse_question(request);
+    if(question.flags&0x8000) throw Error("DNS_MALFORMED","Expected query, not response");
+    Packet response(request.begin(),request.begin()+static_cast<ptrdiff_t>(question.end));
+    const uint16_t flags=static_cast<uint16_t>(0x8080|(question.flags&0x7910)|rcode);
+    response[2]=static_cast<uint8_t>(flags>>8);response[3]=static_cast<uint8_t>(flags);
+    response[4]=0;response[5]=1;
+    for(size_t i=6;i<12;++i) response[i]=0;
+    return response;
+}
 Question parse_question(std::span<const uint8_t> packet) {
     if (packet.size() < 12 || packet.size() > 65535 || word(packet, 4) != 1) throw Error("DNS_MALFORMED", "Expected one DNS question and bounded header");
     Question q; q.id = word(packet, 0); q.flags = word(packet, 2);

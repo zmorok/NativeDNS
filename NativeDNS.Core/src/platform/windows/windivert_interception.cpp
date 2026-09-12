@@ -69,6 +69,34 @@ uint16_t checksum_finish(uint32_t sum) {
 }
 struct UdpView { size_t udp=0,payload=0; bool ipv6=false; };
 struct TcpView { size_t tcp=0,payload=0; bool ipv6=false; };
+struct Ipv6Transport { uint8_t protocol=0;size_t offset=40; };
+Ipv6Transport ipv6_transport(const Packet& packet) {
+    if(packet.size()<40||static_cast<size_t>(read16(packet.data()+4))+40!=packet.size())
+        throw Error("INTERCEPT_PACKET","Invalid IPv6 packet length");
+    uint8_t next=packet[6];size_t at=40;
+    for(unsigned headers=0;headers<16;++headers) {
+        if(next==IPPROTO_UDP||next==IPPROTO_TCP) return{next,at};
+        if(next==0||next==43||next==60) {
+            if(at+2>packet.size()) throw Error("INTERCEPT_PACKET","Truncated IPv6 extension header");
+            const size_t length=static_cast<size_t>(packet[at+1]+1)*8;
+            if(at+length>packet.size()) throw Error("INTERCEPT_PACKET","Invalid IPv6 extension header length");
+            next=packet[at];at+=length;continue;
+        }
+        if(next==44) {
+            if(at+8>packet.size()) throw Error("INTERCEPT_PACKET","Truncated IPv6 fragment header");
+            if((read16(packet.data()+at+2)&0xfff9)!=0) throw Error("INTERCEPT_PACKET","Fragmented IPv6 DNS packet is unsupported");
+            next=packet[at];at+=8;continue;
+        }
+        if(next==51) {
+            if(at+2>packet.size()) throw Error("INTERCEPT_PACKET","Truncated IPv6 authentication header");
+            const size_t length=static_cast<size_t>(packet[at+1]+2)*4;
+            if(at+length>packet.size()) throw Error("INTERCEPT_PACKET","Invalid IPv6 authentication header length");
+            next=packet[at];at+=length;continue;
+        }
+        throw Error("INTERCEPT_PACKET","Unsupported IPv6 next header "+std::to_string(next));
+    }
+    throw Error("INTERCEPT_PACKET","Too many IPv6 extension headers");
+}
 UdpView udp_view(const Packet& packet) {
     if(packet.size()<28) throw Error("INTERCEPT_PACKET","Captured packet is too short");
     const auto version=packet[0]>>4;
@@ -80,9 +108,9 @@ UdpView udp_view(const Packet& packet) {
         if((read16(packet.data()+6)&0x3fff)!=0) throw Error("INTERCEPT_PACKET","Fragmented DNS packet is unsupported");
         view.udp=header;
     } else if(version==6) {
-        if(packet.size()<48||packet[6]!=IPPROTO_UDP||static_cast<size_t>(read16(packet.data()+4))+40!=packet.size())
-            throw Error("INTERCEPT_PACKET","IPv6 extension/length is unsupported");
-        view.udp=40; view.ipv6=true;
+        const auto transport=ipv6_transport(packet);
+        if(transport.protocol!=IPPROTO_UDP||transport.offset+8>packet.size()) throw Error("INTERCEPT_PACKET","IPv6 packet is not UDP");
+        view.udp=transport.offset; view.ipv6=true;
     } else throw Error("INTERCEPT_PACKET","Unsupported IP version");
     view.payload=view.udp+8;
     if(read16(packet.data()+view.udp+2)!=53||read16(packet.data()+view.udp+4)!=packet.size()-view.udp)
@@ -115,9 +143,9 @@ TcpView tcp_view(const Packet& packet) {
         if((read16(packet.data()+6)&0x3fff)!=0) throw Error("INTERCEPT_PACKET","Fragmented TCP packet is unsupported");
         view.tcp=header;
     } else if(version==6) {
-        if(packet.size()<60||packet[6]!=IPPROTO_TCP||static_cast<size_t>(read16(packet.data()+4))+40!=packet.size())
-            throw Error("INTERCEPT_PACKET","IPv6 TCP extension/length is unsupported");
-        view.tcp=40; view.ipv6=true;
+        const auto transport=ipv6_transport(packet);
+        if(transport.protocol!=IPPROTO_TCP||transport.offset+20>packet.size()) throw Error("INTERCEPT_PACKET","IPv6 packet is not TCP");
+        view.tcp=transport.offset; view.ipv6=true;
     } else throw Error("INTERCEPT_PACKET","Unsupported IP version");
     const size_t tcp_header=static_cast<size_t>(packet[view.tcp+12]>>4)*4;
     if(tcp_header<20||view.tcp+tcp_header>packet.size()) throw Error("INTERCEPT_PACKET","Invalid TCP header length");
@@ -127,8 +155,9 @@ TcpView tcp_view(const Packet& packet) {
 bool is_tcp_packet(const Packet& packet) {
     if(packet.empty()) return false;
     const auto version=packet[0]>>4;
-    return version==4 ? packet.size()>9&&packet[9]==IPPROTO_TCP
-                      : version==6&&packet.size()>6&&packet[6]==IPPROTO_TCP;
+    if(version==4) return packet.size()>9&&packet[9]==IPPROTO_TCP;
+    if(version!=6) return false;
+    return ipv6_transport(packet).protocol==IPPROTO_TCP;
 }
 }
 
@@ -217,6 +246,7 @@ struct WinDivertInterception::Impl {
     struct Job { Packet packet; WINDIVERT_ADDRESS address{}; };
     std::mutex queue_mutex; std::condition_variable queue_changed; std::deque<Job> jobs;
     std::jthread receiver; std::vector<std::jthread> workers;
+    std::atomic<uint64_t> overload_count=0;
     uint16_t tcp_proxy_port=0,intercepted_tcp_port; bool stop_driver_on_release=false;
     Impl(Config value,Logger& output,uint16_t target):config(std::move(value)),logger(output),router(config,logger),tcp_proxy(router,logger,target),intercepted_tcp_port(target) { validate(config); }
     template<class T> T symbol(const char* name) {
@@ -238,6 +268,15 @@ struct WinDivertInterception::Impl {
             auto response=make_intercepted_udp_response(job.packet,routed.packet); job.address.Outbound=0; job.address.IPChecksum=0; job.address.UDPChecksum=0;
             inject(response,job.address);
         } catch(const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
+    }
+    void reject_overload(const Packet& packet,const UdpView& view,WINDIVERT_ADDRESS address) {
+        const Packet query(packet.begin()+static_cast<ptrdiff_t>(view.payload),packet.end());
+        const auto response=make_intercepted_udp_response(packet,make_error_response(query,2));
+        address.Outbound=0;address.IPChecksum=0;address.UDPChecksum=0;
+        inject(response,address);
+        const auto count=++overload_count;
+        if(count==1||(count&(count-1))==0)
+            logger.write(Level::errors_only,"WINDIVERT_SATURATED","Routing queue is full; returned SERVFAIL (count="+std::to_string(count)+")");
     }
     void receive_loop() {
         try {
@@ -284,10 +323,18 @@ struct WinDivertInterception::Impl {
                         inject(packet,address);
                         continue;
                     }
-                    std::lock_guard lock(queue_mutex);
-                    if(jobs.size()>=4096) { logger.write(Level::errors_only,"WINDIVERT_QUEUE","Routing queue is full; DNS packet dropped"); continue; }
-                    jobs.push_back({std::move(packet),address}); queue_changed.notify_one();
-                } catch(const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
+                    bool queued=false;
+                    {
+                        std::lock_guard lock(queue_mutex);
+                        if(jobs.size()<4096) { jobs.push_back({std::move(packet),address});queued=true; }
+                    }
+                    if(queued) queue_changed.notify_one();
+                    else reject_overload(packet,view,address);
+                } catch(const Error& error) {
+                    logger.write(Level::errors_only,error.code,error.what());
+                    try { inject(packet,address); }
+                    catch(const Error& inject_error) { logger.write(Level::errors_only,inject_error.code,inject_error.what()); }
+                }
             }
         } catch(const Error& error) {
             if(handle!=INVALID_HANDLE_VALUE) shutdown(handle,WINDIVERT_SHUTDOWN_BOTH);
@@ -341,7 +388,7 @@ void WinDivertInterception::start() {
         p.shutdown=p.symbol<Impl::Shutdown>("WinDivertShutdown"); p.close=p.symbol<Impl::Close>("WinDivertClose"); p.set_param=p.symbol<Impl::SetParam>("WinDivertSetParam");
         p.compile=p.symbol<Impl::Compile>("WinDivertHelperCompileFilter"); p.calc_checksums=p.symbol<Impl::CalcChecksums>("WinDivertHelperCalcChecksums");
         const std::string target=std::to_string(p.intercepted_tcp_port),proxy=std::to_string(p.tcp_proxy_port);
-        const std::string filter="(outbound and !loopback and !impostor and !fragment and udp.DstPort == 53 and udp.PayloadLength >= 12) or (tcp and !fragment and (tcp.DstPort == "+target+" or tcp.SrcPort == "+target+" or tcp.DstPort == "+proxy+" or tcp.SrcPort == "+proxy+"))";
+        const std::string filter="(outbound and !loopback and !impostor and !fragment and udp.DstPort == 53 and udp.PayloadLength >= 12) or (!impostor and tcp and !fragment and (tcp.DstPort == "+target+" or tcp.SrcPort == "+target+" or tcp.DstPort == "+proxy+" or tcp.SrcPort == "+proxy+"))";
         const char* filter_error=nullptr; UINT filter_position=0;
         if(!p.compile(filter.c_str(),WINDIVERT_LAYER_NETWORK,nullptr,0,&filter_error,&filter_position))
             throw Error("WINDIVERT_FILTER",std::string(filter_error?filter_error:"Invalid filter")+" at "+std::to_string(filter_position));
@@ -358,9 +405,10 @@ void WinDivertInterception::start() {
         p.firewall.enable(p.tcp_proxy_port);
         p.logger.write(Level::verbose,"FIREWALL_RULE_ACTIVE","TCP proxy firewall rule enabled");
         p.state=State::running;
-        for(unsigned i=0;i<4;++i) p.workers.emplace_back([&p]{p.worker_loop();});
+        const auto worker_count=std::clamp(std::thread::hardware_concurrency(),4u,16u);
+        for(unsigned i=0;i<worker_count;++i) p.workers.emplace_back([&p]{p.worker_loop();});
         p.receiver=std::jthread([&p]{p.receive_loop();});
-        p.logger.write(Level::normal,"WINDIVERT_STARTED","Transparent UDP/TCP DNS interception started; TCP proxy port="+std::to_string(p.tcp_proxy_port));
+        p.logger.write(Level::normal,"WINDIVERT_STARTED","Transparent UDP/TCP DNS interception started; TCP proxy port="+std::to_string(p.tcp_proxy_port)+", routing workers="+std::to_string(worker_count));
     } catch(...) {
         const auto failure=std::current_exception(); p.state=State::stopping;
         if(p.handle!=INVALID_HANDLE_VALUE&&p.shutdown) p.shutdown(p.handle,WINDIVERT_SHUTDOWN_BOTH);

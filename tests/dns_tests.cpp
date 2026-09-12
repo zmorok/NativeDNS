@@ -141,6 +141,8 @@ int main() {
 #endif
     try {
         auto query = nd::make_query("example.com"); const auto q = nd::parse_question(query);
+        const auto servfail=nd::make_error_response(query,2);const auto servfail_parsed=nd::parse_response(servfail,q);
+        check(servfail_parsed.rcode==2&&servfail.size()==q.end,"bounded SERVFAIL preserves the DNS question");
         auto good = reply(query); check(nd::parse_response(good,q).addresses == std::vector<std::string>{"192.0.2.42"},"decode compressed answer");
         auto bad = good; bad[0] ^= 1; fails([&] { (void)nd::parse_response(bad,q); });
         bad = good; bad[q.end] = 0xc0; bad[q.end+1] = static_cast<uint8_t>(q.end); fails([&] { (void)nd::parse_response(bad,q); });

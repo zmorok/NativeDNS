@@ -17,6 +17,7 @@ struct DnsAnswer {
     std::vector<std::string> addresses;
 };
 Packet make_query(const std::string& hostname, uint16_t type = 1);
+Packet make_error_response(const Packet& request, uint16_t rcode);
 Question parse_question(std::span<const uint8_t> packet);
 DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expected);
 std::string dns_type_name(uint16_t type);
