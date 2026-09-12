@@ -133,6 +133,8 @@ The tray icon is an application resource, not an empty platform-provided icon.
 
 On Windows, autostart starts `NativeDNS.exe --background` without a visible window or console. The tray application then launches the registered elevated CoreHost on demand. This keeps interception privileged without elevating the Qt GUI, and avoids starting CoreHost without its tray owner.
 
+The unprivileged GUI scheduled task retries an abnormal exit up to three times at one-minute intervals. A normal explicit Exit returns success and is not restarted. Unhandled C++ termination is recorded as `GUI_TERMINATED` in the standard diagnostic log before the process aborts.
+
 ## Configuration persistence
 
 NativeDNS uses a versioned UTF-8 XML configuration.

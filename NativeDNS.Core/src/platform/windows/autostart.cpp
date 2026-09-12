@@ -147,7 +147,9 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     check(gui_settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE),"Allow GUI task on battery");
     check(gui_settings->put_StopIfGoingOnBatteries(VARIANT_FALSE),"Keep GUI task on battery");
     check(gui_settings->put_MultipleInstances(TASK_INSTANCES_IGNORE_NEW),"Set single GUI task instance");
-    Bstr gui_execution_limit(L"PT0S");
+    check(gui_settings->put_RestartCount(3),"Set GUI restart count");
+    Bstr gui_restart_interval(L"PT1M"),gui_execution_limit(L"PT0S");
+    check(gui_settings->put_RestartInterval(gui_restart_interval.value),"Set GUI restart interval");
     check(gui_settings->put_ExecutionTimeLimit(gui_execution_limit.value),"Remove GUI task execution limit");
     ComPtr<ITriggerCollection> gui_triggers;
     check(gui_definition->get_Triggers(gui_triggers.put()),"Open GUI task triggers");
