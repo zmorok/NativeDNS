@@ -49,6 +49,8 @@ The connection IP/bootstrap choice must not replace the TLS identity/hostname be
 
 DNS over TLS uses the secure libcurl path and standard DNS-over-TCP framing over TLS.
 
+The Router keeps up to four reusable DoT handles per server. Requests on each TLS connection are serialized. The connection cache uses the same 30-second idle and five-minute absolute lifetime limits as DoH, and a transport-level failure is retried once within the original request deadline.
+
 Certificate and hostname validation remain enabled.
 
 ## DNSCrypt

@@ -29,6 +29,13 @@ int main(int argc, char**) {
                     check(result.success, "Real fixture DoH/DoT failed");
                 }
             }
+            for(const auto& candidate:config.servers) if(candidate.id==1001) {
+                auto transport=nd::make_transport(nd::Protocol::dot);
+                for(const auto* hostname:{"iana.org","example.com"}) {
+                    const auto query=nd::make_query(hostname);
+                    check(!nd::parse_response(transport->exchange(query,candidate),nd::parse_question(query)).addresses.empty(),"Persistent DoT exchange failed");
+                }
+            }
             server.enabled = true; server.url = "https://expired.badssl.com/"; server.timeout_ms = 5000;
             const auto expired = nd::test_server(server);
             std::cout << "expired certificate: " << expired.error_code << " " << expired.message << '\n';

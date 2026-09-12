@@ -108,14 +108,19 @@ public:
     Packet exchange(const Packet& request, const Server& server) override {
         if (!server.enabled) throw Error("SERVER_DISABLED","DNS server is disabled");
         if (!server.timeout_ms || server.timeout_ms > 120000) throw Error("CONFIG","Invalid timeout");
+        const auto deadline=Clock::now()+std::chrono::milliseconds(server.timeout_ms);
+        try { return exchange_attempt(request,server,deadline); }
+        catch(const Error& error) {
+            if(!dot_||(error.code!="TIMEOUT"&&error.code!="TLS"&&error.code!="TLS_HTTP"&&error.code!="DNS_EOF")) throw;
+            return exchange_attempt(request,server,deadline);
+        }
+    }
+private:
+    Packet exchange_attempt(const Packet& request,const Server& server,Clock::time_point deadline) {
         const auto question = parse_question(request);
         if (question.flags & 0x8000) throw Error("DNS_MALFORMED","Expected query");
-        const auto deadline = Clock::now() + std::chrono::milliseconds(server.timeout_ms);
-        std::unique_ptr<CurlHandle> local_handle;
-        std::unique_ptr<Lease> lease;
-        if(dot_) local_handle=std::make_unique<CurlHandle>();
-        else lease=acquire(server,deadline);
-        auto& handle=dot_?*local_handle:*lease->entry->handle;
+        auto lease=acquire(server,deadline);
+        auto& handle=*lease->entry->handle;
         const std::string url = dot_ ? "https://" + normalize_host(server.hostname) + ":" + std::to_string(server.port ? server.port : 853) + "/" : server.url;
         Url parsed(url);
         if (parsed.get(CURLUPART_SCHEME) != "https" || !parsed.get(CURLUPART_USER).empty() || !parsed.get(CURLUPART_PASSWORD).empty() || !parsed.get(CURLUPART_FRAGMENT).empty())
@@ -130,11 +135,9 @@ public:
         handle.set(CURLOPT_SSLVERSION,static_cast<long>(CURL_SSLVERSION_TLSv1_2));
         handle.set(CURLOPT_FOLLOWLOCATION,0L); handle.set(CURLOPT_NOSIGNAL,1L);
         handle.set(CURLOPT_HTTP_VERSION,static_cast<long>(dot_?CURL_HTTP_VERSION_1_1:CURL_HTTP_VERSION_2TLS));
-        if(!dot_) {
-            handle.set(CURLOPT_PIPEWAIT,1L);
-            handle.set(CURLOPT_MAXAGE_CONN,30L);
-            handle.set(CURLOPT_MAXLIFETIME_CONN,300L);
-        }
+        if(!dot_) handle.set(CURLOPT_PIPEWAIT,1L);
+        handle.set(CURLOPT_MAXAGE_CONN,30L);
+        handle.set(CURLOPT_MAXLIFETIME_CONN,300L);
         handle.set(CURLOPT_SSL_ENABLE_ALPN,dot_ ? 0L : 1L);
         // Never use environment proxy, user credentials, or .netrc (also disabled in build).
         std::string endpoint = server.ip;
@@ -197,7 +200,7 @@ public:
         if (parse_response(response,question).truncated) throw Error("DNS_TRUNCATED","Truncated secure DNS response");
         return response;
     }
-private: bool dot_;
+    bool dot_;
     struct Entry { bool busy=false;std::unique_ptr<CurlHandle> handle=std::make_unique<CurlHandle>(); };
     struct Lease {
         SecureTransport& owner;std::shared_ptr<Entry> entry;
@@ -213,8 +216,9 @@ private: bool dot_;
         for(;;) {
             const auto found=std::find_if(entries.begin(),entries.end(),[](const auto& entry){return !entry->busy;});
             if(found!=entries.end()){(*found)->busy=true;return std::make_unique<Lease>(*this,*found);}
-            if(entries.size()<8){auto entry=std::make_shared<Entry>();entry->busy=true;entries.push_back(entry);return std::make_unique<Lease>(*this,std::move(entry));}
-            if(pool_changed_.wait_until(lock,deadline)==std::cv_status::timeout) throw Error("TIMEOUT","DoH connection pool is busy");
+            const size_t limit=dot_?4:8;
+            if(entries.size()<limit){auto entry=std::make_shared<Entry>();entry->busy=true;entries.push_back(entry);return std::make_unique<Lease>(*this,std::move(entry));}
+            if(pool_changed_.wait_until(lock,deadline)==std::cv_status::timeout) throw Error("TIMEOUT",std::string(dot_?"DoT":"DoH")+" connection pool is busy");
         }
     }
     std::mutex pool_mutex_;std::condition_variable pool_changed_;
