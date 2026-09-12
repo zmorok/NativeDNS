@@ -90,6 +90,51 @@ std::pair<Packet,const Server*> Router::exchange_group(const Packet& request,con
     }
     throw Error(last_code,"Fallback group exhausted: "+last_message);
 }
+std::pair<Packet,uint32_t> Router::exchange_cached(const Packet& request,const Server& primary,bool configured) const {
+    if(request.size()<2)throw Error("DNS_MALFORMED","DNS request is too short");
+    std::string key;key.reserve(request.size()+96);
+    key+=configured?"configured:":"original:";key+=std::to_string(configured?primary.id:static_cast<uint32_t>(primary.protocol));key+='|';
+    if(!configured)key+=primary.ip+'|'+std::to_string(primary.port)+'|';
+    key.append(2,'\0');key.append(reinterpret_cast<const char*>(request.data()+2),request.size()-2);
+    const uint16_t transaction_id=static_cast<uint16_t>((request[0]<<8)|request[1]);
+    std::shared_ptr<Pending> pending;bool leader=false;
+    {
+        std::unique_lock lock(cache_mutex_);const auto now=std::chrono::steady_clock::now();
+        for(auto entry=cache_.begin();entry!=cache_.end();)entry=entry->second.expires<=now?cache_.erase(entry):std::next(entry);
+        if(const auto found=cache_.find(key);found!=cache_.end()) {
+            const auto elapsed=static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(now-found->second.stored).count());
+            logger_.write(Level::debug,"DNS_CACHE_HIT","server="+primary.name);
+            return{age_dns_response(found->second.packet,transaction_id,elapsed),found->second.used_server_id};
+        }
+        const auto found=pending_.find(key);
+        if(found!=pending_.end())pending=found->second;
+        else {pending=std::make_shared<Pending>();pending_.emplace(key,pending);leader=true;}
+        if(!leader) {
+            logger_.write(Level::debug,"DNS_COALESCED","server="+primary.name);
+            pending->changed.wait(lock,[&]{return pending->done;});
+            if(!pending->error_code.empty())throw Error(pending->error_code,pending->error_message);
+            return{age_dns_response(pending->packet,transaction_id,0),pending->used_server_id};
+        }
+    }
+    try {
+        auto exchanged=exchange_group(request,primary);const auto parsed=parse_response(exchanged.first,parse_question(request));const uint32_t used_id=configured?exchanged.second->id:0;
+        {
+            std::lock_guard lock(cache_mutex_);const auto now=std::chrono::steady_clock::now();
+            if(parsed.cacheable) {
+                if(cache_.size()>=4096){const auto oldest=std::min_element(cache_.begin(),cache_.end(),[](const auto& left,const auto& right){return left.second.expires<right.second.expires;});if(oldest!=cache_.end())cache_.erase(oldest);}
+                const auto ttl=std::min<uint32_t>(parsed.cache_ttl,86400);cache_[key]={exchanged.first,now,now+std::chrono::seconds(ttl),used_id};
+            }
+            pending->packet=exchanged.first;pending->used_server_id=used_id;pending->done=true;pending_.erase(key);
+        }
+        pending->changed.notify_all();return{std::move(exchanged.first),used_id};
+    } catch(const Error& error) {
+        {std::lock_guard lock(cache_mutex_);pending->error_code=error.code;pending->error_message=error.what();pending->done=true;pending_.erase(key);}
+        pending->changed.notify_all();throw;
+    } catch(const std::exception& error) {
+        {std::lock_guard lock(cache_mutex_);pending->error_code="INTERNAL";pending->error_message=error.what();pending->done=true;pending_.erase(key);}
+        pending->changed.notify_all();throw;
+    }
+}
 RouteResult Router::route(const Packet& request, const Server& original) const {
     RouteResult result;
     Question question;
@@ -124,7 +169,8 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         selected_server=server;
         logger_.write(Level::verbose,"DNS_UPSTREAM","name="+question.name+" server="+server->name+" protocol="+protocol_name(server->protocol)+" address="+server->ip+" port="+std::to_string(server->port));
         exchange_started=std::chrono::steady_clock::now();
-        auto exchanged=exchange_group(request,*server);result.packet=std::move(exchanged.first);selected_server=exchanged.second;if(rule.server_id)result.server_id=selected_server->id;
+        auto exchanged=exchange_cached(request,*server,rule.server_id!=0);result.packet=std::move(exchanged.first);result.server_id=exchanged.second;
+        if(result.server_id){const auto used=std::find_if(config_.servers.begin(),config_.servers.end(),[&](const Server& candidate){return candidate.id==result.server_id;});if(used!=config_.servers.end())selected_server=&*used;}
         const auto parsed = parse_response(result.packet,question);
         const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-exchange_started).count();
         if (parsed.rcode) {

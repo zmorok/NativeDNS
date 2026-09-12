@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
+#include <limits>
 
 namespace nd {
 namespace {
@@ -10,6 +11,11 @@ uint16_t word(std::span<const uint8_t> p, size_t offset) {
     if (offset > p.size() || p.size() - offset < 2) throw Error("DNS_MALFORMED", "Truncated DNS field");
     return static_cast<uint16_t>((p[offset] << 8) | p[offset + 1]);
 }
+uint32_t dword(std::span<const uint8_t> p,size_t offset) {
+    if(offset>p.size()||p.size()-offset<4)throw Error("DNS_MALFORMED","Truncated DNS field");
+    return (static_cast<uint32_t>(p[offset])<<24)|(static_cast<uint32_t>(p[offset+1])<<16)|(static_cast<uint32_t>(p[offset+2])<<8)|p[offset+3];
+}
+void put_dword(Packet& p,size_t offset,uint32_t value){p[offset]=static_cast<uint8_t>(value>>24);p[offset+1]=static_cast<uint8_t>(value>>16);p[offset+2]=static_cast<uint8_t>(value>>8);p[offset+3]=static_cast<uint8_t>(value);}
 std::string name(std::span<const uint8_t> p, size_t& offset) {
     std::string result;
     size_t at = offset; bool jumped = false; unsigned hops = 0;
@@ -160,10 +166,11 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
     size_t at = q.end;
     const uint32_t answers = word(packet, 6), authority = word(packet, 8), additional = word(packet, 10);
     if (answers + authority + additional > 4096) throw Error("DNS_MALFORMED", "Too many DNS records");
-    bool opt_seen = false;
+    constexpr auto no_ttl=std::numeric_limits<uint32_t>::max();
+    bool opt_seen = false,requested_answer=false,transaction_signed=false;uint32_t positive_ttl=no_ttl,negative_ttl=no_ttl;
     for (uint32_t i = 0; i < answers + authority + additional; ++i) {
         const auto owner = name(packet, at);
-        auto type = word(packet, at), klass = word(packet, at + 2), length = word(packet, at + 8);
+        auto type = word(packet, at), klass = word(packet, at + 2), length = word(packet, at + 8);const uint32_t ttl=dword(packet,at+4);
         if (packet.size() - at < 10) throw Error("DNS_MALFORMED", "Short DNS record header");
         const size_t data = at + 10;
         if (length > packet.size() - data) throw Error("DNS_MALFORMED", "Short DNS record data");
@@ -178,6 +185,13 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
             if (opt_seen || !owner.empty() || i < answers + authority) throw Error("DNS_MALFORMED", "Invalid OPT record");
             opt_seen = true; answer.rcode = static_cast<uint16_t>(answer.rcode | (packet[at + 4] << 4));
         }
+        if(i<answers&&type!=41){positive_ttl=std::min(positive_ttl,ttl);if(type==expected.type&&klass==expected.klass)requested_answer=true;}
+        if(type==249||type==250)transaction_signed=true;
+        if(type==6&&i>=answers&&i<answers+authority&&klass==expected.klass) {
+            size_t soa=data;(void)name(packet,soa);(void)name(packet,soa);
+            if(soa>data+length||data+length-soa!=20)throw Error("DNS_MALFORMED","Invalid SOA record length");
+            negative_ttl=std::min(negative_ttl,std::min(ttl,dword(packet,soa+16)));
+        }
         at = data + length;
     }
     if (at != packet.size()) throw Error("DNS_MALFORMED", "Unexpected bytes after DNS records");
@@ -189,6 +203,17 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
         if (!reachable.insert(current).second) throw Error("DNS_MALFORMED", "CNAME cycle");
     }
     for (const auto& address : addresses) if (reachable.contains(address.owner)) answer.addresses.push_back(address.value);
+    const bool negative=answer.rcode==3||(answer.rcode==0&&!requested_answer&&negative_ttl!=no_ttl);
+    const uint32_t ttl=negative?negative_ttl:positive_ttl;
+    if(!transaction_signed&&expected.type!=251&&expected.type!=252&&(answer.rcode==0||answer.rcode==3)&&ttl!=no_ttl&&ttl){answer.cacheable=true;answer.cache_ttl=ttl;}
     return answer;
+}
+Packet age_dns_response(const Packet& response,uint16_t transaction_id,uint32_t elapsed_seconds) {
+    auto result=response;const auto question=parse_question(result);if(!(question.flags&0x8000))throw Error("DNS_MALFORMED","Expected cached response");
+    result[0]=static_cast<uint8_t>(transaction_id>>8);result[1]=static_cast<uint8_t>(transaction_id);
+    const uint32_t records=word(result,6)+word(result,8)+word(result,10);if(records>4096)throw Error("DNS_MALFORMED","Too many DNS records");
+    size_t at=question.end;
+    for(uint32_t index=0;index<records;++index){(void)name(result,at);const auto type=word(result,at),length=word(result,at+8);if(result.size()-at<10||length>result.size()-(at+10))throw Error("DNS_MALFORMED","Truncated cached record");if(type!=41){const auto ttl=dword(result,at+4);put_dword(result,at+4,ttl>elapsed_seconds?ttl-elapsed_seconds:0);}at+=10+length;}
+    if(at!=result.size())throw Error("DNS_MALFORMED","Unexpected bytes after cached response");return result;
 }
 }

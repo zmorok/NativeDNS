@@ -35,6 +35,13 @@ nd::Packet reply(const nd::Packet& query, bool v6 = false) {
     else { result.insert(result.end(), {192,0,2,42}); }
     return result;
 }
+nd::Packet negative_reply(const nd::Packet& query) {
+    const auto question=nd::parse_question(query);nd::Packet result(query.begin(),query.begin()+static_cast<ptrdiff_t>(question.end));
+    result[2]=0x81;result[3]=0x83;result[6]=result[7]=0;result[8]=0;result[9]=1;result[10]=result[11]=0;
+    const nd::Packet soa{0xc0,0x0c,0,6,0,1,0,0,0,60,0,24,0xc0,0x0c,0xc0,0x0c,
+                         0,0,0,1,0,0,0,2,0,0,0,3,0,0,0,4,0,0,0,30};
+    result.insert(result.end(),soa.begin(),soa.end());return result;
+}
 nd::Packet with_edns(nd::Packet query,uint16_t payload_size,bool dnssec_ok=false) {
     query[10]=0;query[11]=1;
     query.insert(query.end(),{0,0,41,static_cast<uint8_t>(payload_size>>8),static_cast<uint8_t>(payload_size),0,0,0,0,0,0});
@@ -46,7 +53,7 @@ nd::Packet padded_response(const nd::Packet& query,size_t padding) {
     result.insert(result.end(),{0,0,41,4,208,0,0,0,0,static_cast<uint8_t>(padding>>8),static_cast<uint8_t>(padding)});
     result.insert(result.end(),padding,0);return result;
 }
-enum class Mode { good, malformed, mismatch, servfail, no_data, timeout, eof, truncated };
+enum class Mode { good, slow_good, malformed, mismatch, servfail, no_data, timeout, eof, truncated };
 // Test-only loopback peer. This exercises actual OS socket traffic, not a production transport substitute.
 class Peer {
 public:
@@ -117,6 +124,7 @@ private:
                 ++requests;
                 if (mode_ == Mode::timeout) std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms_ + 100));
                 else if (mode_ != Mode::eof) {
+                    if(mode_==Mode::slow_good)std::this_thread::sleep_for(std::chrono::milliseconds(120));
                     auto response = reply(query, nd::parse_question(query).type == 28);
                     if (mode_ == Mode::malformed) response.resize(12); // complete frame, missing question
                     if (mode_ == Mode::mismatch) response[0] ^= 1;
@@ -173,6 +181,7 @@ int main() {
         const auto blocked_txt=nd::make_block_response(txt_query,nd::BlockMode::zero_address);
         check(nd::parse_response(blocked_txt,txt_question).addresses.empty()&&blocked_txt[7]==0,"zero-address TXT is explicit NODATA");
         check(nd::parse_response(nd::make_block_response(txt_query,nd::BlockMode::nxdomain),txt_question).rcode==3,"synthetic NXDOMAIN rcode");
+        const auto negative=nd::parse_response(negative_reply(query),q);check(negative.cacheable&&negative.cache_ttl==30,"negative cache TTL uses SOA minimum");
         const auto legacy_large=padded_response(query,600);const auto legacy_truncated=nd::fit_udp_response(query,legacy_large);
         check(legacy_truncated.size()<=512&&nd::parse_response(legacy_truncated,q).truncated,"legacy oversized response requests TCP retry");
         const auto edns_medium=padded_response(query,700);check(nd::fit_udp_response(edns_query,edns_medium)==edns_medium,"EDNS response fits advertised payload");
@@ -205,8 +214,17 @@ int main() {
             Peer degraded(false,Mode::timeout,false,0,80,2),backup(false,Mode::good,false,0,1500,3);
             auto health_config=nd::default_config();auto primary=degraded.server();primary.id=10;primary.name="primary";primary.fallback_ids={11};auto secondary=backup.server();secondary.id=11;secondary.name="backup";
             health_config.servers={primary,secondary};health_config.rules.front().server_id=10;nd::Logger health_log;nd::Router health_router(health_config,health_log);
-            for(unsigned request=0;request<3;++request){const auto health_query=nd::make_query("health.example");const auto routed=health_router.route(health_query,primary);check(routed.server_id==11&&nd::parse_response(routed.packet,nd::parse_question(health_query)).addresses.size()==1,"fallback resolver response");}
+            for(unsigned request=0;request<3;++request){const auto health_query=nd::make_query("health"+std::to_string(request)+".example");const auto routed=health_router.route(health_query,primary);check(routed.server_id==11&&nd::parse_response(routed.packet,nd::parse_question(health_query)).addresses.size()==1,"fallback resolver response");}
             degraded.verify();backup.verify();check(degraded.requests==2&&backup.requests==3,"unhealthy primary circuit and fallback reuse");
+        }
+        {
+            Peer upstream(false,Mode::slow_good,false,0,1500,1);auto cache_config=nd::default_config();auto server=upstream.server();server.id=20;cache_config.servers.push_back(server);cache_config.rules.front().server_id=20;nd::Logger cache_log;nd::Router cache_router(cache_config,cache_log);
+            std::array<nd::Packet,8> requests,responses;std::vector<std::thread> clients;std::atomic_bool cache_ok=true;
+            for(auto& request:requests)request=nd::make_query("coalesce.example");
+            for(size_t index=0;index<requests.size();++index)clients.emplace_back([&,index]{try{responses[index]=cache_router.route(requests[index],server).packet;const auto parsed=nd::parse_response(responses[index],nd::parse_question(requests[index]));if(parsed.addresses.empty()||responses[index][0]!=requests[index][0]||responses[index][1]!=requests[index][1])cache_ok=false;}catch(...){cache_ok=false;}});
+            for(auto& client:clients)client.join();upstream.verify();check(cache_ok&&upstream.requests==1,"concurrent identical requests are coalesced");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1100));const auto cached_request=nd::make_query("coalesce.example");const auto cached=cache_router.route(cached_request,server).packet;
+            check(nd::parse_response(cached,nd::parse_question(cached_request)).cache_ttl<=29&&upstream.requests==1,"cache hit rewrites ID and ages TTL");
         }
         for (const auto mode : {Mode::malformed,Mode::mismatch,Mode::servfail,Mode::no_data,Mode::timeout,Mode::eof}) {
             Peer peer(true,mode); nd::Logger logger;
