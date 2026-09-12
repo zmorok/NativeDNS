@@ -1,4 +1,5 @@
 #include <nativedns/tcp_dns_proxy.hpp>
+#include "../../bounded_executor.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <bcrypt.h>
@@ -68,9 +69,15 @@ struct TcpDnsProxy::Impl {
     std::jthread accept4,accept6;
     std::mutex clients_mutex;
     std::set<SOCKET> clients;
-    std::vector<std::jthread> handlers;
+    BoundedExecutor handlers;
     std::mutex expected_mutex;
     std::map<std::pair<std::string,uint16_t>,std::chrono::steady_clock::time_point> expected;
+
+    void prune_expected(std::chrono::steady_clock::time_point now) {
+        for(auto item=expected.begin();item!=expected.end();) {
+            if(item->second<=now) item=expected.erase(item); else ++item;
+        }
+    }
 
     Impl(const Router& value,Logger& output,uint16_t target):router(value),logger(output),intercepted_port(target) {
         if(!intercepted_port) throw Error("PORT","Intercepted TCP DNS port must be 1..65535");
@@ -89,17 +96,15 @@ struct TcpDnsProxy::Impl {
     bool consume_expected(const std::string& address,uint16_t client_port) {
         const auto now=std::chrono::steady_clock::now();
         std::lock_guard lock(expected_mutex);
-        for(auto item=expected.begin();item!=expected.end();) {
-            if(item->second<=now) item=expected.erase(item); else ++item;
-        }
+        prune_expected(now);
         const auto found=expected.find({address,client_port});
         if(found==expected.end()) return false;
         expected.erase(found);
         return true;
     }
 
-    void handle(SOCKET client,sockaddr_storage peer) {
-        Socket owned(client);
+    void handle(std::shared_ptr<Socket> owned,sockaddr_storage peer) {
+        const SOCKET client=owned->value;
         try {
             set_timeout(client);
             Server original;
@@ -149,14 +154,11 @@ struct TcpDnsProxy::Impl {
                     logger.write(Level::errors_only,"TCP_PROXY_IO","TCP proxy accept failed: "+std::to_string(WSAGetLastError()));
                     continue;
                 }
-                try {
-                    std::lock_guard lock(clients_mutex);
-                    clients.insert(client);
-                    handlers.emplace_back([this,client,peer]{handle(client,peer);});
-                } catch(...) {
+                auto owned=std::make_shared<Socket>(client);
+                { std::lock_guard lock(clients_mutex); clients.insert(client); }
+                if(!handlers.submit([this,owned=std::move(owned),peer]{handle(owned,peer);})) {
                     { std::lock_guard lock(clients_mutex); clients.erase(client); }
-                    closesocket(client);
-                    throw;
+                    logger.write(Level::errors_only,"TCP_PROXY_BUSY","Transparent TCP proxy connection limit reached");
                 }
             }
         } catch(const std::exception& error) {
@@ -204,6 +206,7 @@ uint16_t TcpDnsProxy::start() {
             p.close_listeners();
         }
         if(!p.port) throw Error("TCP_PROXY_BIND","Cannot bind TCP proxy listener pair: "+std::to_string(last_error));
+        p.handlers.start(32,128);
         p.accept4=std::jthread([&p]{p.accept_loop(p.ipv4);});
         p.accept6=std::jthread([&p]{p.accept_loop(p.ipv6);});
         return p.port;
@@ -212,6 +215,7 @@ uint16_t TcpDnsProxy::start() {
         p.close_listeners();
         if(p.accept4.joinable()) p.accept4.join();
         if(p.accept6.joinable()) p.accept6.join();
+        p.handlers.stop();
         if(p.winsock) { WSACleanup(); p.winsock=false; }
         p.port=0;
         throw;
@@ -228,8 +232,7 @@ void TcpDnsProxy::stop() {
         std::lock_guard lock(p.clients_mutex);
         for(const auto client:p.clients) shutdown(client,SD_BOTH);
     }
-    for(auto& handler:p.handlers) if(handler.joinable()) handler.join();
-    p.handlers.clear();
+    p.handlers.stop();
     { std::lock_guard lock(p.clients_mutex); p.clients.clear(); }
     { std::lock_guard lock(p.expected_mutex); p.expected.clear(); }
     if(p.winsock) { WSACleanup(); p.winsock=false; }
@@ -240,7 +243,15 @@ void TcpDnsProxy::expect_connection(std::string original_ip,uint16_t client_port
     if(original_ip.empty()||!client_port) throw Error("TCP_PROXY_IO","Invalid expected TCP connection");
     auto& p=*impl_;
     std::lock_guard lock(p.expected_mutex);
-    p.expected[{std::move(original_ip),client_port}]=std::chrono::steady_clock::now()+std::chrono::seconds(30);
+    p.prune_expected(std::chrono::steady_clock::now());
+    p.expected[{std::move(original_ip),client_port}]=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+}
+
+void TcpDnsProxy::forget_connection(const std::string& original_ip,uint16_t client_port) {
+    if(original_ip.empty()||!client_port) return;
+    auto& p=*impl_;
+    std::lock_guard lock(p.expected_mutex);
+    p.expected.erase({original_ip,client_port});
 }
 
 }

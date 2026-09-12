@@ -257,8 +257,11 @@ struct WinDivertInterception::Impl {
                         if(destination_port==intercepted_tcp_port&&detail::is_network_upstream(true,source_port)) { inject(packet,address); continue; }
                         const bool toward_proxy=destination_port==intercepted_tcp_port;
                         if(!toward_proxy&&source_port!=tcp_proxy_port) { inject(packet,address); continue; }
-                        if(toward_proxy&&(packet[view.tcp+13]&0x02)!=0)
+                        const auto flags=packet[view.tcp+13];
+                        if(toward_proxy&&(flags&0x02)!=0&&(flags&0x10)==0)
                             tcp_proxy.expect_connection(destination_ip(packet,view.ipv6),source_port);
+                        else if(toward_proxy&&(flags&0x04)!=0)
+                            tcp_proxy.forget_connection(destination_ip(packet,view.ipv6),source_port);
                         logger.write(Level::debug,"WINDIVERT_TCP_REFLECT",std::string(toward_proxy?"to_proxy":"to_client")+" source_port="+std::to_string(source_port));
                         auto reflected=make_reflected_tcp_packet(packet,tcp_proxy_port,toward_proxy,intercepted_tcp_port);
                         address.Outbound=0; address.IPChecksum=0; address.TCPChecksum=0;

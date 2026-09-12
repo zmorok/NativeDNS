@@ -99,6 +99,30 @@ void tcp_proxy_roundtrip() {
     char byte=0;
     check(recv(rejected,&byte,1,0)==0,"unregistered TCP proxy connection rejected");
     closesocket(rejected);
+    SOCKET reset=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    check(reset!=INVALID_SOCKET,"forgotten TCP proxy socket");
+    sockaddr_in reset_local{};reset_local.sin_family=AF_INET;reset_local.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+    check(bind(reset,reinterpret_cast<sockaddr*>(&reset_local),sizeof(reset_local))==0,"forgotten TCP proxy bind");
+    int reset_size=sizeof(reset_local);check(getsockname(reset,reinterpret_cast<sockaddr*>(&reset_local),&reset_size)==0,"forgotten TCP proxy endpoint");
+    proxy.expect_connection("127.0.0.1",ntohs(reset_local.sin_port));
+    proxy.forget_connection("127.0.0.1",ntohs(reset_local.sin_port));
+    check(connect(reset,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0,"forgotten TCP proxy connect");
+    check(recv(reset,&byte,1,0)==0,"forgotten TCP proxy connection rejected");
+    closesocket(reset);
+    for(unsigned connection=0;connection<256;++connection) {
+        SOCKET short_lived=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+        check(short_lived!=INVALID_SOCKET,"short-lived TCP proxy socket");
+        sockaddr_in short_local{};short_local.sin_family=AF_INET;short_local.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        check(bind(short_lived,reinterpret_cast<sockaddr*>(&short_local),sizeof(short_local))==0,"short-lived TCP proxy bind");
+        int short_size=sizeof(short_local);check(getsockname(short_lived,reinterpret_cast<sockaddr*>(&short_local),&short_size)==0,"short-lived TCP proxy endpoint");
+        proxy.expect_connection("127.0.0.1",ntohs(short_local.sin_port));
+        check(connect(short_lived,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0,"short-lived TCP proxy connect");
+        check(send(short_lived,reinterpret_cast<const char*>(frame.data()),static_cast<int>(frame.size()),0)==static_cast<int>(frame.size()),"short-lived TCP proxy query");
+        uint8_t short_prefix[2]{};check(recv(short_lived,reinterpret_cast<char*>(short_prefix),2,MSG_WAITALL)==2,"short-lived TCP proxy prefix");
+        nd::Packet short_response(static_cast<size_t>((short_prefix[0]<<8)|short_prefix[1]));
+        check(recv(short_lived,reinterpret_cast<char*>(short_response.data()),static_cast<int>(short_response.size()),MSG_WAITALL)==static_cast<int>(short_response.size()),"short-lived TCP proxy response");
+        closesocket(short_lived);
+    }
     proxy.stop();
 }
 int main() {
