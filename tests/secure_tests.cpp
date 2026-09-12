@@ -1,8 +1,12 @@
 #include <nativedns/dns.hpp>
+#include <curl/curl.h>
 #include <iostream>
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 int main(int argc, char**) {
     try {
+#ifdef _WIN32
+        check((curl_version_info(CURLVERSION_NOW)->features&CURL_VERSION_HTTP2)!=0,"Bundled Windows libcurl must support HTTP/2");
+#endif
         nd::Server server; server.id = 1; server.name = "secure test"; server.protocol = nd::Protocol::doh;
         server.url = "http://example.com/dns-query";
         check(nd::test_server(server).error_code == "ENDPOINT", "Reject plaintext DoH");

@@ -36,7 +36,7 @@ if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 $required = @(
     'NativeDNS.exe','NativeDNS.xml','validate-clean-machine.ps1','validation-transparent.xml','WinDivert.dll','WinDivert64.sys',
     'README.md','THIRD_PARTY_NOTICES.md','licenses/WinDivert.txt',
-    'licenses/curl.txt','licenses/libsodium.txt','docs/BUILD.md',
+    'licenses/curl.txt','licenses/libsodium.txt','licenses/nghttp2.txt','docs/BUILD.md',
     'docs/CONFIG_FORMAT.md','docs/MIGRATION_YOGADNS.md','docs/DEPENDENCIES.md',
     'docs/PROGRESS.md','docs/TEST_REPORT.md',
     'tools/nativednsctl.exe'

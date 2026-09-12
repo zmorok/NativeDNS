@@ -93,6 +93,13 @@ install(FILES
   "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
   "${CMAKE_SOURCE_DIR}/README.md"
   DESTINATION . COMPONENT Runtime)
+if(WIN32)
+  install(FILES
+    "${CMAKE_SOURCE_DIR}/third_party/licenses/curl.txt"
+    "${CMAKE_SOURCE_DIR}/third_party/licenses/libsodium.txt"
+    "${CMAKE_SOURCE_DIR}/third_party/licenses/nghttp2.txt"
+    DESTINATION licenses COMPONENT Runtime)
+endif()
 if(UNIX AND NOT APPLE AND NATIVEDNS_BUILD_GUI)
   install(FILES "${CMAKE_SOURCE_DIR}/packaging/linux/io.nativedns.NativeDNS.desktop" DESTINATION share/applications COMPONENT Runtime)
   # Keep the installed desktop/AppImage artwork identical to the Qt window and tray icon.

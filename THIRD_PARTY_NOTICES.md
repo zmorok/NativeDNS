@@ -14,6 +14,10 @@ Copyright (c) Daniel Stenberg and contributors. The repository contains the libc
 
 NativeDNS uses libsodium for DNSCrypt primitives and secure random generation.
 
+## nghttp2
+
+The Windows build links nghttp2 to provide HTTP/2 support for DNS over HTTPS through libcurl. nghttp2 is distributed under the MIT license; its license text is included in `licenses/nghttp2.txt` in Windows packages.
+
 Windows builds use a pinned official MSVC x64 archive. Linux builds use the system libsodium development/runtime package.
 
 Copyright (c) Frank Denis. libsodium is distributed under the ISC license. The repository contains the notice under `third_party/licenses/libsodium.txt`.

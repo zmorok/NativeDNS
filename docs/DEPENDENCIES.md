@@ -13,6 +13,7 @@ Windows:
 - source build through CMake/FetchContent;
 - Schannel TLS backend;
 - static libcurl linkage;
+- static nghttp2 linkage for HTTP/2;
 - dynamic MSVC CRT compatibility is preserved.
 
 Linux:
@@ -21,6 +22,10 @@ Linux:
 - distro TLS/CA integration is used.
 
 TLS certificate validation remains enabled.
+
+## nghttp2
+
+The Windows build pins and statically links nghttp2 as libcurl's HTTP/2 backend. Linux uses the HTTP/2 support provided by the distribution's libcurl build.
 
 ## libsodium
 

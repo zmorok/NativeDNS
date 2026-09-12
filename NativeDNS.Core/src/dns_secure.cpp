@@ -3,6 +3,10 @@
 #include <curl/curl.h>
 #include <algorithm>
 #include <charconv>
+#include <condition_variable>
+#include <map>
+#include <memory>
+#include <mutex>
 
 namespace nd {
 namespace {
@@ -34,6 +38,11 @@ struct CurlHandle {
             const bool cert = detail.find("SEC_E_CERT_EXPIRED") != std::string::npos || detail.find("SEC_E_WRONG_PRINCIPAL") != std::string::npos || detail.find("CERT_E_") != std::string::npos;
             throw Error(cert ? "TLS_CERTIFICATE" : error.code,std::string(error.what()) + ": " + detail);
         }
+    }
+    void reset() noexcept {
+        curl_easy_reset(value);
+        std::fill(std::begin(error_buffer),std::end(error_buffer),'\0');
+        (void)curl_easy_setopt(value,CURLOPT_ERRORBUFFER,error_buffer);
     }
 };
 struct List {
@@ -102,7 +111,11 @@ public:
         const auto question = parse_question(request);
         if (question.flags & 0x8000) throw Error("DNS_MALFORMED","Expected query");
         const auto deadline = Clock::now() + std::chrono::milliseconds(server.timeout_ms);
-        CurlHandle handle;
+        std::unique_ptr<CurlHandle> local_handle;
+        std::unique_ptr<Lease> lease;
+        if(dot_) local_handle=std::make_unique<CurlHandle>();
+        else lease=acquire(server,deadline);
+        auto& handle=dot_?*local_handle:*lease->entry->handle;
         const std::string url = dot_ ? "https://" + normalize_host(server.hostname) + ":" + std::to_string(server.port ? server.port : 853) + "/" : server.url;
         Url parsed(url);
         if (parsed.get(CURLUPART_SCHEME) != "https" || !parsed.get(CURLUPART_USER).empty() || !parsed.get(CURLUPART_PASSWORD).empty() || !parsed.get(CURLUPART_FRAGMENT).empty())
@@ -116,7 +129,12 @@ public:
         handle.set(CURLOPT_SSL_VERIFYPEER,1L); handle.set(CURLOPT_SSL_VERIFYHOST,2L);
         handle.set(CURLOPT_SSLVERSION,static_cast<long>(CURL_SSLVERSION_TLSv1_2));
         handle.set(CURLOPT_FOLLOWLOCATION,0L); handle.set(CURLOPT_NOSIGNAL,1L);
-        handle.set(CURLOPT_HTTP_VERSION,static_cast<long>(CURL_HTTP_VERSION_1_1));
+        handle.set(CURLOPT_HTTP_VERSION,static_cast<long>(dot_?CURL_HTTP_VERSION_1_1:CURL_HTTP_VERSION_2TLS));
+        if(!dot_) {
+            handle.set(CURLOPT_PIPEWAIT,1L);
+            handle.set(CURLOPT_MAXAGE_CONN,30L);
+            handle.set(CURLOPT_MAXLIFETIME_CONN,300L);
+        }
         handle.set(CURLOPT_SSL_ENABLE_ALPN,dot_ ? 0L : 1L);
         // Never use environment proxy, user credentials, or .netrc (also disabled in build).
         std::string endpoint = server.ip;
@@ -180,6 +198,27 @@ public:
         return response;
     }
 private: bool dot_;
+    struct Entry { bool busy=false;std::unique_ptr<CurlHandle> handle=std::make_unique<CurlHandle>(); };
+    struct Lease {
+        SecureTransport& owner;std::shared_ptr<Entry> entry;
+        Lease(SecureTransport& value,std::shared_ptr<Entry> selected):owner(value),entry(std::move(selected)){}
+        Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
+        ~Lease(){entry->handle->reset();std::lock_guard lock(owner.pool_mutex_);entry->busy=false;owner.pool_changed_.notify_one();}
+    };
+    std::unique_ptr<Lease> acquire(const Server& server,Clock::time_point deadline) {
+        std::string key=server.url+'|'+server.ip+'|'+std::to_string(server.port)+'|'+server.hostname;
+        for(const auto& bootstrap:server.bootstrap) key+='|'+bootstrap;
+        for(const auto& hash:server.hashes) key+='|'+hash;
+        std::unique_lock lock(pool_mutex_);auto& entries=pool_[key];
+        for(;;) {
+            const auto found=std::find_if(entries.begin(),entries.end(),[](const auto& entry){return !entry->busy;});
+            if(found!=entries.end()){(*found)->busy=true;return std::make_unique<Lease>(*this,*found);}
+            if(entries.size()<8){auto entry=std::make_shared<Entry>();entry->busy=true;entries.push_back(entry);return std::make_unique<Lease>(*this,std::move(entry));}
+            if(pool_changed_.wait_until(lock,deadline)==std::cv_status::timeout) throw Error("TIMEOUT","DoH connection pool is busy");
+        }
+    }
+    std::mutex pool_mutex_;std::condition_variable pool_changed_;
+    std::map<std::string,std::vector<std::shared_ptr<Entry>>> pool_;
 };
 }
 std::unique_ptr<IDnsTransport> make_secure_transport(Protocol protocol) { return std::make_unique<SecureTransport>(protocol == Protocol::dot); }

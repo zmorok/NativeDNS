@@ -33,6 +33,8 @@ Failed tests return a structured error code/message suitable for readable red GU
 
 DNS over HTTPS uses libcurl.
 
+The Router keeps a bounded pool of up to eight libcurl easy handles per DoH server. Reusing a handle preserves libcurl's connection cache. DoH requests prefer HTTP/2 through ALPN and automatically fall back to HTTP/1.1 when the server does not negotiate HTTP/2. Idle connections older than 30 seconds and connections older than five minutes are not reused.
+
 Requirements include:
 
 - certificate/hostname verification;
