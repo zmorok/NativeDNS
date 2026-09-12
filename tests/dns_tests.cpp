@@ -35,9 +35,10 @@ nd::Packet reply(const nd::Packet& query, bool v6 = false) {
     else { result.insert(result.end(), {192,0,2,42}); }
     return result;
 }
-nd::Packet with_edns(nd::Packet query,uint16_t payload_size) {
+nd::Packet with_edns(nd::Packet query,uint16_t payload_size,bool dnssec_ok=false) {
     query[10]=0;query[11]=1;
     query.insert(query.end(),{0,0,41,static_cast<uint8_t>(payload_size>>8),static_cast<uint8_t>(payload_size),0,0,0,0,0,0});
+    if(dnssec_ok)query[query.size()-4]=0x80;
     return query;
 }
 nd::Packet padded_response(const nd::Packet& query,size_t padding) {
@@ -161,6 +162,17 @@ int main() {
         check(servfail_parsed.rcode==2&&servfail.size()==q.end,"bounded SERVFAIL preserves the DNS question");
         check(nd::client_udp_payload_size(query)==512,"legacy UDP DNS payload limit");
         const auto edns_query=with_edns(query,1400);check(nd::client_udp_payload_size(edns_query)==1232,"EDNS payload is capped to fragmentation-safe size");
+        auto edns_do_query=with_edns(query,1400,true);edns_do_query[3]|=0x10;
+        const auto blocked_a=nd::make_block_response(edns_do_query,nd::BlockMode::zero_address);
+        check(nd::parse_response(blocked_a,q).addresses==std::vector<std::string>{"0.0.0.0"},"synthetic A zero address");
+        check(blocked_a[7]==1&&blocked_a[11]==1&&(blocked_a[3]&0x90)==0x90,"synthetic counts and request flags");
+        check(blocked_a[blocked_a.size()-8]==4&&blocked_a[blocked_a.size()-7]==208&&blocked_a[blocked_a.size()-4]==0x80,"synthetic EDNS payload and DO bit");
+        const auto aaaa_query=nd::make_query("example.com",28);const auto aaaa_question=nd::parse_question(aaaa_query);
+        check(nd::parse_response(nd::make_block_response(aaaa_query,nd::BlockMode::zero_address),aaaa_question).addresses==std::vector<std::string>{"::"},"synthetic AAAA zero address");
+        const auto txt_query=nd::make_query("example.com",16);const auto txt_question=nd::parse_question(txt_query);
+        const auto blocked_txt=nd::make_block_response(txt_query,nd::BlockMode::zero_address);
+        check(nd::parse_response(blocked_txt,txt_question).addresses.empty()&&blocked_txt[7]==0,"zero-address TXT is explicit NODATA");
+        check(nd::parse_response(nd::make_block_response(txt_query,nd::BlockMode::nxdomain),txt_question).rcode==3,"synthetic NXDOMAIN rcode");
         const auto legacy_large=padded_response(query,600);const auto legacy_truncated=nd::fit_udp_response(query,legacy_large);
         check(legacy_truncated.size()<=512&&nd::parse_response(legacy_truncated,q).truncated,"legacy oversized response requests TCP retry");
         const auto edns_medium=padded_response(query,700);check(nd::fit_udp_response(edns_query,edns_medium)==edns_medium,"EDNS response fits advertised payload");

@@ -4,19 +4,6 @@
 #include <sstream>
 namespace nd {
 namespace {
-Packet answer(const Packet& request, const Question& q, uint16_t rcode, bool zero) {
-    Packet result(request.begin(),request.begin() + static_cast<ptrdiff_t>(q.end));
-    result[2] = static_cast<uint8_t>(0x80 | ((q.flags >> 8) & 1));
-    result[3] = static_cast<uint8_t>(0x80 | (q.flags & 0x10) | rcode);
-    for (size_t i = 6; i < 12; ++i) result[i] = 0;
-    if (zero && q.klass == 1 && (q.type == 1 || q.type == 28)) {
-        result[7] = 1;
-        const uint8_t length = q.type == 1 ? 4 : 16;
-        const Packet record{0xc0,0x0c,0,static_cast<uint8_t>(q.type),0,1,0,0,0,0,0,length};
-        result.insert(result.end(),record.begin(),record.end()); result.insert(result.end(),length,0);
-    }
-    return result;
-}
 std::string protocol_log_suffix(Protocol protocol) {
     switch(protocol) {
     case Protocol::udp:return " (UDP) (DNS over UDP)";
@@ -72,8 +59,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         if (rule.action == Action::block) {
             logger_.write(Level::normal,"DNS_ROUTE",route_log_message(question,rule,nullptr));
             if (rule.block_mode == BlockMode::silent_drop) { result.disposition = Disposition::silent_drop; return result; }
-            const uint16_t rcode = rule.block_mode == BlockMode::nxdomain ? 3 : rule.block_mode == BlockMode::refused ? 5 : 0;
-            result.packet = answer(request,question,rcode,rule.block_mode == BlockMode::zero_address); return result;
+            result.packet=make_block_response(request,rule.block_mode);return result;
         }
         const Server* server = &original;
         if (rule.server_id) {
@@ -100,7 +86,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
             const auto elapsed=exchange_started==std::chrono::steady_clock::time_point{}?std::optional<double>{}:std::optional<double>{std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-exchange_started).count()};
             logger_.write(Level::errors_only,error.code,route_log_message(question,*matched_rule,selected_server,elapsed)+", error="+error.what());
         } else logger_.write(Level::errors_only,error.code,question.name + " " + error.what());
-        if (valid_question) result.packet = answer(request,question,2,false);
+        if (valid_question) result.packet = make_error_response(request,2);
         else result.disposition = Disposition::silent_drop;
     } catch (const std::exception& error) {
         result.error_code = "INTERNAL"; result.message = error.what();
@@ -108,7 +94,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
             const auto elapsed=exchange_started==std::chrono::steady_clock::time_point{}?std::optional<double>{}:std::optional<double>{std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-exchange_started).count()};
             logger_.write(Level::errors_only,result.error_code,route_log_message(question,*matched_rule,selected_server,elapsed)+", error="+error.what());
         } else logger_.write(Level::errors_only,result.error_code,result.message);
-        if (valid_question) result.packet = answer(request,question,2,false);
+        if (valid_question) result.packet = make_error_response(request,2);
         else result.disposition = Disposition::silent_drop;
     }
     return result;

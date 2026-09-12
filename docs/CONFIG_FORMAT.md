@@ -96,16 +96,9 @@ Block modes:
 
 ## Host normalization
 
-Hostnames are normalized by shared cross-platform Core code.
+Names are normalized by shared cross-platform Core code. TLS/server hostnames accept canonical ASCII LDH/A-label input only. Unicode input must first be processed by a complete IDNA/UTS #46 implementation outside Core and supplied in `xn--` form.
 
-The implementation:
-
-- validates UTF-8;
-- lowercases supported Unicode ranges;
-- converts non-ASCII labels to Punycode;
-- removes one trailing dot;
-- validates DNS label/name lengths;
-- supports `*` and `?` wildcard characters only in rule patterns.
+DNS wire names and rule patterns are a separate domain: printable ASCII labels are supported, including service-label underscores. Names are lowercased, one trailing dot is removed, and wire label/name length limits are enforced. `*` and `?` are reserved for rule patterns.
 
 `*.example.com` does not match the apex `example.com`.
 
@@ -132,3 +125,9 @@ YogaDNS profiles are imported into the NativeDNS model.
 Known server/rule fields are mapped. Unknown source metadata is retained where the importer supports it so migration does not silently lose information.
 
 Imported runtime-sensitive options that NativeDNS cannot yet enforce should remain visible as warnings/metadata rather than being silently treated as supported.
+
+## Blocking and DNSSEC semantics
+
+`zero address` returns `0.0.0.0` for A and `::` for AAAA with TTL 0. For every other query type it returns NOERROR with no answers (NODATA). Synthetic replies preserve the original question, recursion-desired/checking-disabled bits, and an EDNS(0) OPT record (including the DO bit) when present.
+
+The server `dnssec` field is capability metadata only. Local DNSSEC validation and imported rule flags `validate` / `rejectUnsigned` are not implemented. Such rules fail explicitly with `NOT_IMPLEMENTED`, and the Qt rule editor does not expose those controls.

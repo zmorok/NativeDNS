@@ -38,6 +38,44 @@ std::string name(std::span<const uint8_t> p, size_t& offset) {
     }
 }
 void append_word(Packet& p, uint16_t value) { p.push_back(static_cast<uint8_t>(value >> 8)); p.push_back(static_cast<uint8_t>(value)); }
+struct EdnsRequest { bool present=false,do_bit=false;uint16_t payload=512; };
+EdnsRequest edns_request(std::span<const uint8_t> request,const Question& question) {
+    EdnsRequest result;
+    const uint32_t answers=word(request,6),authority=word(request,8),additional=word(request,10);
+    if(answers+authority+additional>4096)throw Error("DNS_MALFORMED","Too many DNS records");
+    size_t at=question.end;
+    for(uint32_t index=0;index<answers+authority+additional;++index) {
+        const auto owner=name(request,at);
+        const auto type=word(request,at),klass=word(request,at+2),length=word(request,at+8);
+        if(request.size()-at<10||length>request.size()-(at+10))throw Error("DNS_MALFORMED","Truncated DNS record");
+        if(type==41) {
+            if(result.present||!owner.empty()||index<answers+authority)throw Error("DNS_MALFORMED","Invalid OPT record");
+            result.present=true;result.payload=std::min<uint16_t>(std::max<uint16_t>(klass,512),1232);result.do_bit=(request[at+6]&0x80)!=0;
+        }
+        at+=10+length;
+    }
+    if(at!=request.size())throw Error("DNS_MALFORMED","Unexpected bytes after DNS records");
+    return result;
+}
+Packet synthetic_response(const Packet& request,uint16_t rcode,bool zero) {
+    if(rcode>15)throw Error("DNS_MALFORMED","DNS response code is out of range");
+    const auto question=parse_question(request);if(question.flags&0x8000)throw Error("DNS_MALFORMED","Expected query, not response");
+    const auto edns=edns_request(request,question);
+    Packet response(request.begin(),request.begin()+static_cast<ptrdiff_t>(question.end));
+    const uint16_t flags=static_cast<uint16_t>(0x8080|(question.flags&0x0110)|rcode);
+    response[2]=static_cast<uint8_t>(flags>>8);response[3]=static_cast<uint8_t>(flags);
+    response[4]=0;response[5]=1;for(size_t index=6;index<12;++index)response[index]=0;
+    if(zero&&question.klass==1&&(question.type==1||question.type==28)) {
+        response[7]=1;const uint8_t length=question.type==1?4:16;
+        const Packet record{0xc0,0x0c,0,static_cast<uint8_t>(question.type),0,1,0,0,0,0,0,length};
+        response.insert(response.end(),record.begin(),record.end());response.insert(response.end(),length,0);
+    }
+    if(edns.present) {
+        response[11]=1;
+        response.insert(response.end(),{0,0,41,static_cast<uint8_t>(edns.payload>>8),static_cast<uint8_t>(edns.payload),0,0,static_cast<uint8_t>(edns.do_bit?0x80:0),0,0,0});
+    }
+    return response;
+}
 }
 std::string dns_type_name(uint16_t type) {
     switch(type) {
@@ -75,35 +113,19 @@ Packet make_query(const std::string& hostname, uint16_t type) {
 }
 
 Packet make_error_response(const Packet& request,uint16_t rcode) {
-    if(rcode>15) throw Error("DNS_MALFORMED","DNS response code is out of range");
-    const auto question=parse_question(request);
-    if(question.flags&0x8000) throw Error("DNS_MALFORMED","Expected query, not response");
-    Packet response(request.begin(),request.begin()+static_cast<ptrdiff_t>(question.end));
-    const uint16_t flags=static_cast<uint16_t>(0x8080|(question.flags&0x7910)|rcode);
-    response[2]=static_cast<uint8_t>(flags>>8);response[3]=static_cast<uint8_t>(flags);
-    response[4]=0;response[5]=1;
-    for(size_t i=6;i<12;++i) response[i]=0;
-    return response;
+    return synthetic_response(request,rcode,false);
+}
+Packet make_block_response(const Packet& request,BlockMode mode) {
+    if(mode==BlockMode::silent_drop)throw Error("CONFIG","Silent-drop block mode has no DNS response");
+    const uint16_t rcode=mode==BlockMode::nxdomain?3:mode==BlockMode::refused?5:0;
+    return synthetic_response(request,rcode,mode==BlockMode::zero_address);
 }
 uint16_t client_udp_payload_size(std::span<const uint8_t> request) {
-    constexpr uint16_t legacy_size=512,server_limit=1232;
+    constexpr uint16_t legacy_size=512;
     const auto question=parse_question(request);
     if(question.flags&0x8000) throw Error("DNS_MALFORMED","Expected query, not response");
-    const uint32_t answers=word(request,6),authority=word(request,8),additional=word(request,10);
-    if(answers+authority+additional>4096) throw Error("DNS_MALFORMED","Too many DNS records");
-    size_t at=question.end;bool opt_seen=false;uint16_t advertised=legacy_size;
-    for(uint32_t i=0;i<answers+authority+additional;++i) {
-        const auto owner=name(request,at);
-        const auto type=word(request,at),klass=word(request,at+2),length=word(request,at+8);
-        if(request.size()-at<10||length>request.size()-(at+10)) throw Error("DNS_MALFORMED","Truncated DNS record");
-        if(type==41) {
-            if(opt_seen||!owner.empty()||i<answers+authority) throw Error("DNS_MALFORMED","Invalid OPT record");
-            opt_seen=true;advertised=std::max<uint16_t>(legacy_size,klass);
-        }
-        at+=10+length;
-    }
-    if(at!=request.size()) throw Error("DNS_MALFORMED","Unexpected bytes after DNS records");
-    return std::min<uint16_t>(advertised,server_limit);
+    const auto edns=edns_request(request,question);
+    return edns.present?edns.payload:legacy_size;
 }
 Packet fit_udp_response(const Packet& request,const Packet& response) {
     const auto limit=client_udp_payload_size(request);
