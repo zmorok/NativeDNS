@@ -1,5 +1,6 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/ipc_wire.hpp>
 #include <windows.h>
 #include <sddl.h>
 #include <algorithm>
@@ -14,9 +15,7 @@ std::string owner_name(const std::string& name){uint64_t hash=146959810393466560
 void put16(uint8_t* out, uint16_t v) { out[0]=static_cast<uint8_t>(v); out[1]=static_cast<uint8_t>(v>>8); }
 void put32(uint8_t* out, uint32_t v) { for (unsigned i=0;i<4;++i) out[i]=static_cast<uint8_t>(v>>(i*8)); }
 void put64(uint8_t* out, uint64_t v) { for (unsigned i=0;i<8;++i) out[i]=static_cast<uint8_t>(v>>(i*8)); }
-uint16_t get16(const uint8_t* in) { return static_cast<uint16_t>(in[0] | (in[1]<<8)); }
 uint32_t get32(const uint8_t* in) { uint32_t v=0; for(unsigned i=0;i<4;++i) v |= static_cast<uint32_t>(in[i])<<(i*8); return v; }
-uint64_t get64(const uint8_t* in) { uint64_t v=0; for(unsigned i=0;i<8;++i) v |= static_cast<uint64_t>(in[i])<<(i*8); return v; }
 std::vector<uint8_t> frame(uint16_t operation, uint64_t request, uint32_t status, const std::string& payload) {
     if (payload.size() > max_payload) throw Error("IPC_LIMIT","IPC payload exceeds 1 MiB");
     std::vector<uint8_t> out(header_size + payload.size());
@@ -144,9 +143,7 @@ void PipeServer::run() {
                 try {
                     uint8_t header[header_size]{};
                     if(!async_transfer(pipe,header,sizeof(header),false,static_cast<HANDLE>(native_stop_)))throw Error("IPC_STOPPED","IPC server is stopping");
-                    if(get32(header)!=magic || get16(header+4)!=1) throw Error("IPC_PROTOCOL","Bad IPC magic/version");
-                    const uint16_t operation=get16(header+6); const uint64_t request=get64(header+8); const uint32_t length=get32(header+16);
-                    if(!request || length>max_payload || operation<1 || operation>10) throw Error("IPC_PROTOCOL","Invalid IPC request header");
+                    const auto parsed=detail::parse_ipc_header(header,false);const uint16_t operation=parsed.operation;const uint64_t request=parsed.request;const uint32_t length=parsed.length;
                     std::string payload(length,'\0');
                     if(length&&!async_transfer(pipe,reinterpret_cast<uint8_t*>(payload.data()),length,false,static_cast<HANDLE>(native_stop_)))throw Error("IPC_STOPPED","IPC server is stopping");
                     IpcResponse response;
@@ -185,10 +182,10 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
         uint64_t request=next_request.fetch_add(1,std::memory_order_relaxed);if(!request)request=next_request.fetch_add(1,std::memory_order_relaxed);
         auto output=frame(static_cast<uint16_t>(operation),request,0,payload); timed_transfer(pipe,output.data(),output.size(),true,deadline);
         uint8_t header[header_size]{}; timed_transfer(pipe,header,sizeof(header),false,deadline);
-        if(get32(header)!=magic || get16(header+4)!=1 || get16(header+6)!=(static_cast<uint16_t>(operation)|0x8000) || get64(header+8)!=request)
+        const auto parsed=detail::parse_ipc_header(header,true);
+        if(parsed.operation!=(static_cast<uint16_t>(operation)|0x8000) || parsed.request!=request)
             throw Error("IPC_PROTOCOL","Mismatched IPC response");
-        const uint32_t length=get32(header+16);
-        if(length<4 || length>max_payload+4) throw Error("IPC_PROTOCOL","Invalid IPC response size");
+        const uint32_t length=parsed.length;
         std::vector<uint8_t> body(length); timed_transfer(pipe,body.data(),body.size(),false,deadline);
         IpcResponse response; response.status=get32(body.data()); response.payload.assign(reinterpret_cast<char*>(body.data()+4),body.size()-4);
         CloseHandle(pipe); return response;

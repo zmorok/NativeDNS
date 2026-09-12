@@ -152,6 +152,22 @@ Output forms:
 
 For portable/AppImage generation, provide `linuxdeploy` and `linuxdeploy-plugin-qt` through PATH, `tools/`, or the corresponding environment variables expected by the packaging scripts.
 
+## Sanitizers and fuzzing
+
+The Linux quality workflow runs the Core test suite under Address/UndefinedBehavior Sanitizer and ThreadSanitizer. Clang libFuzzer targets for DNS wire packets, DNSCrypt framing, configuration XML, and IPC headers are opt-in:
+
+```bash
+cmake -S . -B build/fuzz -G Ninja \
+  -DNATIVEDNS_BUILD_GUI=OFF \
+  -DNATIVEDNS_BUILD_TOOLS=OFF \
+  -DNATIVEDNS_FUZZING=ON \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++
+cmake --build build/fuzz --target fuzz_dns fuzz_dnscrypt fuzz_config fuzz_ipc
+```
+
+External secure-transport tests remain opt-in locally through `NATIVEDNS_LIVE_TESTS`; the scheduled CI workflow runs them nightly so provider/network failures are kept separate from deterministic pull-request checks.
+
 ## Runtime layout
 
 Main desktop executable:

@@ -1,5 +1,6 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/ipc_wire.hpp>
 
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -41,22 +42,10 @@ void put64(uint8_t* out, uint64_t value) {
     }
 }
 
-uint16_t get16(const uint8_t* data) {
-    return static_cast<uint16_t>(data[0] | (data[1] << 8));
-}
-
 uint32_t get32(const uint8_t* data) {
     uint32_t value = 0;
     for (unsigned i = 0; i < 4; ++i) {
         value |= static_cast<uint32_t>(data[i]) << (i * 8);
-    }
-    return value;
-}
-
-uint64_t get64(const uint8_t* data) {
-    uint64_t value = 0;
-    for (unsigned i = 0; i < 8; ++i) {
-        value |= static_cast<uint64_t>(data[i]) << (i * 8);
     }
     return value;
 }
@@ -287,16 +276,8 @@ void PipeServer::run() {
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 uint8_t header[header_size]{};
                 transfer(client.get(), header, sizeof(header), false, deadline,&running_);
-                if (get32(header) != magic || get16(header + 4) != 1) {
-                    throw Error("IPC_PROTOCOL", "Bad IPC magic/version");
-                }
-
-                const uint16_t operation = get16(header + 6);
-                const uint64_t request = get64(header + 8);
-                const uint32_t length = get32(header + 16);
-                if (!request || length > max_payload || operation < 1 || operation > 10) {
-                    throw Error("IPC_PROTOCOL", "Invalid IPC request header");
-                }
+                const auto parsed=detail::parse_ipc_header(header,false);
+                const uint16_t operation=parsed.operation;const uint64_t request=parsed.request;const uint32_t length=parsed.length;
 
                 std::string payload(length, '\0');
                 if (length) {
@@ -372,15 +353,11 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
 
     uint8_t header[header_size]{};
     transfer(socket_fd.get(), header, sizeof(header), false, deadline);
-    if (get32(header) != magic || get16(header + 4) != 1 ||
-        get16(header + 6) != (static_cast<uint16_t>(operation) | 0x8000) || get64(header + 8) != request) {
+    const auto parsed=detail::parse_ipc_header(header,true);
+    if (parsed.operation != (static_cast<uint16_t>(operation) | 0x8000) || parsed.request != request) {
         throw Error("IPC_PROTOCOL", "Mismatched IPC response");
     }
-
-    const uint32_t length = get32(header + 16);
-    if (length < 4 || length > max_payload + 4) {
-        throw Error("IPC_PROTOCOL", "Invalid IPC response size");
-    }
+    const uint32_t length=parsed.length;
 
     std::vector<uint8_t> body(length);
     transfer(socket_fd.get(), body.data(), body.size(), false, deadline);

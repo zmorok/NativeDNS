@@ -23,6 +23,7 @@ const Rule& match_rule(const Config& config, const std::string& hostname);
 struct ImportResult { Config config; std::vector<std::string> warnings; };
 ImportResult import_yoga(const std::filesystem::path& path);
 Config load_config(const std::filesystem::path& path);
+Config parse_config(std::string text);
 void save_config(const Config& config, const std::filesystem::path& path);
 std::string serialize_config(const Config& config);
 std::string protocol_name(Protocol protocol);

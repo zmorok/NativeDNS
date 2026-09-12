@@ -8,6 +8,7 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
   src/dnscrypt.cpp
   src/router.cpp
   src/host.cpp
+  src/ipc_wire.cpp
 )
 
 if(WIN32)

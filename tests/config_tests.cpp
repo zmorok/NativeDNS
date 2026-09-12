@@ -67,6 +67,7 @@ int main() {
         std::filesystem::create_directories(directory);
         const auto path = directory / "native.xml";
         nd::save_config(config, path); check(nd::load_config(path) == config, "Semantic round trip including metadata");
+        check(nd::parse_config(nd::serialize_config(config))==config,"In-memory config parser round trip");
         auto grouped=config;grouped.servers.front().fallback_ids={1002};nd::save_config(grouped,path);check(nd::load_config(path)==grouped,"Fallback group round trip");
         nd::save_config(config,path);
         auto changed = config; changed.logging.directory = "журнал & <test>"; changed.logging.file_enabled = true;

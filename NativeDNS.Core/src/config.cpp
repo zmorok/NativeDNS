@@ -258,8 +258,7 @@ std::string serialize_config(const Config& config) {
     if (result.size() > 4 * 1024 * 1024) throw Error("CONFIG_LIMIT", "Serialized config exceeds 4 MiB");
     return result;
 }
-Config load_config(const std::filesystem::path& path) {
-    const auto root = read_xml(path);
+Config config_from_root(const Node& root) {
     if (root.name != "NativeDNS") throw Error("CONFIG", "Expected NativeDNS root");
     known(root, {"schemaVersion","testTarget","testConcurrency"});
     Config config;
@@ -300,6 +299,8 @@ Config load_config(const std::filesystem::path& path) {
     }
     validate(config); return config;
 }
+Config parse_config(std::string text){return config_from_root(XmlParser(std::move(text)).parse());}
+Config load_config(const std::filesystem::path& path){return config_from_root(read_xml(path));}
 void save_config(const Config& config,const std::filesystem::path& path) {
     const auto data=serialize_config(config);
     if(std::filesystem::exists(path)) (void)load_config(path);

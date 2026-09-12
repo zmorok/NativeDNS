@@ -1,0 +1,31 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  sanitizers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: ["address,undefined", thread]
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang ninja-build libcurl4-openssl-dev libsodium-dev pkg-config
+      - run: cmake -S . -B build/sanitize-${{ matrix.sanitizer }} -G Ninja -DNATIVEDNS_BUILD_GUI=OFF -DNATIVEDNS_BUILD_TOOLS=OFF -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer" -DCMAKE_CXX_FLAGS="-fsanitize=${{ matrix.sanitizer }} -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=${{ matrix.sanitizer }}" -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=${{ matrix.sanitizer }}"
+      - run: cmake --build build/sanitize-${{ matrix.sanitizer }} -j2
+      - run: ctest --test-dir build/sanitize-${{ matrix.sanitizer }} --output-on-failure
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y clang ninja-build libcurl4-openssl-dev libsodium-dev pkg-config
+      - run: cmake -S . -B build/fuzz -G Ninja -DNATIVEDNS_BUILD_GUI=OFF -DNATIVEDNS_BUILD_TOOLS=OFF -DNATIVEDNS_FUZZING=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+      - run: cmake --build build/fuzz --target fuzz_dns fuzz_dnscrypt fuzz_config fuzz_ipc -j2
+      - run: |
+          for target in dns dnscrypt config ipc; do
+            ./build/fuzz/tests/fuzz_${target} -runs=5000 -max_len=1048576
+          done
