@@ -39,7 +39,8 @@ enum class Mode { good, malformed, mismatch, servfail, no_data, timeout, eof, tr
 // Test-only loopback peer. This exercises actual OS socket traffic, not a production transport substitute.
 class Peer {
 public:
-    Peer(bool tcp, Mode mode, bool ipv6 = false, uint16_t port = 0) : tcp_(tcp), mode_(mode), ipv6_(ipv6) {
+    Peer(bool tcp, Mode mode, bool ipv6 = false, uint16_t port = 0, uint32_t timeout_ms = 0)
+        : tcp_(tcp), mode_(mode), ipv6_(ipv6), timeout_ms_(timeout_ms ? timeout_ms : (mode == Mode::timeout ? 80u : 1500u)) {
         socket_ = socket(ipv6 ? AF_INET6 : AF_INET, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP);
         check(socket_ != INVALID_SOCKET, "test socket");
         sockaddr_storage address{}; SocketLength size = 0;
@@ -60,7 +61,7 @@ public:
         worker_ = std::thread([this] { run(); });
     }
     ~Peer() { if (worker_.joinable()) worker_.join(); closesocket(socket_); }
-    nd::Server server() const { nd::Server s; s.id = 1; s.name = "loopback"; s.ip = ipv6_ ? "::1" : "127.0.0.1"; s.port = port_; s.protocol = tcp_ ? nd::Protocol::tcp : nd::Protocol::udp; s.timeout_ms = mode_ == Mode::timeout ? 80 : 1500; return s; }
+    nd::Server server() const { nd::Server s; s.id = 1; s.name = "loopback"; s.ip = ipv6_ ? "::1" : "127.0.0.1"; s.port = port_; s.protocol = tcp_ ? nd::Protocol::tcp : nd::Protocol::udp; s.timeout_ms = timeout_ms_; return s; }
     void verify() { worker_.join(); check(ok_, "Loopback peer failed"); }
     static uint16_t paired_port() {
         for (unsigned attempt = 0; attempt < 256; ++attempt) {
@@ -100,7 +101,7 @@ private:
                 check(n > 0, "recvfrom"); query.resize(static_cast<size_t>(n));
             }
             ++requests;
-            if (mode_ == Mode::timeout) std::this_thread::sleep_for(std::chrono::milliseconds(140));
+            if (mode_ == Mode::timeout) std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms_ + 100));
             else if (mode_ != Mode::eof) {
                 auto response = reply(query, nd::parse_question(query).type == 28);
                 if (mode_ == Mode::malformed) response.resize(12); // complete frame, missing question
@@ -119,10 +120,21 @@ private:
         } catch (const std::exception& error) { std::cerr << "peer: " << error.what() << '\n'; }
         if (connection != INVALID_SOCKET) closesocket(connection);
     }
-    SOCKET socket_; bool tcp_; Mode mode_; bool ipv6_; uint16_t port_;
+    SOCKET socket_; bool tcp_; Mode mode_; bool ipv6_; uint16_t port_; uint32_t timeout_ms_;
     std::thread worker_; bool ok_ = false;
 public: std::atomic<unsigned> requests = 0;
 };
+
+SOCKET connect_loopback(uint16_t port, int type) {
+    SOCKET socket_value = socket(AF_INET,type,type == SOCK_STREAM ? IPPROTO_TCP : IPPROTO_UDP);
+    check(socket_value != INVALID_SOCKET,"client socket");
+    sockaddr_in target{}; target.sin_family=AF_INET; target.sin_addr.s_addr=htonl(INADDR_LOOPBACK); target.sin_port=htons(port);
+    if(connect(socket_value,reinterpret_cast<sockaddr*>(&target),sizeof(target)) != 0) {
+        closesocket(socket_value);
+        throw std::runtime_error("client connect");
+    }
+    return socket_value;
+}
 int main() {
 #ifdef _WIN32
     WSADATA data{}; if (WSAStartup(MAKEWORD(2,2),&data)) return 2;
@@ -195,6 +207,33 @@ int main() {
             auto target = peer.server(); target.port = proxy.status().port; target.protocol = action == nd::Action::process ? nd::Protocol::tcp : nd::Protocol::udp;
             const auto result = nd::test_server(target,"example.com"); proxy.stop(); peer.verify();
             check(result.success && peer.requests == 1 && proxy.status().state == nd::State::stopped,"Client -> real local proxy -> upstream Process/Bypass");
+        }
+        {
+            Peer slow(false,Mode::timeout,false,0,600),fast(false,Mode::good);
+            auto concurrent_config=nd::default_config();auto slow_server=slow.server();slow_server.id=7;concurrent_config.servers.push_back(slow_server);
+            nd::Rule slow_rule;slow_rule.id=7;slow_rule.name="slow";slow_rule.patterns={"slow.example"};slow_rule.server_id=7;
+            concurrent_config.rules.insert(concurrent_config.rules.begin(),slow_rule);
+            auto concurrent_router=std::make_shared<nd::Router>(concurrent_config,route_log);
+            nd::LocalProxy proxy(concurrent_router,fast.server(),route_log);proxy.start();
+            const SOCKET slow_client=connect_loopback(proxy.status().port,SOCK_DGRAM);const auto slow_query=nd::make_query("slow.example");
+            check(send(slow_client,reinterpret_cast<const char*>(slow_query.data()),static_cast<int>(slow_query.size()),0)==static_cast<int>(slow_query.size()),"send slow UDP query");
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            auto local=fast.server();local.port=proxy.status().port;
+            const auto started=std::chrono::steady_clock::now();const auto result=nd::test_server(local,"example.com");
+            const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+            closesocket(slow_client);proxy.stop();slow.verify();fast.verify();
+            check(result.success&&elapsed<400,"slow UDP upstream must not block unrelated local proxy queries");
+        }
+        {
+            Peer fast(true,Mode::good);auto concurrent_router=std::make_shared<nd::Router>(nd::default_config(),route_log);
+            nd::LocalProxy proxy(concurrent_router,fast.server(),route_log);proxy.start();
+            const SOCKET slow_client=connect_loopback(proxy.status().port,SOCK_STREAM);
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            auto local=fast.server();local.port=proxy.status().port;
+            const auto started=std::chrono::steady_clock::now();const auto result=nd::test_server(local,"example.com");
+            const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+            closesocket(slow_client);proxy.stop();fast.verify();
+            check(result.success&&elapsed<1000,"slow TCP client must not block local proxy accept loop");
         }
         {
             Peer peer(true,Mode::good); auto proxy_router = std::make_shared<nd::Router>(nd::default_config(),route_log);

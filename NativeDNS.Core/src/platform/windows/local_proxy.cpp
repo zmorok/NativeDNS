@@ -1,4 +1,5 @@
 #include <nativedns/interception.hpp>
+#include "../../bounded_executor.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -18,6 +19,7 @@ struct LocalProxy::Impl {
     SOCKET udp = INVALID_SOCKET, tcp = INVALID_SOCKET;
     WSAEVENT udp_event = WSA_INVALID_EVENT, tcp_event = WSA_INVALID_EVENT;
     std::jthread udp_worker, tcp_worker;
+    detail::BoundedExecutor udp_handlers, tcp_handlers;
     bool winsock = false;
     Impl(std::shared_ptr<const Router> r, Server o, Logger& l, uint16_t p) : router(std::move(r)),original(std::move(o)),logger(l),requested_port(p) {
         if (!router) throw Error("CONFIG","Local proxy requires a router");
@@ -50,6 +52,14 @@ struct LocalProxy::Impl {
         }
         return result.packet;
     }
+    void handle_udp(Packet packet,sockaddr_storage client,int size) {
+        try {
+            const auto response = process(packet);
+            if (!response.empty() && sendto(udp,reinterpret_cast<const char*>(response.data()),static_cast<int>(response.size()),0,reinterpret_cast<sockaddr*>(&client),size) != static_cast<int>(response.size()))
+                throw Error("PROXY_IO","UDP reply send failed");
+        } catch (const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
+        catch (const std::exception& error) { logger.write(Level::errors_only,"PROXY_IO",error.what()); }
+    }
     void udp_loop() {
         try {
             while (wait(udp_event)) {
@@ -60,11 +70,8 @@ struct LocalProxy::Impl {
                 const int n = recvfrom(udp,reinterpret_cast<char*>(packet.data()),static_cast<int>(packet.size()),0,reinterpret_cast<sockaddr*>(&client),&size);
                 if (n == SOCKET_ERROR) { if (WSAGetLastError() == WSAEWOULDBLOCK) continue; throw Error("PROXY_IO","UDP receive failed"); }
                 packet.resize(static_cast<size_t>(n));
-                try {
-                    const auto response = process(packet);
-                    if (!response.empty() && sendto(udp,reinterpret_cast<const char*>(response.data()),static_cast<int>(response.size()),0,reinterpret_cast<sockaddr*>(&client),size) != static_cast<int>(response.size()))
-                        throw Error("PROXY_IO","UDP reply send failed");
-                } catch (const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
+                if(!udp_handlers.submit([this,packet=std::move(packet),client,size]() mutable { handle_udp(std::move(packet),client,size); }))
+                    logger.write(Level::errors_only,"PROXY_BUSY","Local UDP proxy queue is full; query dropped");
             }
         } catch (const std::exception& error) { logger.write(Level::errors_only,"PROXY_IO",error.what()); state = State::error; SetEvent(stop_event); }
     }
@@ -86,6 +93,24 @@ struct LocalProxy::Impl {
             at += static_cast<size_t>(n);
         }
     }
+    void handle_client(SOCKET client) {
+        struct ClientGuard { SOCKET value; ~ClientGuard() { closesocket(value); } } guard{client};
+        try {
+            if (WSAEventSelect(client,nullptr,0)) throw Error("PROXY_IO","Client event reset failed");
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            uint8_t prefix[2]{}; transfer(client,prefix,2,false,deadline);
+            const auto length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
+            if (length < 12) throw Error("DNS_MALFORMED","Client DNS frame too short");
+            Packet request(length); transfer(client,request.data(),request.size(),false,deadline);
+            auto response = process(request);
+            if (!response.empty()) {
+                Packet frame{static_cast<uint8_t>(response.size() >> 8),static_cast<uint8_t>(response.size())};
+                frame.insert(frame.end(),response.begin(),response.end());
+                transfer(client,frame.data(),frame.size(),true,std::chrono::steady_clock::now() + std::chrono::seconds(2));
+            }
+        } catch (const Error& error) { if(!stopping()) logger.write(Level::errors_only,error.code,error.what()); }
+        catch (const std::exception& error) { if(!stopping()) logger.write(Level::errors_only,"PROXY_IO",error.what()); }
+    }
     void tcp_loop() {
         try {
             while (wait(tcp_event)) {
@@ -94,21 +119,10 @@ struct LocalProxy::Impl {
                 if (!(events.lNetworkEvents & FD_ACCEPT)) continue;
                 SOCKET client = accept(tcp,nullptr,nullptr);
                 if (client == INVALID_SOCKET) { if (WSAGetLastError() == WSAEWOULDBLOCK) continue; throw Error("PROXY_IO","Accept failed"); }
-                struct ClientGuard { SOCKET value; ~ClientGuard() { closesocket(value); } } guard{client};
-                try {
-                    if (WSAEventSelect(client,nullptr,0)) throw Error("PROXY_IO","Client event reset failed");
-                    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-                    uint8_t prefix[2]{}; transfer(client,prefix,2,false,deadline);
-                    const auto length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
-                    if (length < 12) throw Error("DNS_MALFORMED","Client DNS frame too short");
-                    Packet request(length); transfer(client,request.data(),request.size(),false,deadline);
-                    auto response = process(request);
-                    if (!response.empty()) {
-                        Packet frame{static_cast<uint8_t>(response.size() >> 8),static_cast<uint8_t>(response.size())};
-                        frame.insert(frame.end(),response.begin(),response.end());
-                        transfer(client,frame.data(),frame.size(),true,std::chrono::steady_clock::now() + std::chrono::seconds(2));
-                    }
-                } catch (const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
+                if(!tcp_handlers.submit([this,client] { handle_client(client); })) {
+                    closesocket(client);
+                    logger.write(Level::errors_only,"PROXY_BUSY","Local TCP proxy connection limit reached");
+                }
             }
         } catch (const std::exception& error) { logger.write(Level::errors_only,"PROXY_IO",error.what()); state = State::error; SetEvent(stop_event); }
     }
@@ -156,11 +170,13 @@ void LocalProxy::start() {
         }
         if(p.udp==INVALID_SOCKET||p.tcp==INVALID_SOCKET) throw Error("PROXY_BIND","Cannot bind UDP/TCP listener pair: "+std::to_string(last_bind_error));
         if (WSAEventSelect(p.udp,p.udp_event,FD_READ) || WSAEventSelect(p.tcp,p.tcp_event,FD_ACCEPT)) throw Error("PROXY_IO","Cannot register socket events");
+        p.udp_handlers.start(8,1024); p.tcp_handlers.start(16,128);
         p.state = State::running;
         p.udp_worker = std::jthread([&p] { p.udp_loop(); }); p.tcp_worker = std::jthread([&p] { p.tcp_loop(); });
     } catch (...) {
         if (p.stop_event) SetEvent(p.stop_event);
         if (p.udp_worker.joinable()) p.udp_worker.join(); if (p.tcp_worker.joinable()) p.tcp_worker.join();
+        p.udp_handlers.stop(); p.tcp_handlers.stop();
         p.cleanup(); p.state = State::error; throw;
     }
 }
@@ -169,6 +185,7 @@ void LocalProxy::stop() {
     if (p.state == State::stopped) return;
     p.state = State::stopping; if (p.stop_event) SetEvent(p.stop_event);
     if (p.udp_worker.joinable()) p.udp_worker.join(); if (p.tcp_worker.joinable()) p.tcp_worker.join();
+    p.udp_handlers.stop(); p.tcp_handlers.stop();
     p.cleanup(); p.state = State::stopped;
 }
 InterceptionStatus LocalProxy::status() const { std::lock_guard lock(impl_->lifecycle); return {impl_->state.load(),impl_->bound_port,false,true,true}; }

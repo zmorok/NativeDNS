@@ -1,5 +1,6 @@
 #include <nativedns/interception.hpp>
 #include <nativedns/platform.hpp>
+#include "../../bounded_executor.hpp"
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -41,6 +42,7 @@ struct LocalProxy::Impl {
     mutable std::mutex lifecycle;
     Fd udp4,tcp4,udp6,tcp6;
     std::jthread udp4_worker,tcp4_worker,udp6_worker,tcp6_worker;
+    detail::BoundedExecutor udp_handlers,tcp_handlers;
 
     Impl(std::shared_ptr<const Router> r,Server o,Logger& l,uint16_t p):router(std::move(r)),original(std::move(o)),logger(l),requested_port(p){
         if(!router) throw Error("CONFIG","Local proxy requires a router");
@@ -53,15 +55,19 @@ struct LocalProxy::Impl {
         if(result.disposition==Disposition::forward_original){logger.write(Level::normal,"DNS_BYPASS","Forwarding intact request to original fallback "+original.ip);return make_transport(original.protocol)->exchange(request,original);}
         return result.packet;
     }
+    void handle_udp(int fd,Packet packet,sockaddr_storage client,socklen_t size){
+        try{const auto response=process(packet);if(!response.empty()){const auto sent=sendto(fd,response.data(),response.size(),MSG_NOSIGNAL,reinterpret_cast<sockaddr*>(&client),size);if(sent!=static_cast<ssize_t>(response.size()))sys_error("UDP reply send");}}
+        catch(const Error& e){logger.write(Level::errors_only,e.code,e.what());}
+        catch(const std::exception& e){logger.write(Level::errors_only,"PROXY_IO",e.what());}
+    }
     void udp_loop(int fd){
         while(running){
             sockaddr_storage client{};socklen_t size=sizeof(client);Packet packet(65535);
             const auto n=recvfrom(fd,packet.data(),packet.size(),0,reinterpret_cast<sockaddr*>(&client),&size);
             if(n<0){if(!running)break;if(errno==EINTR||errno==EAGAIN||errno==EWOULDBLOCK)continue;logger.write(Level::errors_only,"PROXY_IO",std::strerror(errno));state=State::error;break;}
             packet.resize(static_cast<size_t>(n));
-            try{const auto response=process(packet);if(!response.empty()){const auto sent=sendto(fd,response.data(),response.size(),MSG_NOSIGNAL,reinterpret_cast<sockaddr*>(&client),size);if(sent!=static_cast<ssize_t>(response.size()))sys_error("UDP reply send");}}
-            catch(const Error& e){logger.write(Level::errors_only,e.code,e.what());}
-            catch(const std::exception& e){logger.write(Level::errors_only,"PROXY_IO",e.what());}
+            if(!udp_handlers.submit([this,fd,packet=std::move(packet),client,size]() mutable {handle_udp(fd,std::move(packet),client,size);}))
+                logger.write(Level::errors_only,"PROXY_BUSY","Local UDP proxy queue is full; query dropped");
         }
     }
     void handle_client(int fd){
@@ -71,7 +77,7 @@ struct LocalProxy::Impl {
         } catch(const Error& e){if(running)logger.write(Level::errors_only,e.code,e.what());}
     }
     void tcp_loop(int fd){
-        while(running){const int client=accept(fd,nullptr,nullptr);if(client<0){if(!running)break;if(errno==EINTR||errno==EAGAIN||errno==EWOULDBLOCK)continue;logger.write(Level::errors_only,"PROXY_IO",std::strerror(errno));state=State::error;break;}handle_client(client);}
+        while(running){const int client=accept(fd,nullptr,nullptr);if(client<0){if(!running)break;if(errno==EINTR||errno==EAGAIN||errno==EWOULDBLOCK)continue;logger.write(Level::errors_only,"PROXY_IO",std::strerror(errno));state=State::error;break;}if(!tcp_handlers.submit([this,client]{handle_client(client);})) {::close(client);logger.write(Level::errors_only,"PROXY_BUSY","Local TCP proxy connection limit reached");}}
     }
     void close_listeners(){
         for(Fd* fd:{&udp4,&tcp4,&udp6,&tcp6}){if(fd->value>=0)::shutdown(fd->value,SHUT_RDWR);fd->reset();}
@@ -98,14 +104,16 @@ void LocalProxy::start(){
             last=errno;p.close_listeners();if(p.requested_port)break;
         }
         if(!p.bound_port)throw Error("PROXY_BIND","Cannot bind IPv4/IPv6 UDP/TCP loopback listeners: "+std::string(std::strerror(last)));
+        p.udp_handlers.start(8,1024);p.tcp_handlers.start(16,128);
         p.running=true;p.state=State::running;
         p.udp4_worker=std::jthread([&p]{p.udp_loop(p.udp4.value);});p.tcp4_worker=std::jthread([&p]{p.tcp_loop(p.tcp4.value);});
         p.udp6_worker=std::jthread([&p]{p.udp_loop(p.udp6.value);});p.tcp6_worker=std::jthread([&p]{p.tcp_loop(p.tcp6.value);});
-    }catch(...){p.running=false;p.close_listeners();p.bound_port=0;p.state=State::error;throw;}
+    }catch(...){p.running=false;p.close_listeners();p.udp_handlers.stop();p.tcp_handlers.stop();p.bound_port=0;p.state=State::error;throw;}
 }
 void LocalProxy::stop(){
     auto& p=*impl_;std::lock_guard lock(p.lifecycle);if(p.state==State::stopped)return;p.state=State::stopping;p.running=false;p.close_listeners();
     for(std::jthread* thread:{&p.udp4_worker,&p.tcp4_worker,&p.udp6_worker,&p.tcp6_worker})if(thread->joinable())thread->join();
+    p.udp_handlers.stop();p.tcp_handlers.stop();
     p.bound_port=0;p.state=State::stopped;
 }
 InterceptionStatus LocalProxy::status() const{std::lock_guard lock(impl_->lifecycle);return {impl_->state.load(),impl_->bound_port,false,true,true,{},{}};}
