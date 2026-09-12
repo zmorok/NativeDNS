@@ -149,6 +149,8 @@ std::vector<std::string> split(const std::string& text) {
     while (std::getline(stream, value, ';')) if (!value.empty()) out.push_back(value);
     return out;
 }
+std::string join_ids(const std::vector<uint32_t>& values) { std::string out;for(const auto value:values){if(!out.empty())out+=';';out+=std::to_string(value);}return out; }
+std::vector<uint32_t> split_ids(const std::string& text) { std::vector<uint32_t> out;for(const auto& value:split(text))out.push_back(number(value));return out; }
 void metadata(std::ostringstream& out, const std::map<std::string, std::string>& values) {
     for (const auto& [key, value] : values) out << "    <Meta" << field("key", key) << field("value", value) << "/>\n";
 }
@@ -240,7 +242,7 @@ std::string serialize_config(const Config& config) {
     for (const auto& s : config.servers) {
         out << "  <Server" << field("id", s.id) << field("name", s.name) << field("enabled", s.enabled) << field("protocol", protocol_name(s.protocol))
             << field("ip", s.ip) << field("port", s.port) << field("hostname", s.hostname) << field("url", s.url)
-            << field("dnssec", s.dnssec_supported) << field("timeout", s.timeout_ms) << field("bootstrap", join(s.bootstrap))
+            << field("dnssec", s.dnssec_supported) << field("timeout", s.timeout_ms) << field("fallbacks", join_ids(s.fallback_ids)) << field("bootstrap", join(s.bootstrap))
             << field("hashes", join(s.hashes)) << field("publicKey", s.public_key) << field("provider", s.provider_name) << field("relay", s.relay) << ">\n";
         metadata(out, s.metadata); out << "  </Server>\n";
     }
@@ -276,13 +278,13 @@ Config load_config(const std::filesystem::path& path) {
             config.logging.file = static_cast<Level>(num(node, "file", 1));
             config.logging.file_enabled = flag(node, "enabled", true); config.logging.directory = attr(node, "directory", "logs");
         } else if (node.name == "Server") {
-            known(node, {"id","name","enabled","protocol","ip","port","hostname","url","dnssec","timeout","bootstrap","hashes","publicKey","provider","relay"});
+            known(node, {"id","name","enabled","protocol","ip","port","hostname","url","dnssec","timeout","fallbacks","bootstrap","hashes","publicKey","provider","relay"});
             Server s;
             s.id = num(node, "id", 0); s.name = attr(node, "name"); s.enabled = flag(node, "enabled", true);
             s.protocol = protocol(attr(node, "protocol")); s.ip = attr(node, "ip");
             const auto port = num(node, "port", 0); if (port > 65535) throw Error("ENDPOINT", "Port out of range");
             s.port = static_cast<uint16_t>(port); s.hostname = attr(node, "hostname"); s.url = attr(node, "url");
-            s.dnssec_supported = flag(node, "dnssec", false); s.timeout_ms = num(node, "timeout", 3000);
+            s.dnssec_supported = flag(node, "dnssec", false); s.timeout_ms = num(node, "timeout", 3000);s.fallback_ids=split_ids(attr(node,"fallbacks"));
             s.bootstrap = split(attr(node, "bootstrap")); s.hashes = split(attr(node, "hashes"));
             s.public_key = attr(node, "publicKey"); s.provider_name = attr(node, "provider"); s.relay = attr(node, "relay");
             s.metadata = read_metadata(node); config.servers.push_back(std::move(s));

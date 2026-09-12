@@ -61,10 +61,14 @@ int main() {
         check(nd::match_rule(editor.get(), "discord.com").action == nd::Action::bypass, "Bypass retained");
         nd::Server plain; plain.id = 2000; plain.name = "Local"; plain.ip = "127.0.0.1";
         editor.add_server(plain); plain.enabled = false; editor.update_server(plain); editor.remove_server(2000);
+        auto cyclic=config;nd::Server first;first.id=2000;first.name="first";first.ip="127.0.0.1";first.fallback_ids={2001};nd::Server second=first;second.id=2001;second.name="second";second.fallback_ids={2000};cyclic.servers.push_back(first);cyclic.servers.push_back(second);
+        fails([&]{nd::validate(cyclic);});
         const auto directory = std::filesystem::current_path() / ("config-test-" + std::to_string(nd::platform::process_id()));
         std::filesystem::create_directories(directory);
         const auto path = directory / "native.xml";
         nd::save_config(config, path); check(nd::load_config(path) == config, "Semantic round trip including metadata");
+        auto grouped=config;grouped.servers.front().fallback_ids={1002};nd::save_config(grouped,path);check(nd::load_config(path)==grouped,"Fallback group round trip");
+        nd::save_config(config,path);
         auto changed = config; changed.logging.directory = "журнал & <test>"; changed.logging.file_enabled = true;
         nd::save_config(changed, path); check(nd::load_config(path) == changed, "Updated round trip");
         check(nd::load_config(path.string() + ".bak") == config, "Last valid backup");

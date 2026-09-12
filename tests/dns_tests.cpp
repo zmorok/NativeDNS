@@ -201,6 +201,13 @@ int main() {
             const auto first=persistent_router.route(first_query,original),second=persistent_router.route(second_query,original);peer.verify();
             check(first.packet.size()>12&&second.packet.size()>12&&peer.requests==2,"plain TCP reuses one upstream connection");
         }
+        {
+            Peer degraded(false,Mode::timeout,false,0,80,2),backup(false,Mode::good,false,0,1500,3);
+            auto health_config=nd::default_config();auto primary=degraded.server();primary.id=10;primary.name="primary";primary.fallback_ids={11};auto secondary=backup.server();secondary.id=11;secondary.name="backup";
+            health_config.servers={primary,secondary};health_config.rules.front().server_id=10;nd::Logger health_log;nd::Router health_router(health_config,health_log);
+            for(unsigned request=0;request<3;++request){const auto health_query=nd::make_query("health.example");const auto routed=health_router.route(health_query,primary);check(routed.server_id==11&&nd::parse_response(routed.packet,nd::parse_question(health_query)).addresses.size()==1,"fallback resolver response");}
+            degraded.verify();backup.verify();check(degraded.requests==2&&backup.requests==3,"unhealthy primary circuit and fallback reuse");
+        }
         for (const auto mode : {Mode::malformed,Mode::mismatch,Mode::servfail,Mode::no_data,Mode::timeout,Mode::eof}) {
             Peer peer(true,mode); nd::Logger logger;
             const auto result = nd::test_server(peer.server(),"example.com",1,&logger); peer.verify();

@@ -1,6 +1,8 @@
 #include <nativedns/router.hpp>
 #include <algorithm>
+#include <functional>
 #include <iomanip>
+#include <set>
 #include <sstream>
 namespace nd {
 namespace {
@@ -36,6 +38,58 @@ Packet Router::exchange(const Packet& request,const Server& server) const {
     std::call_once(transport_once_[index],[this,index,&server]{transports_[index]=make_transport(server.protocol);});
     return transports_[index]->exchange(request,server);
 }
+std::pair<Packet,const Server*> Router::exchange_group(const Packet& request,const Server& primary) const {
+    if(!primary.id||primary.fallback_ids.empty())return{exchange(request,primary),&primary};
+    std::vector<const Server*> candidates;std::set<uint32_t> added;
+    std::function<void(const Server&)> append=[&](const Server& server){
+        if(!added.insert(server.id).second)return;candidates.push_back(&server);
+        for(const auto id:server.fallback_ids){const auto found=std::find_if(config_.servers.begin(),config_.servers.end(),[&](const Server& value){return value.id==id;});if(found!=config_.servers.end())append(*found);}
+    };
+    append(primary);
+    std::erase_if(candidates,[](const Server* server){return !server->enabled;});
+    if(candidates.empty())throw Error("SERVER_DISABLED","All servers in fallback group are disabled");
+    const auto started=std::chrono::steady_clock::now();
+    uint64_t budget_ms=0;for(const auto* server:candidates)budget_ms=std::min<uint64_t>(120000,budget_ms+server->timeout_ms);
+    const auto deadline=started+std::chrono::milliseconds(budget_ms);
+    {
+        std::lock_guard lock(health_mutex_);const auto now=std::chrono::steady_clock::now();for(const auto* candidate:candidates)health_.try_emplace(candidate->id);
+        const bool any_ready=std::any_of(candidates.begin(),candidates.end(),[&](const Server* server){return health_.at(server->id).retry_after<=now;});
+        std::stable_sort(candidates.begin(),candidates.end(),[&](const Server* left,const Server* right){
+            const auto& a=health_.at(left->id);const auto& b=health_.at(right->id);
+            const bool a_open=any_ready&&a.retry_after>now,b_open=any_ready&&b.retry_after>now;
+            if(a_open!=b_open)return !a_open;
+            const bool a_probe=a.consecutive_failures>=2&&a.retry_after<=now,b_probe=b.consecutive_failures>=2&&b.retry_after<=now;
+            if(a_probe!=b_probe)return a_probe;
+            if(a.latency_ms&&b.latency_ms)return *a.latency_ms<*b.latency_ms;
+            return false;
+        });
+    }
+    std::string last_code="UPSTREAM_UNAVAILABLE",last_message="No upstream attempt completed";
+    for(const auto* candidate:candidates) {
+        const auto now=std::chrono::steady_clock::now();if(now>=deadline)break;
+        {
+            std::lock_guard lock(health_mutex_);
+            const bool another_ready=std::any_of(candidates.begin(),candidates.end(),[&](const Server* server){return server!=candidate&&health_[server->id].retry_after<=now;});
+            if(health_[candidate->id].retry_after>now&&another_ready)continue;
+        }
+        auto attempt=*candidate;
+        const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-now).count();
+        attempt.timeout_ms=static_cast<uint32_t>(std::min<int64_t>(attempt.timeout_ms,std::max<int64_t>(1,remaining)));
+        const auto attempt_started=std::chrono::steady_clock::now();
+        try {
+            auto packet=exchange(request,attempt);
+            const double elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-attempt_started).count();
+            {std::lock_guard lock(health_mutex_);auto& state=health_[candidate->id];state.consecutive_failures=0;state.retry_after={};state.latency_ms=state.latency_ms?(*state.latency_ms*0.8+elapsed*0.2):elapsed;}
+            return{std::move(packet),candidate};
+        } catch(const Error& error) {
+            last_code=error.code;last_message=error.what();
+            unsigned failures=0;
+            {std::lock_guard lock(health_mutex_);auto& state=health_[candidate->id];failures=++state.consecutive_failures;if(failures>=2){const auto shift=std::min(failures-2,3u);state.retry_after=std::chrono::steady_clock::now()+std::chrono::seconds(30u<<shift);}}
+            logger_.write(Level::verbose,"UPSTREAM_FAILOVER","server="+candidate->name+" failure="+last_code+" consecutive="+std::to_string(failures));
+        }
+    }
+    throw Error(last_code,"Fallback group exhausted: "+last_message);
+}
 RouteResult Router::route(const Packet& request, const Server& original) const {
     RouteResult result;
     Question question;
@@ -70,7 +124,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         selected_server=server;
         logger_.write(Level::verbose,"DNS_UPSTREAM","name="+question.name+" server="+server->name+" protocol="+protocol_name(server->protocol)+" address="+server->ip+" port="+std::to_string(server->port));
         exchange_started=std::chrono::steady_clock::now();
-        result.packet = exchange(request,*server);
+        auto exchanged=exchange_group(request,*server);result.packet=std::move(exchanged.first);selected_server=exchanged.second;if(rule.server_id)result.server_id=selected_server->id;
         const auto parsed = parse_response(result.packet,question);
         const auto elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-exchange_started).count();
         if (parsed.rcode) {

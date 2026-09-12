@@ -58,6 +58,7 @@ Server fields include:
 - hostname;
 - URL;
 - bootstrap servers;
+- ordered fallback server IDs;
 - DNSSEC capability metadata;
 - timeout;
 - hashes/pins;
@@ -66,6 +67,8 @@ Server fields include:
 - imported metadata.
 
 Server ID `0` is reserved as the original/system destination sentinel and is not a normal configured server.
+
+The optional semicolon-separated `fallbacks` attribute defines a server group rooted at that server. References must exist, be unique, and form an acyclic graph. A request uses a bounded aggregate deadline across the enabled candidates; it never falls back implicitly to the system resolver.
 
 ## Rules
 

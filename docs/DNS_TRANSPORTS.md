@@ -82,6 +82,8 @@ Rules are applied before upstream I/O.
 - `Bypass` preserves the original resolver path.
 - `Block` returns the configured blocking behavior.
 
+Configured upstreams may name an ordered fallback group. Transport failures advance to another enabled member within a bounded aggregate deadline. Two consecutive failures open a per-server circuit for 30 seconds with capped exponential backoff; an expired circuit receives a recovery probe. Successful RTT is tracked as an EWMA and ranks already-observed healthy members. DNS RCODE responses are valid transport results and do not trigger fallback.
+
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
 
 Before transparent interception starts, enabled DoH/DoT hostnames that have neither a numeric connection IP nor explicit bootstrap resolvers are resolved once through the system resolver. The resulting numeric address is retained only in the runtime configuration; the original hostname remains the TLS identity. Secure requests never perform implicit system resolution after interception has started.

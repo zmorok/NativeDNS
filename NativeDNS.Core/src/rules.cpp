@@ -2,6 +2,7 @@
 #include <nativedns/dnscrypt.hpp>
 #include <nativedns/platform.hpp>
 #include <algorithm>
+#include <functional>
 #include <set>
 
 namespace nd {
@@ -135,7 +136,21 @@ void validate(const Config& config) {
             auto authority = server.url.substr(8, server.url.find('/', 8) == std::string::npos ? std::string::npos : server.url.find('/', 8) - 8);
             if (authority.empty()) throw Error("ENDPOINT", "Empty DoH host");
         }
+        std::set<uint32_t> fallbacks;
+        for(const auto fallback:server.fallback_ids)
+            if(!fallback||fallback==server.id||!fallbacks.insert(fallback).second)throw Error("SERVER_FALLBACK","Fallback IDs must be nonzero, unique, and different from the primary server");
     }
+    std::map<uint32_t,const Server*> servers;
+    for(const auto& server:config.servers)servers.emplace(server.id,&server);
+    for(const auto& server:config.servers)for(const auto fallback:server.fallback_ids)
+        if(!servers.contains(fallback))throw Error("SERVER_FALLBACK","Fallback references a missing server");
+    std::set<uint32_t> visiting,visited;
+    std::function<void(uint32_t)> visit=[&](uint32_t id){
+        if(visited.contains(id))return;if(!visiting.insert(id).second)throw Error("SERVER_FALLBACK","Fallback graph contains a cycle");
+        for(const auto fallback:servers.at(id)->fallback_ids)visit(fallback);
+        visiting.erase(id);visited.insert(id);
+    };
+    for(const auto& server:config.servers)visit(server.id);
     std::set<uint32_t> rule_ids;
     for (size_t i = 0; i < config.rules.size(); ++i) {
         const auto& rule = config.rules[i];
