@@ -265,7 +265,7 @@ struct WinDivertInterception::Impl {
             auto routed=router.route(query,original_server(job.packet,view));
             if(routed.disposition==Disposition::forward_original) { inject(job.packet,job.address); return; }
             if(routed.disposition==Disposition::silent_drop||routed.packet.empty()) return;
-            auto response=make_intercepted_udp_response(job.packet,routed.packet); job.address.Outbound=0; job.address.IPChecksum=0; job.address.UDPChecksum=0;
+            auto response=make_intercepted_udp_response(job.packet,fit_udp_response(query,routed.packet)); job.address.Outbound=0; job.address.IPChecksum=0; job.address.UDPChecksum=0;
             inject(response,job.address);
         } catch(const Error& error) { logger.write(Level::errors_only,error.code,error.what()); }
     }

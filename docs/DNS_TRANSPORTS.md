@@ -83,3 +83,5 @@ On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID
 Custom upstream routing uses a bounded worker queue sized to absorb short bursts. Worker count scales with available processors within fixed limits. If the application queue is saturated, NativeDNS returns `SERVFAIL` and emits rate-limited saturation diagnostics instead of silently dropping the captured query or bypassing its rule.
 
 IPv4 and IPv6 fragments are excluded from transparent interception and continue through the system network path unchanged. IPv6 Hop-by-Hop, Routing, Destination Options, atomic Fragment, and Authentication extension headers are parsed when they precede UDP or TCP DNS. A captured packet with an unsupported or malformed extension chain is logged and reinjected unchanged.
+
+UDP replies respect the request's EDNS(0) advertised payload size. NativeDNS uses the classic 512-byte limit when the request has no OPT record and caps EDNS UDP replies at 1232 bytes to avoid common-path IP fragmentation. A larger upstream answer is returned as a question-preserving response with `TC=1`, allowing a conforming client to retry over TCP.

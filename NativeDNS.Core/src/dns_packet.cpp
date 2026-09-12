@@ -85,6 +85,39 @@ Packet make_error_response(const Packet& request,uint16_t rcode) {
     for(size_t i=6;i<12;++i) response[i]=0;
     return response;
 }
+uint16_t client_udp_payload_size(std::span<const uint8_t> request) {
+    constexpr uint16_t legacy_size=512,server_limit=1232;
+    const auto question=parse_question(request);
+    if(question.flags&0x8000) throw Error("DNS_MALFORMED","Expected query, not response");
+    const uint32_t answers=word(request,6),authority=word(request,8),additional=word(request,10);
+    if(answers+authority+additional>4096) throw Error("DNS_MALFORMED","Too many DNS records");
+    size_t at=question.end;bool opt_seen=false;uint16_t advertised=legacy_size;
+    for(uint32_t i=0;i<answers+authority+additional;++i) {
+        const auto owner=name(request,at);
+        const auto type=word(request,at),klass=word(request,at+2),length=word(request,at+8);
+        if(request.size()-at<10||length>request.size()-(at+10)) throw Error("DNS_MALFORMED","Truncated DNS record");
+        if(type==41) {
+            if(opt_seen||!owner.empty()||i<answers+authority) throw Error("DNS_MALFORMED","Invalid OPT record");
+            opt_seen=true;advertised=std::max<uint16_t>(legacy_size,klass);
+        }
+        at+=10+length;
+    }
+    if(at!=request.size()) throw Error("DNS_MALFORMED","Unexpected bytes after DNS records");
+    return std::min<uint16_t>(advertised,server_limit);
+}
+Packet fit_udp_response(const Packet& request,const Packet& response) {
+    const auto limit=client_udp_payload_size(request);
+    if(response.size()<=limit) return response;
+    const auto expected=parse_question(request),actual=parse_question(response);
+    if(!(actual.flags&0x8000)||actual.id!=expected.id||actual.name!=expected.name||actual.type!=expected.type||actual.klass!=expected.klass)
+        throw Error("DNS_MISMATCH","DNS response does not match request");
+    Packet truncated(response.begin(),response.begin()+static_cast<ptrdiff_t>(actual.end));
+    const uint16_t flags=static_cast<uint16_t>(word(response,2)|0x0200);
+    truncated[2]=static_cast<uint8_t>(flags>>8);truncated[3]=static_cast<uint8_t>(flags);
+    truncated[4]=0;truncated[5]=1;
+    for(size_t i=6;i<12;++i) truncated[i]=0;
+    return truncated;
+}
 Question parse_question(std::span<const uint8_t> packet) {
     if (packet.size() < 12 || packet.size() > 65535 || word(packet, 4) != 1) throw Error("DNS_MALFORMED", "Expected one DNS question and bounded header");
     Question q; q.id = word(packet, 0); q.flags = word(packet, 2);

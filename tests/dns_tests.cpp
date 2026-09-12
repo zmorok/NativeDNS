@@ -35,6 +35,16 @@ nd::Packet reply(const nd::Packet& query, bool v6 = false) {
     else { result.insert(result.end(), {192,0,2,42}); }
     return result;
 }
+nd::Packet with_edns(nd::Packet query,uint16_t payload_size) {
+    query[10]=0;query[11]=1;
+    query.insert(query.end(),{0,0,41,static_cast<uint8_t>(payload_size>>8),static_cast<uint8_t>(payload_size),0,0,0,0,0,0});
+    return query;
+}
+nd::Packet padded_response(const nd::Packet& query,size_t padding) {
+    auto result=reply(query);result[10]=0;result[11]=1;
+    result.insert(result.end(),{0,0,41,4,208,0,0,0,0,static_cast<uint8_t>(padding>>8),static_cast<uint8_t>(padding)});
+    result.insert(result.end(),padding,0);return result;
+}
 enum class Mode { good, malformed, mismatch, servfail, no_data, timeout, eof, truncated };
 // Test-only loopback peer. This exercises actual OS socket traffic, not a production transport substitute.
 class Peer {
@@ -143,6 +153,13 @@ int main() {
         auto query = nd::make_query("example.com"); const auto q = nd::parse_question(query);
         const auto servfail=nd::make_error_response(query,2);const auto servfail_parsed=nd::parse_response(servfail,q);
         check(servfail_parsed.rcode==2&&servfail.size()==q.end,"bounded SERVFAIL preserves the DNS question");
+        check(nd::client_udp_payload_size(query)==512,"legacy UDP DNS payload limit");
+        const auto edns_query=with_edns(query,1400);check(nd::client_udp_payload_size(edns_query)==1232,"EDNS payload is capped to fragmentation-safe size");
+        const auto legacy_large=padded_response(query,600);const auto legacy_truncated=nd::fit_udp_response(query,legacy_large);
+        check(legacy_truncated.size()<=512&&nd::parse_response(legacy_truncated,q).truncated,"legacy oversized response requests TCP retry");
+        const auto edns_medium=padded_response(query,700);check(nd::fit_udp_response(edns_query,edns_medium)==edns_medium,"EDNS response fits advertised payload");
+        const auto edns_large=padded_response(query,1300);const auto edns_truncated=nd::fit_udp_response(edns_query,edns_large);
+        check(edns_truncated.size()<=1232&&nd::parse_response(edns_truncated,q).truncated,"oversized EDNS response requests TCP retry");
         auto good = reply(query); check(nd::parse_response(good,q).addresses == std::vector<std::string>{"192.0.2.42"},"decode compressed answer");
         auto bad = good; bad[0] ^= 1; fails([&] { (void)nd::parse_response(bad,q); });
         bad = good; bad[q.end] = 0xc0; bad[q.end+1] = static_cast<uint8_t>(q.end); fails([&] { (void)nd::parse_response(bad,q); });

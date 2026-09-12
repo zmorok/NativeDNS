@@ -56,7 +56,7 @@ struct LocalProxy::Impl {
         return result.packet;
     }
     void handle_udp(int fd,Packet packet,sockaddr_storage client,socklen_t size){
-        try{const auto response=process(packet);if(!response.empty()){const auto sent=sendto(fd,response.data(),response.size(),MSG_NOSIGNAL,reinterpret_cast<sockaddr*>(&client),size);if(sent!=static_cast<ssize_t>(response.size()))sys_error("UDP reply send");}}
+        try{const auto response=fit_udp_response(packet,process(packet));if(!response.empty()){const auto sent=sendto(fd,response.data(),response.size(),MSG_NOSIGNAL,reinterpret_cast<sockaddr*>(&client),size);if(sent!=static_cast<ssize_t>(response.size()))sys_error("UDP reply send");}}
         catch(const Error& e){logger.write(Level::errors_only,e.code,e.what());}
         catch(const std::exception& e){logger.write(Level::errors_only,"PROXY_IO",e.what());}
     }

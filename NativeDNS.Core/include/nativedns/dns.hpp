@@ -18,6 +18,8 @@ struct DnsAnswer {
 };
 Packet make_query(const std::string& hostname, uint16_t type = 1);
 Packet make_error_response(const Packet& request, uint16_t rcode);
+uint16_t client_udp_payload_size(std::span<const uint8_t> request);
+Packet fit_udp_response(const Packet& request, const Packet& response);
 Question parse_question(std::span<const uint8_t> packet);
 DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expected);
 std::string dns_type_name(uint16_t type);
