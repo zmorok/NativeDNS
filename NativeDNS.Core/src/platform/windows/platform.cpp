@@ -7,11 +7,16 @@
 #include <vector>
 #include <cstring>
 #include <sstream>
+#include <set>
 
 namespace nd::platform {
 namespace {
 void sodium_ready() {
     static const bool ready=[] { if(sodium_init()<0) throw Error("CRYPTO_INIT","libsodium initialization failed"); return true; }();
+    (void)ready;
+}
+void winsock_ready() {
+    static const bool ready=[] { WSADATA data{}; const int rc=WSAStartup(MAKEWORD(2,2),&data); if(rc) throw Error("SOCKET_INIT","WSAStartup: "+std::to_string(rc)); return true; }();
     (void)ready;
 }
 }
@@ -79,6 +84,39 @@ void wait_socket(std::intptr_t raw,bool writing,std::chrono::steady_clock::time_
     if(rc<0) throw Error("SOCKET","Socket wait failed: Winsock "+std::to_string(WSAGetLastError()));
 }
 void configure_upstream_socket(std::intptr_t) {}
+uint16_t prepare_upstream_socket(std::intptr_t raw,bool) {
+    winsock_ready();
+    const SOCKET socket=static_cast<SOCKET>(raw);
+    WSAPROTOCOL_INFOW info{}; int info_size=sizeof(info);
+    if(getsockopt(socket,SOL_SOCKET,SO_PROTOCOL_INFOW,reinterpret_cast<char*>(&info),&info_size)==SOCKET_ERROR)
+        throw Error("SOCKET","Cannot inspect secure upstream socket: Winsock "+std::to_string(WSAGetLastError()));
+    sockaddr_storage local{}; int local_size=info.iAddressFamily==AF_INET?sizeof(sockaddr_in):sizeof(sockaddr_in6);
+    local.ss_family=static_cast<ADDRESS_FAMILY>(info.iAddressFamily);
+    if(bind(socket,reinterpret_cast<const sockaddr*>(&local),local_size)==SOCKET_ERROR&&WSAGetLastError()!=WSAEINVAL)
+        throw Error("SOCKET","Cannot bind secure upstream socket: Winsock "+std::to_string(WSAGetLastError()));
+    if(getsockname(socket,reinterpret_cast<sockaddr*>(&local),&local_size)==SOCKET_ERROR)
+        throw Error("SOCKET","Cannot inspect secure upstream endpoint: Winsock "+std::to_string(WSAGetLastError()));
+    return ntohs(info.iAddressFamily==AF_INET?reinterpret_cast<const sockaddr_in*>(&local)->sin_port
+                                            :reinterpret_cast<const sockaddr_in6*>(&local)->sin6_port);
+}
+int close_upstream_socket(std::intptr_t raw) noexcept { return closesocket(static_cast<SOCKET>(raw))==0?0:1; }
+std::vector<std::string> resolve_host(const std::string& hostname) {
+    winsock_ready();
+    addrinfo hints{}; hints.ai_family=AF_UNSPEC; hints.ai_socktype=SOCK_STREAM; hints.ai_flags=AI_ADDRCONFIG;
+    addrinfo* addresses=nullptr; const int rc=getaddrinfo(hostname.c_str(),nullptr,&hints,&addresses);
+    if(rc) throw Error("BOOTSTRAP","Cannot resolve secure upstream "+hostname+": Winsock "+std::to_string(rc));
+    std::unique_ptr<addrinfo,decltype(&freeaddrinfo)> cleanup(addresses,&freeaddrinfo);
+    std::vector<std::string> result; std::set<std::string> unique;
+    for(auto* address=addresses;address;address=address->ai_next) {
+        const bool ipv6=address->ai_family==AF_INET6;
+        if(address->ai_family!=AF_INET&&!ipv6)continue;
+        const void* bytes=ipv6?static_cast<const void*>(&reinterpret_cast<const sockaddr_in6*>(address->ai_addr)->sin6_addr)
+                              :static_cast<const void*>(&reinterpret_cast<const sockaddr_in*>(address->ai_addr)->sin_addr);
+        auto text=format_ip(bytes,ipv6);if(unique.insert(text).second)result.push_back(std::move(text));
+    }
+    if(result.empty())throw Error("BOOTSTRAP","Secure upstream hostname has no usable address: "+hostname);
+    return result;
+}
 void atomic_publish_file(const std::filesystem::path& temp,const std::filesystem::path& target,const std::filesystem::path& backup){
     if(std::filesystem::exists(target)) {
         if(!ReplaceFileW(target.c_str(),temp.c_str(),backup.c_str(),REPLACEFILE_WRITE_THROUGH,nullptr,nullptr))

@@ -16,6 +16,7 @@ CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string
     :config_(std::move(config)),original_(std::move(original)),local_port_(local_port),pipe_name_(std::move(pipe_name)),
       log_pipe_name_(pipe_name_==core_pipe_name?core_log_pipe_name:pipe_name_+".logs"),logger_(4096){
     validate(config_);
+    if(mode==InterceptionMode::transparent)prepare_secure_endpoints(config_);
     if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
     try{logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;}
     catch(const std::exception& error){logger_.write(Level::errors_only,"FILE_LOG_INIT_FAILED",error.what());}

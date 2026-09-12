@@ -82,7 +82,11 @@ Rules are applied before upstream I/O.
 
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
 
-On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID `0` are reinjected directly from the WinDivert receive loop. They never wait behind custom-upstream work in the routing worker queue. This is also the path that lets the operating-system resolver complete hostname lookup for DoH/DoT endpoints when neither `ip` nor `bootstrap` is configured. Explicit bootstrap behavior and configuration semantics are unchanged.
+Before transparent interception starts, enabled DoH/DoT hostnames that have neither a numeric connection IP nor explicit bootstrap resolvers are resolved once through the system resolver. The resulting numeric address is retained only in the runtime configuration; the original hostname remains the TLS identity. Secure requests never perform implicit system resolution after interception has started.
+
+On Windows, every libcurl-created secure TCP socket is bound before connect and its ephemeral source port remains registered with the same self-bypass registry used by plain DNS until libcurl closes the socket. On Linux, secure sockets receive the NativeDNS `SO_MARK` used by the nftables loop-prevention rules.
+
+On Windows, captured UDP queries matched by `Bypass` or `Process` with server ID `0` are reinjected directly from the WinDivert receive loop. They never wait behind custom-upstream work in the routing worker queue. Explicit bootstrap queries use guarded plain DNS sockets and cannot be captured recursively.
 
 Custom upstream routing uses a bounded worker queue sized to absorb short bursts. Worker count scales with available processors within fixed limits. If the application queue is saturated, NativeDNS returns `SERVFAIL` and emits rate-limited saturation diagnostics instead of silently dropping the captured query or bypassing its rule.
 

@@ -1,4 +1,5 @@
 #include <nativedns/dns.hpp>
+#include <nativedns/dns_network.hpp>
 #include <nativedns/platform.hpp>
 #include <curl/curl.h>
 #include <algorithm>
@@ -25,9 +26,10 @@ struct CurlGlobal {
     ~CurlGlobal() { curl_global_cleanup(); }
 };
 struct CurlHandle {
-    CURL* value;
+    CURL* value = nullptr;
     char error_buffer[CURL_ERROR_SIZE]{};
-    CurlHandle() { static CurlGlobal global; value = curl_easy_init(); if (!value) throw Error("MEMORY", "Cannot initialize TLS/HTTP handle"); set(CURLOPT_ERRORBUFFER,error_buffer); }
+    std::map<curl_socket_t,std::unique_ptr<detail::NetworkUpstreamGuard>> upstream_sockets;
+    CurlHandle() { static CurlGlobal global; value = curl_easy_init(); if (!value) throw Error("MEMORY", "Cannot initialize TLS/HTTP handle"); set_callbacks(); }
     ~CurlHandle() { curl_easy_cleanup(value); }
     template<typename T> void set(CURLoption option, T v) { curl_check(curl_easy_setopt(value, option, v)); }
     void perform() {
@@ -42,7 +44,33 @@ struct CurlHandle {
     void reset() noexcept {
         curl_easy_reset(value);
         std::fill(std::begin(error_buffer),std::end(error_buffer),'\0');
+        set_callbacks_noexcept();
+    }
+private:
+    static int configure_socket(void* context,curl_socket_t socket,curlsocktype purpose) noexcept {
+        try {
+            auto& self=*static_cast<CurlHandle*>(context);
+            const uint16_t port=platform::prepare_upstream_socket(static_cast<std::intptr_t>(socket),purpose==CURLSOCKTYPE_IPCXN);
+            if(port&&!self.upstream_sockets.contains(socket))
+                self.upstream_sockets.emplace(socket,std::make_unique<detail::NetworkUpstreamGuard>(true,port));
+            return CURL_SOCKOPT_OK;
+        } catch (...) { return CURL_SOCKOPT_ERROR; }
+    }
+    static int close_socket(void* context,curl_socket_t socket) noexcept {
+        auto& self=*static_cast<CurlHandle*>(context);
+        const int result=platform::close_upstream_socket(static_cast<std::intptr_t>(socket));
+        self.upstream_sockets.erase(socket);
+        return result;
+    }
+    void set_callbacks() {
+        set(CURLOPT_ERRORBUFFER,error_buffer);
+        set(CURLOPT_SOCKOPTFUNCTION,&CurlHandle::configure_socket);set(CURLOPT_SOCKOPTDATA,this);
+        set(CURLOPT_CLOSESOCKETFUNCTION,&CurlHandle::close_socket);set(CURLOPT_CLOSESOCKETDATA,this);
+    }
+    void set_callbacks_noexcept() noexcept {
         (void)curl_easy_setopt(value,CURLOPT_ERRORBUFFER,error_buffer);
+        (void)curl_easy_setopt(value,CURLOPT_SOCKOPTFUNCTION,&CurlHandle::configure_socket);(void)curl_easy_setopt(value,CURLOPT_SOCKOPTDATA,this);
+        (void)curl_easy_setopt(value,CURLOPT_CLOSESOCKETFUNCTION,&CurlHandle::close_socket);(void)curl_easy_setopt(value,CURLOPT_CLOSESOCKETDATA,this);
     }
 };
 struct List {
@@ -67,11 +95,6 @@ uint32_t remaining(Clock::time_point deadline) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
     if (ms <= 0) throw Error("TIMEOUT", "Secure DNS deadline exceeded");
     return static_cast<uint32_t>(ms);
-}
-
-int configure_curl_socket(void*, curl_socket_t socket, curlsocktype) noexcept {
-    try { platform::configure_upstream_socket(static_cast<std::intptr_t>(socket)); return CURL_SOCKOPT_OK; }
-    catch (...) { return CURL_SOCKOPT_ERROR; }
 }
 
 size_t receive_body(char* data, size_t size, size_t count, void* context) noexcept {
@@ -129,7 +152,6 @@ private:
         const auto port = parsed.get(CURLUPART_PORT,CURLU_DEFAULT_PORT);
         if (host.empty() || port.empty()) throw Error("ENDPOINT","Missing HTTPS host/port");
         handle.set(CURLOPT_URL,url.c_str());
-        handle.set(CURLOPT_SOCKOPTFUNCTION,&configure_curl_socket);
         handle.set(CURLOPT_PROTOCOLS_STR,"https");
         handle.set(CURLOPT_SSL_VERIFYPEER,1L); handle.set(CURLOPT_SSL_VERIFYHOST,2L);
         handle.set(CURLOPT_SSLVERSION,static_cast<long>(CURL_SSLVERSION_TLSv1_2));
@@ -140,6 +162,12 @@ private:
         handle.set(CURLOPT_MAXLIFETIME_CONN,300L);
         handle.set(CURLOPT_SSL_ENABLE_ALPN,dot_ ? 0L : 1L);
         // Never use environment proxy, user credentials, or .netrc (also disabled in build).
+        std::string pins;
+        for (const auto& pin : server.hashes) {
+            if (!pin.starts_with("sha256//") || pin.size() != 52) throw Error("TLS_PIN","Only sha256// base64 SPKI pins are supported");
+            if (!pins.empty()) pins += ';';
+            pins += pin;
+        }
         std::string endpoint = server.ip;
         if (endpoint.empty() && !server.bootstrap.empty()) {
             std::string failure;
@@ -155,6 +183,7 @@ private:
             }
             if (endpoint.empty()) throw Error("BOOTSTRAP","Explicit bootstrap failed: " + failure);
         }
+        if(endpoint.empty())throw Error("BOOTSTRAP","Secure upstream requires a numeric endpoint prepared before interception or an explicit bootstrap resolver");
         List resolve;
         if (!endpoint.empty()) {
             // Numeric endpoint validation is independent of certificate identity.
@@ -162,12 +191,6 @@ private:
             auto config = default_config(); config.servers.push_back(numeric); validate(config);
             resolve.add(host + ":" + port + ":" + (endpoint.find(':') == std::string::npos ? endpoint : "[" + endpoint + "]"));
             handle.set(CURLOPT_RESOLVE,resolve.value);
-        }
-        std::string pins;
-        for (const auto& pin : server.hashes) {
-            if (!pin.starts_with("sha256//") || pin.size() != 52) throw Error("TLS_PIN","Only sha256// base64 SPKI pins are supported");
-            if (!pins.empty()) pins += ';';
-            pins += pin;
         }
         if (!pins.empty()) handle.set(CURLOPT_PINNEDPUBLICKEY,pins.c_str());
         handle.set(CURLOPT_TIMEOUT_MS,static_cast<long>(remaining(deadline)));
@@ -224,6 +247,26 @@ private:
     std::mutex pool_mutex_;std::condition_variable pool_changed_;
     std::map<std::string,std::vector<std::shared_ptr<Entry>>> pool_;
 };
+}
+void prepare_secure_endpoints(Config& config) {
+    for(auto& server:config.servers) {
+        if(!server.enabled||(server.protocol!=Protocol::doh&&server.protocol!=Protocol::dot)||!server.ip.empty()||!server.bootstrap.empty())continue;
+        std::string hostname;
+        if(server.protocol==Protocol::dot)hostname=normalize_host(server.hostname);
+        else {
+            Url parsed(server.url);
+            if(parsed.get(CURLUPART_SCHEME)!="https")throw Error("ENDPOINT","Secure DNS URL must use HTTPS");
+            hostname=parsed.get(CURLUPART_HOST);
+        }
+        if(hostname.empty())throw Error("ENDPOINT","Secure DNS endpoint hostname is empty");
+        if(hostname.size()>2&&hostname.front()=='['&&hostname.back()==']')hostname=hostname.substr(1,hostname.size()-2);
+        if(platform::is_numeric_ip(hostname))server.ip=hostname;
+        else {
+            const auto addresses=platform::resolve_host(hostname);
+            if(addresses.empty())throw Error("BOOTSTRAP","Secure upstream hostname has no usable address: "+hostname);
+            server.ip=addresses.front();
+        }
+    }
 }
 std::unique_ptr<IDnsTransport> make_secure_transport(Protocol protocol) { return std::make_unique<SecureTransport>(protocol == Protocol::dot); }
 }

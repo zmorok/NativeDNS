@@ -29,6 +29,10 @@ public:
     virtual Packet exchange(const Packet& request, const Server& server) = 0;
 };
 std::unique_ptr<IDnsTransport> make_transport(Protocol protocol);
+// Resolve secure endpoints before transparent interception is enabled. The
+// returned configuration contains numeric connection endpoints while retaining
+// the configured hostname for TLS identity verification.
+void prepare_secure_endpoints(Config& config);
 struct TestResult {
     bool success = false;
     Protocol protocol = Protocol::udp;

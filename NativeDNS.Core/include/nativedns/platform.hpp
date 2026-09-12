@@ -6,6 +6,7 @@
 #include <string>
 #include <ctime>
 #include <memory>
+#include <vector>
 
 namespace nd::platform {
 
@@ -38,6 +39,9 @@ private:
 };
 void wait_socket(std::intptr_t socket, bool writing, std::chrono::steady_clock::time_point deadline);
 void configure_upstream_socket(std::intptr_t socket);
+uint16_t prepare_upstream_socket(std::intptr_t socket, bool tcp);
+int close_upstream_socket(std::intptr_t socket) noexcept;
+std::vector<std::string> resolve_host(const std::string& hostname);
 void atomic_publish_file(const std::filesystem::path& temp, const std::filesystem::path& target, const std::filesystem::path& backup);
 void local_time(std::time_t instant, std::tm& output);
 
