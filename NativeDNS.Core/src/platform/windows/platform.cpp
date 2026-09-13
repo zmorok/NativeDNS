@@ -72,17 +72,21 @@ std::filesystem::path privileged_log_directory(){
 void prepare_privileged_log_directory(){
     const auto logs=privileged_log_directory(),root=logs.parent_path();
     HANDLE token=nullptr;
-    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&token))throw Error("LOG_SECURITY","Cannot inspect elevated token");
+    if(!OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY|TOKEN_ADJUST_PRIVILEGES,&token))throw Error("LOG_SECURITY","Cannot inspect elevated token");
     DWORD token_size=0;GetTokenInformation(token,TokenUser,nullptr,0,&token_size);std::vector<uint8_t> token_data(token_size);
     if(!token_size||!GetTokenInformation(token,TokenUser,token_data.data(),token_size,&token_size)){CloseHandle(token);throw Error("LOG_SECURITY","Cannot read elevated user SID");}
+    LUID restore_luid{};const bool restore_known=LookupPrivilegeValueW(nullptr,SE_RESTORE_NAME,&restore_luid)!=FALSE;
+    TOKEN_PRIVILEGES restore_privilege{};restore_privilege.PrivilegeCount=1;restore_privilege.Privileges[0].Luid=restore_luid;restore_privilege.Privileges[0].Attributes=SE_PRIVILEGE_ENABLED;
+    SetLastError(ERROR_SUCCESS);const bool restore_enabled=restore_known&&AdjustTokenPrivileges(token,FALSE,&restore_privilege,sizeof(restore_privilege),nullptr,nullptr)!=FALSE&&GetLastError()==ERROR_SUCCESS;
     CloseHandle(token);
+    if(!restore_enabled)throw Error("LOG_SECURITY","Cannot enable protected log ownership privilege");
     wchar_t* user_sid=nullptr;
     if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(token_data.data())->User.Sid,&user_sid))throw Error("LOG_SECURITY","Cannot format elevated user SID");
-    const std::wstring sddl=L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GR;;;"+std::wstring(user_sid)+L")S:(ML;OICI;NW;;;HI)";LocalFree(user_sid);
+    const std::wstring sddl=L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GR;;;"+std::wstring(user_sid)+L")";LocalFree(user_sid);
     PSECURITY_DESCRIPTOR descriptor=nullptr;
     if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr))throw Error("LOG_SECURITY","Cannot create protected log ACL");
-    PACL dacl=nullptr,sacl=nullptr;BOOL present=FALSE,defaulted=FALSE;
-    if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted)||!present||!GetSecurityDescriptorSacl(descriptor,&present,&sacl,&defaulted)||!present){LocalFree(descriptor);throw Error("LOG_SECURITY","Cannot inspect protected log ACL");}
+    PACL dacl=nullptr;BOOL present=FALSE,defaulted=FALSE;
+    if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted)||!present){LocalFree(descriptor);throw Error("LOG_SECURITY","Cannot inspect protected log ACL");}
     try{
         for(const auto& directory:{root,logs}){
             if(!CreateDirectoryW(directory.c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)throw Error("LOG_SECURITY","Cannot create protected log directory: "+std::to_string(GetLastError()));
@@ -92,7 +96,7 @@ void prepare_privileged_log_directory(){
             const bool reparse=!GetFileInformationByHandleEx(handle,FileAttributeTagInfo,&attributes,sizeof(attributes))||(attributes.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
             DWORD admin_size=SECURITY_MAX_SID_SIZE;std::vector<uint8_t> admin_sid(admin_size);
             const bool admin=CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admin_sid.data(),&admin_size)!=FALSE;
-            const DWORD applied=admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION|LABEL_SECURITY_INFORMATION,admin_sid.data(),nullptr,dacl,sacl):ERROR_INVALID_SID;
+            const DWORD applied=admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,admin_sid.data(),nullptr,dacl,nullptr):ERROR_INVALID_SID;
             CloseHandle(handle);
             if(reparse)throw Error("LOG_SECURITY","Protected log directory must not be a reparse point");
             if(applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot secure protected log directory: "+std::to_string(applied));

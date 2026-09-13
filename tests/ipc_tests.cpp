@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <algorithm>
 
 namespace {
 std::filesystem::path find_diagnostic_log(const std::filesystem::path& directory) {
@@ -97,6 +98,16 @@ int main() {
             failed=false;try{retrying.start();}catch(const nd::Error&){failed=true;}
             check(failed&&retrying.status().state==nd::State::stopped,"interception failure rolls back partial local proxy startup");
             port_owner.stop();retrying.start();check(retrying.status().state==nd::State::running,"host retries after interception failure");retrying.stop();
+        }
+        if(!nd::platform::is_elevated()){
+            const auto obstruction=std::filesystem::current_path()/("ipc-log-obstruction-"+std::to_string(nd::platform::process_id()));
+            {std::ofstream stream(obstruction);stream<<"not a directory";}
+            auto logging_failure=rollback_config;logging_failure.logging.file_enabled=true;logging_failure.logging.directory=(obstruction/"logs").string();
+            nd::CoreHost tolerant(logging_failure,rollback_original,0,name+".LoggingFailure");
+            const auto events=tolerant.logger().snapshot(nd::Level::debug,0);
+            check(std::any_of(events.begin(),events.end(),[](const nd::LogEvent& event){return event.code=="FILE_LOG_INIT_FAILED";}),"file logging failure is diagnosed without aborting CoreHost construction");
+            tolerant.start();check(tolerant.status().state==nd::State::running,"optional file logging failure must not stop DNS core");tolerant.stop();
+            std::filesystem::remove(obstruction);
         }
         const auto host_name=name+".Host";
         const auto host_log_name=host_name+".logs";

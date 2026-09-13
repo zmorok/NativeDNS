@@ -20,8 +20,10 @@ CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
     if(mode==InterceptionMode::transparent)prepare_secure_endpoints(config_);
-    if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
-    try{logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;}
+    try{
+        if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
+        logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;
+    }
     catch(const std::exception& error){logger_.write(Level::errors_only,"FILE_LOG_INIT_FAILED",error.what());}
     logger_.write(Level::normal,"CORE_INITIALIZING","Core host initialization started");
     logger_.write(Level::normal,"SYSTEM_ENVIRONMENT",platform::system_summary());
