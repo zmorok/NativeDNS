@@ -107,6 +107,12 @@ public:
     void openPopup(){showPopup();}
 protected:
     void showPopup() override{
+        const bool dark=palette().color(QPalette::Window).lightness()<128;
+        view()->setStyleSheet(dark?
+            "QAbstractItemView { background-color: #252526; color: #f0f0f0; selection-background-color: #35495c; selection-color: #f0f0f0; outline: 0; }"
+            "QAbstractItemView::item:hover, QAbstractItemView::item:selected { background-color: #35495c; color: #f0f0f0; }"
+          : "QAbstractItemView { background-color: #ffffff; color: #202020; selection-background-color: #d7ebf9; selection-color: #202020; outline: 0; }"
+            "QAbstractItemView::item:hover, QAbstractItemView::item:selected { background-color: #d7ebf9; color: #202020; }");
         QComboBox::showPopup();
         QPointer<QWidget> popup=view()->window();
         QTimer::singleShot(0,this,[this,popup]{

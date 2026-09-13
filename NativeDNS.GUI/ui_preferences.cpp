@@ -154,7 +154,6 @@ void applyUiTheme(QApplication& application,bool dark){
         "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled { background-color: #2e2e30; color: #878787; border-color: #3d3d40; }"
         "QToolButton:hover, QPushButton:hover, QTabBar::tab:hover { background-color: #454547; border-color: #777779; }"
         "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { background-color: #3f4f5f; color: #ffffff; }"
-        "QComboBox QAbstractItemView::item:selected { background-color: #0078d7; color: #ffffff; }"
         "QToolBar#mainToolBar QToolButton { min-height: 42px; padding-left: 12px; padding-right: 12px; }"
       : "QMenuBar, QMenu, QToolBar, QToolButton, QStatusBar { color: #202020; }"
         "QMenuBar, QToolBar, QStatusBar { background-color: #f5f5f5; }"
@@ -165,6 +164,5 @@ void applyUiTheme(QApplication& application,bool dark){
         "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled { background-color: #e2e2e2; color: #7d7d7d; border-color: #c4c4c4; }"
         "QToolButton:hover, QPushButton:hover, QTabBar::tab:hover { background-color: #dcecf9; border-color: #7eb4dd; }"
         "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { background-color: #e5f1fb; color: #202020; }"
-        "QComboBox QAbstractItemView::item:selected { background-color: #0078d7; color: #ffffff; }"
         "QToolBar#mainToolBar QToolButton { min-height: 42px; padding-left: 12px; padding-right: 12px; }");
 }
