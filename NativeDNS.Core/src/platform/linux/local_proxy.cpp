@@ -98,8 +98,8 @@ void LocalProxy::start(){
             const uint16_t chosen=p.requested_port?p.requested_port:static_cast<uint16_t>(20000+(platform::secure_random_u32()%28000));
             sockaddr_in a4{};a4.sin_family=AF_INET;a4.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a4.sin_port=htons(chosen);
             sockaddr_in6 a6{};a6.sin6_family=AF_INET6;a6.sin6_addr=in6addr_loopback;a6.sin6_port=htons(chosen);
-            const bool ok4=bind(p.tcp4.value,reinterpret_cast<sockaddr*>(&a4),sizeof(a4))==0&&listen(p.tcp4.value,16)==0&&bind(p.udp4.value,reinterpret_cast<sockaddr*>(&a4),sizeof(a4))==0;
-            const bool ok6=ok4&&bind(p.tcp6.value,reinterpret_cast<sockaddr*>(&a6),sizeof(a6))==0&&listen(p.tcp6.value,16)==0&&bind(p.udp6.value,reinterpret_cast<sockaddr*>(&a6),sizeof(a6))==0;
+            const bool ok4=bind(p.tcp4.value,reinterpret_cast<sockaddr*>(&a4),sizeof(a4))==0&&listen(p.tcp4.value,SOMAXCONN)==0&&bind(p.udp4.value,reinterpret_cast<sockaddr*>(&a4),sizeof(a4))==0;
+            const bool ok6=ok4&&bind(p.tcp6.value,reinterpret_cast<sockaddr*>(&a6),sizeof(a6))==0&&listen(p.tcp6.value,SOMAXCONN)==0&&bind(p.udp6.value,reinterpret_cast<sockaddr*>(&a6),sizeof(a6))==0;
             if(ok6){p.bound_port=chosen;break;}
             last=errno;p.close_listeners();if(p.requested_port)break;
         }

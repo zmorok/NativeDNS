@@ -117,11 +117,14 @@ struct LocalProxy::Impl {
                 WSANETWORKEVENTS events{};
                 if (WSAEnumNetworkEvents(tcp,tcp_event,&events)) throw Error("PROXY_IO","TCP event enumeration failed");
                 if (!(events.lNetworkEvents & FD_ACCEPT)) continue;
-                SOCKET client = accept(tcp,nullptr,nullptr);
-                if (client == INVALID_SOCKET) { if (WSAGetLastError() == WSAEWOULDBLOCK) continue; throw Error("PROXY_IO","Accept failed"); }
-                if(!tcp_handlers.submit([this,client] { handle_client(client); })) {
-                    closesocket(client);
-                    logger.write(Level::errors_only,"PROXY_BUSY","Local TCP proxy connection limit reached");
+                if(events.iErrorCode[FD_ACCEPT_BIT])throw Error("PROXY_IO","TCP accept event failed: "+std::to_string(events.iErrorCode[FD_ACCEPT_BIT]));
+                for(;;){
+                    SOCKET client=accept(tcp,nullptr,nullptr);
+                    if(client==INVALID_SOCKET){if(WSAGetLastError()==WSAEWOULDBLOCK)break;throw Error("PROXY_IO","Accept failed");}
+                    if(!tcp_handlers.submit([this,client] { handle_client(client); })) {
+                        closesocket(client);
+                        logger.write(Level::errors_only,"PROXY_BUSY","Local TCP proxy connection limit reached");
+                    }
                 }
             }
         } catch (const std::exception& error) { logger.write(Level::errors_only,"PROXY_IO",error.what()); state = State::error; SetEvent(stop_event); }
@@ -165,7 +168,7 @@ void LocalProxy::start() {
                 if(p.requested_port) throw Error("LOOP","Original resolver points to local proxy");
                 continue;
             }
-            if(!listen(p.tcp,16)&&!bind(p.udp,reinterpret_cast<sockaddr*>(&address),sizeof(address))) { p.bound_port=candidate; break; }
+            if(!listen(p.tcp,SOMAXCONN)&&!bind(p.udp,reinterpret_cast<sockaddr*>(&address),sizeof(address))) { p.bound_port=candidate; break; }
             last_bind_error=WSAGetLastError(); closesocket(p.udp); closesocket(p.tcp); p.udp=INVALID_SOCKET; p.tcp=INVALID_SOCKET;
         }
         if(p.udp==INVALID_SOCKET||p.tcp==INVALID_SOCKET) throw Error("PROXY_BIND","Cannot bind UDP/TCP listener pair: "+std::to_string(last_bind_error));
