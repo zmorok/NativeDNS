@@ -6,6 +6,7 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
 #include <QApplication>
+#include <QAbstractTableModel>
 #include <QAbstractItemView>
 #include <QAction>
 #include <QActionGroup>
@@ -31,6 +32,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
+#include <QTableView>
 #include <QTableWidget>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -56,6 +58,7 @@
 #include <algorithm>
 #include <functional>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace {
 constexpr auto repositoryUrl="https://github.com/zmorok/NativeDNS";
@@ -146,11 +149,10 @@ public:
     }
 
     void setModelData(QWidget* editor,QAbstractItemModel* model,const QModelIndex& index) const override{
+        (void)model;
         const auto* combo=static_cast<QComboBox*>(editor);
         const auto value=combo->currentData().toUInt();
         if(value==index.data(Qt::UserRole).toUInt())return;
-        model->setData(index,combo->currentText(),Qt::DisplayRole);
-        model->setData(index,value,Qt::UserRole);
         changed_(index,value);
     }
 
@@ -406,14 +408,83 @@ bool editRule(QWidget* parent,nd::Config& config,nd::Rule& rule){
     return true;
 }
 
+class RulesTableModel final:public QAbstractTableModel{
+public:
+    RulesTableModel(const nd::Config& current,const nd::Config& original,QObject* parent)
+        :QAbstractTableModel(parent),current_(current),original_(original){rebuildIndexes();}
+
+    int rowCount(const QModelIndex& parent={}) const override{return parent.isValid()?0:static_cast<int>(current_.rules.size());}
+    int columnCount(const QModelIndex& parent={}) const override{return parent.isValid()?0:4;}
+    QVariant headerData(int section,Qt::Orientation orientation,int role) const override{
+        if(orientation!=Qt::Horizontal||role!=Qt::DisplayRole)return {};
+        static const char* keys[]{"Enabled","Name","Action","DNS Server"};
+        return section>=0&&section<4?uiText(keys[section]):QVariant{};
+    }
+    QVariant data(const QModelIndex& index,int role=Qt::DisplayRole) const override{
+        if(!index.isValid()||index.row()<0||static_cast<size_t>(index.row())>=current_.rules.size())return {};
+        const auto& rule=current_.rules[static_cast<size_t>(index.row())];
+        if(role==ruleIdRole)return rule.id;
+        if(role==Qt::UserRole){
+            if(index.column()==2)return rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2;
+            if(index.column()==3)return rule.server_id;
+            return {};
+        }
+        if(role==Qt::DisplayRole){
+            if(index.column()==0)return rule.enabled?QStringLiteral("✓"):QString{};
+            if(index.column()==1)return q(rule.name);
+            if(index.column()==2)return uiText(rule.action==nd::Action::process?"process":rule.action==nd::Action::bypass?"bypass":"block");
+            if(index.column()==3){
+                if(rule.action!=nd::Action::process||!rule.server_id)return uiText("Original/System");
+                const auto server=server_names_.find(rule.server_id);return server==server_names_.end()?uiText("Original/System"):server->second;
+            }
+        }
+        if(role==Qt::ForegroundRole&&!rule.enabled)return QBrush(Qt::gray);
+        if(role==Qt::FontRole&&changed(rule,index.column())){auto font=QApplication::font();font.setBold(true);return font;}
+        return {};
+    }
+    Qt::ItemFlags flags(const QModelIndex& index) const override{
+        if(!index.isValid())return Qt::NoItemFlags;
+        auto result=Qt::ItemIsEnabled|Qt::ItemIsSelectable;
+        if(index.column()==2)result|=Qt::ItemIsEditable;
+        if(index.column()==3){
+            const auto& rule=current_.rules[static_cast<size_t>(index.row())];
+            if(rule.action==nd::Action::process)result|=Qt::ItemIsEditable;
+            else result&=~Qt::ItemIsEnabled;
+        }
+        return result;
+    }
+    void refresh(){beginResetModel();rebuildIndexes();endResetModel();}
+
+private:
+    bool changed(const nd::Rule& rule,int column) const{
+        const auto found=original_rules_.find(rule.id);if(found==original_rules_.end())return true;
+        const auto& before=*found->second;
+        if(column==0)return before.enabled!=rule.enabled;
+        if(column==1){const auto row=original_rows_.find(rule.id);return before.name!=rule.name||before.patterns!=rule.patterns||before.interface_id!=rule.interface_id||before.metadata!=rule.metadata||row==original_rows_.end()||row->second!=static_cast<size_t>(&rule-current_.rules.data());}
+        if(column==2)return before.action!=rule.action||before.block_mode!=rule.block_mode||before.dnssec_validate!=rule.dnssec_validate||before.dnssec_reject_unsigned!=rule.dnssec_reject_unsigned;
+        return column==3&&before.server_id!=rule.server_id;
+    }
+    void rebuildIndexes(){
+        original_rules_.clear();original_rows_.clear();server_names_.clear();
+        original_rules_.reserve(original_.rules.size());original_rows_.reserve(original_.rules.size());server_names_.reserve(current_.servers.size());
+        for(size_t row=0;row<original_.rules.size();++row){original_rules_.emplace(original_.rules[row].id,&original_.rules[row]);original_rows_.emplace(original_.rules[row].id,row);}
+        for(const auto& server:current_.servers)server_names_.emplace(server.id,q(server.name));
+    }
+    const nd::Config& current_;
+    const nd::Config& original_;
+    std::unordered_map<uint32_t,const nd::Rule*> original_rules_;
+    std::unordered_map<uint32_t,size_t> original_rows_;
+    std::unordered_map<uint32_t,QString> server_names_;
+};
+
 class RulesDialog final:public QDialog{
 public:
     RulesDialog(QWidget* parent,nd::Config& config,std::function<bool()> changed)
         :QDialog(parent),target_(config),original_(config),working_(config),changed_(std::move(changed)){
         setWindowTitle(uiText("Rules"));resize(880,480);
-        table_=new QTableWidget(this);
-        table_->setColumnCount(4);
-        table_->setHorizontalHeaderLabels({uiText("Enabled"),uiText("Name"),uiText("Action"),uiText("DNS Server")});
+        model_=new RulesTableModel(working_,original_,this);
+        table_=new QTableView(this);
+        table_->setModel(model_);
         table_->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -456,25 +527,15 @@ public:
         connect(up,&QPushButton::clicked,this,[this]{move(-1);});
         connect(down,&QPushButton::clicked,this,[this]{move(1);});
         connect(add,&QPushButton::clicked,this,[this]{nd::Rule rule;rule.id=nextRuleId(working_);rule.name=s(uiText("New Rule"));rule.patterns={"example.com"};if(editRule(this,working_,rule))apply([&](nd::ConfigEditor& editor){editor.add_rule(rule);},rule.id);});
-        connect(clone,&QPushButton::clicked,this,[this]{const int row=table_->currentRow();if(row<0)return;const auto id=nextRuleId(working_);apply([&](nd::ConfigEditor& editor){editor.clone_rule(working_.rules[static_cast<size_t>(row)].id,id);},id);});
-        connect(edit,&QPushButton::clicked,this,[this]{const int row=table_->currentRow();if(row<0)return;auto rule=working_.rules[static_cast<size_t>(row)];if(editRule(this,working_,rule))apply([&](nd::ConfigEditor& editor){editor.update_rule(rule);},rule.id);});
-        connect(remove,&QPushButton::clicked,this,[this]{const int row=table_->currentRow();if(row<0)return;if(working_.rules[static_cast<size_t>(row)].is_default){QMessageBox::information(this,"NativeDNS",uiText("Default rule cannot be removed."));return;}apply([&](nd::ConfigEditor& editor){editor.remove_rule(working_.rules[static_cast<size_t>(row)].id);});});
+        connect(clone,&QPushButton::clicked,this,[this]{const int row=table_->currentIndex().row();if(row<0)return;const auto id=nextRuleId(working_);apply([&](nd::ConfigEditor& editor){editor.clone_rule(working_.rules[static_cast<size_t>(row)].id,id);},id);});
+        connect(edit,&QPushButton::clicked,this,[this]{const int row=table_->currentIndex().row();if(row<0)return;auto rule=working_.rules[static_cast<size_t>(row)];if(editRule(this,working_,rule))apply([&](nd::ConfigEditor& editor){editor.update_rule(rule);},rule.id);});
+        connect(remove,&QPushButton::clicked,this,[this]{const int row=table_->currentIndex().row();if(row<0)return;if(working_.rules[static_cast<size_t>(row)].is_default){QMessageBox::information(this,"NativeDNS",uiText("Default rule cannot be removed."));return;}apply([&](nd::ConfigEditor& editor){editor.remove_rule(working_.rules[static_cast<size_t>(row)].id);});});
         connect(ok,&QPushButton::clicked,this,[this]{commit();});
         connect(close,&QPushButton::clicked,this,&QDialog::reject);
-        connect(table_,&QTableWidget::cellClicked,this,[this](int row,int column){if(column<2||column>3)return;auto* item=table_->item(row,column);if(item&&(item->flags()&Qt::ItemIsEnabled))table_->editItem(item);});
-        connect(table_,&QTableWidget::cellDoubleClicked,this,[edit](int,int column){if(column<2)edit->click();});
-        reload();
+        connect(table_,&QTableView::clicked,this,[this](const QModelIndex& index){if(index.column()>=2&&index.column()<=3&&(index.flags()&Qt::ItemIsEnabled))table_->edit(index);});
+        connect(table_,&QTableView::doubleClicked,this,[edit](const QModelIndex& index){if(index.column()<2)edit->click();});
     }
 private:
-    static void bold(QTableWidgetItem* item,bool enabled){auto font=item->font();font.setBold(enabled);item->setFont(font);}
-    const nd::Rule* original(uint32_t id) const{
-        const auto found=std::find_if(original_.rules.begin(),original_.rules.end(),[id](const nd::Rule& rule){return rule.id==id;});
-        return found==original_.rules.end()?nullptr:&*found;
-    }
-    int originalRow(uint32_t id) const{
-        const auto found=std::find_if(original_.rules.begin(),original_.rules.end(),[id](const nd::Rule& rule){return rule.id==id;});
-        return found==original_.rules.end()?-1:static_cast<int>(std::distance(original_.rules.begin(),found));
-    }
     void commit(){
         if(working_==original_){accept();return;}
         const auto previous=target_;
@@ -495,39 +556,22 @@ private:
         }catch(const std::exception& e){QMessageBox::critical(this,"NativeDNS",e.what());reload(id);}
     }
     void move(int direction){
-        const int row=table_->currentRow();if(row<0)return;
+        const int row=table_->currentIndex().row();if(row<0)return;
         const auto id=working_.rules[static_cast<size_t>(row)].id;
         apply([&](nd::ConfigEditor& editor){editor.move_rule(id,direction);},id);
     }
     void reload(uint32_t selectedId=0){
-        table_->setUpdatesEnabled(false);table_->clearContents();table_->setRowCount(static_cast<int>(working_.rules.size()));
+        model_->refresh();
         int selectedRow=-1;
-        for(int row=0;row<table_->rowCount();++row){
-            const auto& rule=working_.rules[static_cast<size_t>(row)];
-            if(rule.id==selectedId)selectedRow=row;
-            auto* enabled=new QTableWidgetItem(rule.enabled?"✓":"");enabled->setData(ruleIdRole,rule.id);if(!rule.enabled)enabled->setForeground(QBrush(Qt::gray));
-            auto* name=new QTableWidgetItem(q(rule.name));
-            const auto actionKey=rule.action==nd::Action::process?"process":rule.action==nd::Action::bypass?"bypass":"block";
-            auto* action=new QTableWidgetItem(uiText(actionKey));action->setData(Qt::UserRole,rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2);action->setFlags(action->flags()|Qt::ItemIsEditable);
-            QString serverName=uiText("Original/System");
-            if(rule.action==nd::Action::process){const auto found=std::find_if(working_.servers.begin(),working_.servers.end(),[&](const nd::Server& server){return server.id==rule.server_id;});if(found!=working_.servers.end())serverName=q(found->name);}
-            auto* server=new QTableWidgetItem(serverName);server->setData(Qt::UserRole,rule.server_id);
-            if(rule.action==nd::Action::process)server->setFlags(server->flags()|Qt::ItemIsEditable);else server->setFlags(server->flags()&~Qt::ItemIsEnabled&~Qt::ItemIsEditable);
-            const auto* before=original(rule.id);const bool added=!before;
-            bold(enabled,added||before->enabled!=rule.enabled);
-            bold(name,added||before->name!=rule.name||before->patterns!=rule.patterns||before->interface_id!=rule.interface_id||before->metadata!=rule.metadata||originalRow(rule.id)!=row);
-            bold(action,added||before->action!=rule.action||before->block_mode!=rule.block_mode||before->dnssec_validate!=rule.dnssec_validate||before->dnssec_reject_unsigned!=rule.dnssec_reject_unsigned);
-            bold(server,added||before->server_id!=rule.server_id);
-            table_->setItem(row,0,enabled);table_->setItem(row,1,name);table_->setItem(row,2,action);table_->setItem(row,3,server);
-        }
+        if(selectedId)for(size_t row=0;row<working_.rules.size();++row)if(working_.rules[row].id==selectedId){selectedRow=static_cast<int>(row);break;}
         if(selectedRow>=0)table_->selectRow(selectedRow);
-        table_->setUpdatesEnabled(true);table_->viewport()->update();
     }
     nd::Config& target_;
     nd::Config original_;
     nd::Config working_;
     std::function<bool()> changed_;
-    QTableWidget* table_=nullptr;
+    RulesTableModel* model_=nullptr;
+    QTableView* table_=nullptr;
 };
 }
 
