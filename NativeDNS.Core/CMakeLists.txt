@@ -9,6 +9,7 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
   src/router.cpp
   src/host.cpp
   src/ipc_wire.cpp
+  src/fault_injection.cpp
 )
 
 if(WIN32)

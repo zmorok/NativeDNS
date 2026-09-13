@@ -65,6 +65,7 @@ if(WIN32)
   add_executable(windivert_tests windivert_tests.cpp)
   target_link_libraries(windivert_tests PRIVATE NativeDNS.Core.Internal)
   add_test(NAME windivert_packet_rewrite COMMAND windivert_tests)
+  nativedns_copy_windivert_runtime(windivert_tests)
 endif()
 
 if(WIN32)

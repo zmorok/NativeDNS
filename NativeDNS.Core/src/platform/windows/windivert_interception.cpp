@@ -3,6 +3,7 @@
 #include <nativedns/firewall.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/tcp_dns_proxy.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <windivert.h>
 #include <windows.h>
 #include <ws2tcpip.h>
@@ -382,10 +383,12 @@ void WinDivertInterception::start() {
     try {
         p.firewall.disable();
         p.logger.write(Level::verbose,"FIREWALL_STALE_CLEANUP","Removed any stale TCP interception firewall rule");
+        detail::fault_point("windivert.tcp_proxy");
         p.tcp_proxy_port=p.tcp_proxy.start();
         p.logger.write(Level::verbose,"TCP_PROXY_STARTED","TCP reflection proxy listening on port="+std::to_string(p.tcp_proxy_port));
         try{const auto owner=windivert_service_owner();p.stop_driver_on_release=owner==WinDivertServiceOwner::missing||owner==WinDivertServiceOwner::application;}
         catch(...){p.stop_driver_on_release=false;}
+        detail::fault_point("windivert.load");
         p.module=LoadLibraryExW(L"WinDivert.dll",nullptr,LOAD_LIBRARY_SEARCH_APPLICATION_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         if(!p.module) throw Error("WINDIVERT_LOAD","Cannot load WinDivert.dll: "+std::to_string(GetLastError()));
         p.logger.write(Level::verbose,"WINDIVERT_LOADED","WinDivert.dll loaded successfully");
@@ -397,6 +400,7 @@ void WinDivertInterception::start() {
         const char* filter_error=nullptr; UINT filter_position=0;
         if(!p.compile(filter.c_str(),WINDIVERT_LAYER_NETWORK,nullptr,0,&filter_error,&filter_position))
             throw Error("WINDIVERT_FILTER",std::string(filter_error?filter_error:"Invalid filter")+" at "+std::to_string(filter_position));
+        detail::fault_point("windivert.open");
         p.handle=p.open(filter.c_str(),WINDIVERT_LAYER_NETWORK,123,0);
         if(p.handle==INVALID_HANDLE_VALUE) {
             const auto error=GetLastError();
@@ -407,6 +411,7 @@ void WinDivertInterception::start() {
            !p.set_param(p.handle,WINDIVERT_PARAM_QUEUE_LENGTH,8192)||
            !p.set_param(p.handle,WINDIVERT_PARAM_QUEUE_SIZE,WINDIVERT_PARAM_QUEUE_SIZE_MAX))
             throw Error("WINDIVERT_QUEUE","Cannot configure WinDivert queue: "+std::to_string(GetLastError()));
+        detail::fault_point("windivert.firewall");
         p.firewall.enable(p.tcp_proxy_port);
         p.logger.write(Level::verbose,"FIREWALL_RULE_ACTIVE","TCP proxy firewall rule enabled");
         p.state=State::running;

@@ -2,6 +2,7 @@
 #include <nativedns/host.hpp>
 #include <nativedns/dns.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <future>
 #include <iostream>
 #include <sstream>
@@ -68,6 +69,11 @@ int main() {
         check(failed,"unavailable host failure");
         auto rollback_config=nd::default_config();rollback_config.logging.file_enabled=false;rollback_config.rules.back().action=nd::Action::block;
         nd::Server rollback_original;rollback_original.name="unused";rollback_original.ip="127.0.0.1";rollback_original.port=1;
+        for(const auto* stage:{"core.command_ipc","core.log_ipc"}){
+            const auto retry_name=name+"."+stage;nd::CoreHost retrying(rollback_config,rollback_original,0,retry_name);
+            nd::detail::set_fault_stage_for_testing(stage);failed=false;try{retrying.start();}catch(const nd::Error& error){failed=error.code=="FAULT_INJECTED";}nd::detail::clear_fault_stage_for_testing();
+            check(failed&&retrying.status().state==nd::State::stopped,"injected CoreHost startup failure rolls back resources");retrying.start();retrying.stop();
+        }
         {
             const auto blocked_name=name+".BlockedCommand";
             nd::PipeServer blocker(blocked_name,[](nd::IpcOperation,const std::string&){return nd::IpcResponse{};});blocker.start();

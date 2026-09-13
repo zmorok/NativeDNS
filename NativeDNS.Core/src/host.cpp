@@ -1,5 +1,6 @@
 #include <nativedns/host.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <charconv>
 #include <sstream>
 #include <filesystem>
@@ -41,9 +42,11 @@ void CoreHost::start(){
         logger_.write(Level::verbose,"INTERCEPTION_STARTING","Starting DNS interception backend");
         interception_->start();
         stage="command IPC";
+        detail::fault_point("core.command_ipc");
         logger_.write(Level::verbose,"IPC_STARTING","Starting command and live-log IPC endpoints");
         ipc_->start();
         stage="log IPC";
+        detail::fault_point("core.log_ipc");
         log_ipc_->start();
         const auto value=interception_->status();logger_.write(Level::normal,"CORE_STARTED","Core host started; port="+std::to_string(value.port)+" transparent="+(value.transparent?"1":"0"));
     }catch(...){

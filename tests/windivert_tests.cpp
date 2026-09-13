@@ -1,7 +1,9 @@
 #include <nativedns/interception.hpp>
 #include <nativedns/dns.hpp>
 #include <nativedns/dns_network.hpp>
+#include <nativedns/platform.hpp>
 #include <nativedns/tcp_dns_proxy.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <algorithm>
@@ -9,6 +11,11 @@
 #include <iostream>
 
 void check(bool value,const char* message) { if(!value) throw std::runtime_error(message); }
+void fault_rollback(const char* stage){
+    nd::Logger logger;nd::WinDivertInterception interception(nd::default_config(),logger);
+    nd::detail::set_fault_stage_for_testing(stage);bool failed=false;try{interception.start();}catch(const nd::Error& error){failed=error.code=="FAULT_INJECTED";}nd::detail::clear_fault_stage_for_testing();
+    check(failed&&interception.status().state==nd::State::error,"injected WinDivert startup failure");interception.stop();check(interception.status().state==nd::State::stopped,"WinDivert fault rollback releases resources");
+}
 uint16_t read16(const uint8_t* p) { return static_cast<uint16_t>((p[0]<<8)|p[1]); }
 void write16(uint8_t* p,uint16_t v) { p[0]=static_cast<uint8_t>(v>>8); p[1]=static_cast<uint8_t>(v); }
 uint32_t add(uint32_t sum,const uint8_t* p,size_t n) { while(n>=2){sum+=read16(p);p+=2;n-=2;} if(n)sum+=p[0]<<8; return sum; }
@@ -139,6 +146,10 @@ int main() {
             check(nd::detail::is_network_upstream(false,42424)&&!nd::detail::is_network_upstream(true,42424),"protocol-specific upstream registration");
         }
         check(!nd::detail::is_network_upstream(false,42424),"reference-counted upstream removal");
+        fault_rollback("windivert.tcp_proxy");
+        fault_rollback("windivert.load");
+        fault_rollback("windivert.open");
+        if(nd::platform::is_elevated())fault_rollback("windivert.firewall");
 
         nd::Config fast_path=nd::default_config();
         check(nd::should_reinject_udp_immediately(fast_path,ipv4_query()),"Process/server_id=0 bypasses worker queue");
