@@ -345,7 +345,15 @@ private:
         table_->setUpdatesEnabled(true);table_->viewport()->update();
     }
     void colorRow(int row,const QColor& background,const QColor& foreground){for(int column=0;column<table_->columnCount();++column)if(auto* item=table_->item(row,column)){item->setBackground(QBrush(background));item->setForeground(QBrush(foreground));}}
-    void checkSelected(){auto rows=table_->selectionModel()->selectedRows();if(rows.isEmpty()&&table_->currentRow()>=0)rows<<table_->model()->index(table_->currentRow(),0);for(const auto& index:rows){const int row=index.row();if(row<0||row>=static_cast<int>(working_.servers.size()))continue;auto server=working_.servers[static_cast<size_t>(row)];table_->item(row,3)->setText(uiText("Testing..."));table_->item(row,4)->setText("—");colorRow(row,palette().color(QPalette::Base),palette().color(QPalette::Text));QPointer<ServerDialog> self(this);std::thread([self,server]{auto result=nd::test_server(server);QMetaObject::invokeMethod(qApp,[self,serverId=server.id,result]{if(!self)return;const auto found=std::find_if(self->working_.servers.begin(),self->working_.servers.end(),[&](const nd::Server& value){return value.id==serverId;});if(found==self->working_.servers.end())return;const int row=static_cast<int>(std::distance(self->working_.servers.begin(),found));auto* status=self->table_->item(row,3);auto* rtt=self->table_->item(row,4);if(!status||!rtt)return;status->setText(result.success?"OK":q(result.error_code+": "+result.message));rtt->setText(result.success?QString::number(result.rtt_ms,'f',1)+" ms":"—");self->colorRow(row,result.success?QColor(220,245,224):QColor(255,224,224),result.success?QColor(20,105,35):QColor(150,0,0));},Qt::QueuedConnection);}).detach();}}
+    static nd::TestResult testServer(nd::Server server){
+        if((server.protocol==nd::Protocol::doh||server.protocol==nd::Protocol::dot)&&server.ip.empty()&&server.bootstrap.empty()){
+            try{auto config=nd::default_config();config.servers.push_back(server);nd::prepare_secure_endpoints(config);server=std::move(config.servers.back());}
+            catch(const nd::Error& error){nd::TestResult result;result.protocol=server.protocol;result.server_id=server.id;result.error_code=error.code;result.message=error.what();return result;}
+            catch(const std::exception& error){nd::TestResult result;result.protocol=server.protocol;result.server_id=server.id;result.error_code="INTERNAL";result.message=error.what();return result;}
+        }
+        return nd::test_server(server);
+    }
+    void checkSelected(){auto rows=table_->selectionModel()->selectedRows();if(rows.isEmpty()&&table_->currentRow()>=0)rows<<table_->model()->index(table_->currentRow(),0);for(const auto& index:rows){const int row=index.row();if(row<0||row>=static_cast<int>(working_.servers.size()))continue;auto server=working_.servers[static_cast<size_t>(row)];table_->item(row,3)->setText(uiText("Testing..."));table_->item(row,4)->setText("—");colorRow(row,palette().color(QPalette::Base),palette().color(QPalette::Text));QPointer<ServerDialog> self(this);std::thread([self,server]{auto result=testServer(server);QMetaObject::invokeMethod(qApp,[self,serverId=server.id,result]{if(!self)return;const auto found=std::find_if(self->working_.servers.begin(),self->working_.servers.end(),[&](const nd::Server& value){return value.id==serverId;});if(found==self->working_.servers.end())return;const int row=static_cast<int>(std::distance(self->working_.servers.begin(),found));auto* status=self->table_->item(row,3);auto* rtt=self->table_->item(row,4);if(!status||!rtt)return;status->setText(result.success?"OK":q(result.error_code+": "+result.message));rtt->setText(result.success?QString::number(result.rtt_ms,'f',1)+" ms":"—");self->colorRow(row,result.success?QColor(220,245,224):QColor(255,224,224),result.success?QColor(20,105,35):QColor(150,0,0));},Qt::QueuedConnection);}).detach();}}
     nd::Config& target_;
     nd::Config original_;
     nd::Config working_;
@@ -916,50 +924,59 @@ void NativeDnsWindow::exportConfiguration(){const auto file=QFileDialog::getSave
 
 void NativeDnsWindow::startCore(bool transparent){
     if(coreLaunchPending_&&coreLaunchTimer_.isValid()&&coreLaunchTimer_.elapsed()<10000)return;
-
-    try{
-        const auto response=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::status,{},150);
-        if(response.status)throw std::runtime_error(response.payload);
-        coreLaunchPending_=false;
-        if(response.payload.rfind("RUNNING",0)==0||response.payload.rfind("STARTING",0)==0)return;
-
-        const auto started=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::start,{},500);
-        if(started.status)throw std::runtime_error(started.payload);
-        return;
-    }catch(const nd::Error& error){
-        if(error.code!="IPC_CONNECT"&&error.code!="IPC_TIMEOUT"){
-            QMessageBox::critical(this,"NativeDNS",error.what());
-            return;
-        }
-    }catch(const std::exception& error){
-        QMessageBox::critical(this,"NativeDNS",error.what());
-        return;
-    }
-
+    if(coreStartOperationPending_.exchange(true))return;
     const QString helper=QCoreApplication::applicationDirPath()+
 #ifdef _WIN32
         "/NativeDNSCoreHost.exe";
 #else
         "/NativeDNSCoreHost";
 #endif
-    QString error;
     QStringList args{"--config",qPath(configPath())};
     if(transparent)args<<"--transparent";
-    bool launched=false;
-#ifdef _WIN32
-    if(transparent){
-        try{launched=nd::start_autostart_core(fsPath(helper),configPath());}
-        catch(...){/* Fall back to the normal elevation prompt. */}
-    }
-#endif
-    if(!launched&&!launchNativeDnsCore(helper,args,transparent,&error)){
-        coreLaunchPending_=false;
-        QMessageBox::critical(this,"NativeDNS",error);
-        return;
-    }
+    const auto configuration=configPath();
+    const auto cancellation=coreStartCancelled_;
+    cancellation->store(false);
     coreLaunchPending_=true;
     coreLaunchTimer_.restart();
     setStatusText(uiText("Core: starting..."));
+    QPointer<NativeDnsWindow> self(this);
+    QThreadPool::globalInstance()->start([self,helper,args,configuration,transparent,cancellation]{
+        bool success=false,running=false;
+        QString failure;
+        try{
+            const auto response=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::status,{},150);
+            if(response.status)throw std::runtime_error(response.payload);
+            if(response.payload.rfind("RUNNING",0)==0||response.payload.rfind("STARTING",0)==0){success=true;running=true;}
+            else{
+                const auto started=nd::pipe_request(nd::core_pipe_name,nd::IpcOperation::start,{},500);
+                if(started.status)throw std::runtime_error(started.payload);
+                success=true;running=true;
+            }
+        }catch(const nd::Error& error){
+            if(error.code!="IPC_CONNECT"&&error.code!="IPC_TIMEOUT")failure=q(error.what());
+        }catch(const std::exception& error){failure=q(error.what());}
+        if(!success&&failure.isEmpty()&&!cancellation->load()){
+            bool launched=false;
+#ifdef _WIN32
+            if(transparent){
+                try{launched=nd::start_autostart_core(fsPath(helper),configuration);}
+                catch(...){/* Fall back to the normal elevation prompt. */}
+            }
+#endif
+            QString launch_error;
+            if(!launched&&!cancellation->load())launched=launchNativeDnsCore(helper,args,transparent,&launch_error);
+            success=launched;
+            if(!success&&!cancellation->load())failure=launch_error;
+        }
+        QMetaObject::invokeMethod(qApp,[self,success,running,failure,cancellation]{
+            if(!self)return;
+            self->coreStartOperationPending_=false;
+            if(cancellation->load())return;
+            if(!success){self->coreLaunchPending_=false;self->setStatusText(uiText("Core: stopped"),true);QMessageBox::critical(self,"NativeDNS",failure);return;}
+            self->coreLaunchPending_=!running;
+            if(running)self->refreshStatus();else{self->coreLaunchTimer_.restart();self->setStatusText(uiText("Core: starting..."));}
+        },Qt::QueuedConnection);
+    });
 }
 
 bool NativeDnsWindow::waitForCoreShutdown(int timeoutMs){
@@ -982,6 +999,7 @@ bool NativeDnsWindow::waitForCoreShutdown(int timeoutMs){
 void NativeDnsWindow::shutdownCoreForExit(){
     if(coreShutdownAttempted_)return;
     coreShutdownAttempted_=true;
+    coreStartCancelled_->store(true);
 
     statusTimer_.stop();
     logTimer_.stop();

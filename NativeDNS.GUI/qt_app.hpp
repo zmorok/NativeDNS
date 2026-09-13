@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <atomic>
 #include <filesystem>
+#include <memory>
 #include <nativedns/config.hpp>
 
 class QAction;
@@ -59,6 +60,8 @@ private:
     bool trayAvailable_=false;
     bool coreLaunchPending_=false;
     bool coreShutdownAttempted_=false;
+    std::atomic_bool coreStartOperationPending_=false;
+    std::shared_ptr<std::atomic_bool> coreStartCancelled_=std::make_shared<std::atomic_bool>(false);
     std::atomic_bool statusRefreshPending_=false;
     std::atomic_bool logRefreshPending_=false;
 };
