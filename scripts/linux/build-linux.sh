@@ -7,7 +7,13 @@ cd "$ROOT"
 CONFIG="${1:-release}"
 TARGET="${2:-standalone}"
 TEST_MODE="${3:-tests}"
-VERSION="0.4.0"
+
+VERSION_FILE="$ROOT/VERSION"
+[[ -f "$VERSION_FILE" ]] || { echo "ERROR: VERSION file is missing: $VERSION_FILE" >&2; exit 2; }
+VERSION="$(tr -d '\r\n' < "$VERSION_FILE")"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "ERROR: invalid NativeDNS version in VERSION: '$VERSION'" >&2; exit 2; }
+
+echo "=== NativeDNS version $VERSION ==="
 
 case "$TEST_MODE" in
   tests|no-tests) ;;

@@ -1,0 +1,7 @@
+#pragma once
+
+namespace nd::build {
+
+inline constexpr char version[] = "@PROJECT_VERSION@";
+
+}

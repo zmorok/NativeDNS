@@ -8,6 +8,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
+
 function Get-Sha256Hex([string]$Path) {
     $stream = [IO.File]::OpenRead($Path)
     try {
@@ -17,10 +18,24 @@ function Get-Sha256Hex([string]$Path) {
     }
     finally { $stream.Dispose() }
 }
+
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+
+$versionFile = Join-Path $root 'VERSION'
+if (-not (Test-Path -LiteralPath $versionFile)) {
+    throw "VERSION file is missing: $versionFile"
+}
+
+$version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Invalid NativeDNS version in VERSION: '$version'"
+}
+
+Write-Host "NativeDNS version: $version" -ForegroundColor DarkGray
+
 $build = [IO.Path]::GetFullPath((Join-Path $root $BuildDirectory))
 $output = [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
-$stage = Join-Path $output "NativeDNS-0.4.0-windows-x64-portable"
+$stage = Join-Path $output "NativeDNS-$version-windows-x64-portable"
 $outputPrefix = $output.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $stage.StartsWith($outputPrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to clean a staging path outside the package output directory' }
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }

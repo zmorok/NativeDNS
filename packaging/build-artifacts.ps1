@@ -7,6 +7,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+
+$versionFile = Join-Path $root 'VERSION'
+if (-not (Test-Path -LiteralPath $versionFile)) {
+    throw "VERSION file is missing: $versionFile"
+}
+
+$version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Invalid NativeDNS version in VERSION: '$version'"
+}
+
+Write-Host "NativeDNS version: $version" -ForegroundColor DarkGray
+
 $build = Join-Path $root 'build\msvc'
 $artifactRoot = Join-Path $root ("build\artifacts\{0}" -f $Configuration)
 $portableOutput = Join-Path $artifactRoot 'portable'
@@ -63,7 +76,7 @@ if ($Target -in @('standalone','all')) {
 }
 
 $needsPortableStage = $Target -in @('portable','installer','all')
-$portableStage = Join-Path $portableOutput 'NativeDNS-0.4.0-windows-x64-portable'
+$portableStage = Join-Path $portableOutput "NativeDNS-$version-windows-x64-portable"
 if ($needsPortableStage) {
     $portableArguments = @{
         Configuration = $Configuration
@@ -87,10 +100,10 @@ if ($Target -in @('installer','all')) {
     $iscc = if ($isccCommand) { $isccCommand.Source } else { $isccCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1 }
     if (-not $iscc) { throw 'Inno Setup 6 was not found. Install it or add ISCC.exe to PATH to build the installer target.' }
     Invoke-Checked 'Compile installer' {
-        & $iscc "/DStageDir=$portableStage" "/DOutputDir=$installerOutput" "/DConfiguration=$Configuration" (Join-Path $PSScriptRoot 'NativeDNS.iss')
+        & $iscc "/DStageDir=$portableStage" "/DOutputDir=$installerOutput" "/DConfiguration=$Configuration" "/DAppVersion=$version" (Join-Path $PSScriptRoot 'NativeDNS.iss')
     }
     $configurationSuffix = if ($Configuration -eq 'Debug') { '-debug' } else { '' }
-    $installer = Join-Path $installerOutput "NativeDNS-0.4.0-windows-x64-setup$configurationSuffix.exe"
+    $installer = Join-Path $installerOutput "NativeDNS-$version-windows-x64-setup$configurationSuffix.exe"
     if (-not (Test-Path -LiteralPath $installer)) { throw "Installer output is missing: $installer" }
     $installerHash = Get-Sha256Hex $installer
     [IO.File]::WriteAllText("$installer.sha256","$installerHash  $([IO.Path]::GetFileName($installer))`n",[Text.UTF8Encoding]::new($false))

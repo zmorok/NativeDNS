@@ -47,7 +47,8 @@ NativeDNS is designed around one GUI instance and one CoreHost instance.
 - With `Hide to tray` enabled, closing the window hides it while the tray icon and CoreHost remain available.
 - With `Hide to tray` disabled, closing the window exits the GUI and shuts down CoreHost.
 - Explicit `Exit` always shuts down both GUI and CoreHost.
-- With autostart enabled, Windows starts `NativeDNS.exe --background`; the tray application then starts the registered elevated CoreHost on demand. CoreHost does not start at logon without the tray application.
+- With autostart enabled on Windows, Task Scheduler starts the elevated CoreHost first and then launches `NativeDNS.exe --background` as the normal desktop user.
+- CoreHost startup includes recovery for temporary secure-DNS bootstrap failures while Windows networking is still initializing.
 
 The GUI itself should run as the normal desktop user. Privileged interception is handled by the separate non-Qt CoreHost process.
 
@@ -55,58 +56,89 @@ The GUI itself should run as the normal desktop user. Privileged interception is
 
 Detailed instructions are in [`docs/BUILD.md`](docs/BUILD.md).
 
-### Windows
+Common build commands:
 
-Typical Debug standalone build:
+```text
+# Windows: Debug standalone build with tests
+.\scripts\windows\build-debug.bat standalone tests
 
-```bat
-scripts\windows\build-debug.bat standalone
+# Windows: Debug standalone build without tests
+.\scripts\windows\build-debug.bat standalone no-tests
+
+# Windows: Release standalone build with tests
+.\scripts\windows\build-release.bat standalone tests
+
+# Windows: Release portable ZIP with tests
+.\scripts\windows\build-release.bat portable tests
+
+# Windows: Release installer with tests
+.\scripts\windows\build-release.bat installer tests
+
+# Windows: Build all Release artifacts with tests
+.\scripts\windows\build-release.bat all tests
+
+# Windows: Build all Release artifacts without tests
+.\scripts\windows\build-release.bat all no-tests
+
+
+# Linux: Debug standalone build with tests
+./scripts/linux/build-debug.sh standalone tests
+
+# Linux: Debug standalone build without tests
+./scripts/linux/build-debug.sh standalone no-tests
+
+# Linux: Release standalone build with tests
+./scripts/linux/build-release.sh standalone tests
+
+# Linux: Release portable archive with tests
+./scripts/linux/build-release.sh portable tests
+
+# Linux: Release AppImage with tests
+./scripts/linux/build-release.sh appimage tests
+
+# Linux: Release DEB package with tests
+./scripts/linux/build-release.sh deb tests
+
+# Linux: Build all Release artifacts with tests
+./scripts/linux/build-release.sh all tests
+
+# Linux: Build all Release artifacts without tests
+./scripts/linux/build-release.sh all no-tests
 ```
 
-Typical Release portable build:
+The final argument controls test execution:
 
-```bat
-scripts\windows\build-release.bat portable
+- `tests` — build and run the configured test suite;
+- `no-tests` — build and package without running tests.
+
+Windows build targets:
+
+- `standalone` — staged application directory;
+- `portable` — portable ZIP archive;
+- `installer` — Inno Setup installer;
+- `all` — portable ZIP and installer.
+
+Linux build targets:
+
+- `standalone` — staged application directory;
+- `portable` — portable `.tar.gz` archive;
+- `appimage` — AppImage package;
+- `deb` — Debian package;
+- `all` — portable archive, AppImage and `.deb`.
+
+Set `QT_ROOT` when Qt is not already discoverable.
+
+PowerShell example:
+
+```powershell
+$env:QT_ROOT = "C:\Qt\6.8.3\msvc2022_64"
 ```
-
-Set `QT_ROOT` when Qt is not already discoverable:
-
-```bat
-set QT_ROOT=C:\Qt\6.8.3\msvc2022_64
-```
-
-Windows output forms:
-
-- standalone directory;
-- portable ZIP;
-- Inno Setup installer.
-
-### Linux
 
 Debian/Ubuntu dependency helper:
 
 ```bash
 sudo ./scripts/linux/install-build-deps-debian.sh
 ```
-
-Debug standalone:
-
-```bash
-./scripts/linux/build-debug.sh standalone
-```
-
-Release:
-
-```bash
-./scripts/linux/build-release.sh [standalone|portable|appimage|deb|all]
-```
-
-Linux output forms:
-
-- standalone staged tree;
-- portable `.tar.gz`;
-- AppImage;
-- `.deb`.
 
 For Arch Linux, install equivalent packages with `pacman` (`base-devel`, `cmake`, `ninja`, `pkgconf`, `qt6-base`, `qt6-svg`, `curl`, `libsodium`, `nftables`, `polkit`, `patchelf`, `file`, `fakeroot`) and use the same Linux build scripts.
 

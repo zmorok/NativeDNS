@@ -8,6 +8,22 @@ cd /d "%ROOT%" || (
   echo ERROR: failed to switch to project root: %ROOT%
   exit /b 10
 )
+
+set "VERSION_FILE=%ROOT%\VERSION"
+if not exist "%VERSION_FILE%" (
+  echo ERROR: VERSION file is missing: %VERSION_FILE%
+  exit /b 2
+)
+
+set "VERSION="
+set /p "VERSION="<"%VERSION_FILE%"
+if "%VERSION%"=="" (
+  echo ERROR: VERSION file is empty.
+  exit /b 2
+)
+
+echo === NativeDNS version %VERSION% ===
+
 set "CONFIG=%~1"
 set "TARGET=%~2"
 set "TEST_MODE=%~3"
@@ -105,7 +121,7 @@ call :make_installer || exit /b !errorlevel!
 goto :done
 
 :make_portable
-set "ZIP=%PACKAGES%\NativeDNS-0.4.0-windows-x64%SUFFIX%-portable.zip"
+set "ZIP=%PACKAGES%\NativeDNS-%VERSION%-windows-x64%SUFFIX%-portable.zip"
 if exist "%ZIP%" del /q "%ZIP%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%ZIP%' -CompressionLevel Optimal"
 if errorlevel 1 exit /b %errorlevel%
@@ -121,7 +137,7 @@ if "%ISCC%"=="" (
   echo Set INNO_SETUP_ISCC to the full ISCC.exe path.
   exit /b 6
 )
-"%ISCC%" /DStageDir="%STAGE%" /DOutputDir="%PACKAGES%" /DConfiguration="%CMAKE_CONFIG%" "%ROOT%\packaging\NativeDNS.iss"
+"%ISCC%" /DStageDir="%STAGE%" /DOutputDir="%PACKAGES%" /DConfiguration="%CMAKE_CONFIG%" /DAppVersion="%VERSION%" "%ROOT%\packaging\NativeDNS.iss"
 if errorlevel 1 exit /b %errorlevel%
 echo Installer ready in: %PACKAGES%
 exit /b 0

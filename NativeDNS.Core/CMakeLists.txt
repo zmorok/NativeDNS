@@ -1,3 +1,12 @@
+set(NATIVEDNS_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${NATIVEDNS_GENERATED_DIR}")
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/version.hpp.in"
+  "${NATIVEDNS_GENERATED_DIR}/version.hpp"
+  @ONLY
+)
+
 set(NATIVEDNS_CORE_COMMON_SOURCES
   src/core_api.cpp
   src/logger.cpp
@@ -36,7 +45,11 @@ else()
 endif()
 
 add_library(NativeDNS.Core.Objects OBJECT ${NATIVEDNS_CORE_COMMON_SOURCES} ${NATIVEDNS_CORE_PLATFORM_SOURCES})
-target_include_directories(NativeDNS.Core.Objects PUBLIC include)
+target_include_directories(
+  NativeDNS.Core.Objects
+  PUBLIC include
+  PRIVATE "${NATIVEDNS_GENERATED_DIR}"
+)
 target_link_libraries(NativeDNS.Core.Objects PRIVATE CURL::libcurl Sodium::sodium)
 if(WIN32)
   target_link_libraries(NativeDNS.Core.Objects PRIVATE WinDivert.Headers)
