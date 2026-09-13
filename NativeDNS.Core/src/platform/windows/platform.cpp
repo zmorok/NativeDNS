@@ -96,10 +96,12 @@ void prepare_privileged_log_directory(){
             const bool reparse=!GetFileInformationByHandleEx(handle,FileAttributeTagInfo,&attributes,sizeof(attributes))||(attributes.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
             DWORD admin_size=SECURITY_MAX_SID_SIZE;std::vector<uint8_t> admin_sid(admin_size);
             const bool admin=CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admin_sid.data(),&admin_size)!=FALSE;
-            const DWORD applied=admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,admin_sid.data(),nullptr,dacl,nullptr):ERROR_INVALID_SID;
+            const DWORD dacl_applied=reparse?ERROR_CANT_ACCESS_FILE:SetSecurityInfo(handle,SE_FILE_OBJECT,DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,nullptr,nullptr,dacl,nullptr);
+            const DWORD owner_applied=dacl_applied==ERROR_SUCCESS&&admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION,admin_sid.data(),nullptr,nullptr,nullptr):(admin?dacl_applied:ERROR_INVALID_SID);
             CloseHandle(handle);
             if(reparse)throw Error("LOG_SECURITY","Protected log directory must not be a reparse point");
-            if(applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot secure protected log directory: "+std::to_string(applied));
+            if(dacl_applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot protect log directory DACL: "+std::to_string(dacl_applied));
+            if(owner_applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot secure log directory owner: "+std::to_string(owner_applied));
         }
     }catch(...){LocalFree(descriptor);throw;}
     LocalFree(descriptor);
