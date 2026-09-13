@@ -21,6 +21,7 @@ inline int closesocket(SOCKET s) { return ::close(s); }
 #include <iostream>
 #include <thread>
 #include <atomic>
+#include <array>
 
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void fails(const std::function<void()>& fn) { try { fn(); } catch (const nd::Error&) { return; } throw std::runtime_error("Expected DNS parser failure"); }
@@ -278,20 +279,23 @@ int main() {
             check(result.success && peer.requests == 1 && proxy.status().state == nd::State::stopped,"Client -> real local proxy -> upstream Process/Bypass");
         }
         {
-            Peer slow(false,Mode::timeout,false,0,600),fast(false,Mode::good);
+            constexpr unsigned slow_count=4,normal_count=100;
+            Peer slow(false,Mode::timeout,false,0,250,slow_count),fast(false,Mode::good,false,0,1500,normal_count);
             auto concurrent_config=nd::default_config();auto slow_server=slow.server();slow_server.id=7;concurrent_config.servers.push_back(slow_server);
-            nd::Rule slow_rule;slow_rule.id=7;slow_rule.name="slow";slow_rule.patterns={"slow.example"};slow_rule.server_id=7;
+            nd::Rule slow_rule;slow_rule.id=7;slow_rule.name="slow";slow_rule.server_id=7;
+            for(unsigned request=0;request<slow_count;++request)slow_rule.patterns.push_back("slow"+std::to_string(request)+".example");
             concurrent_config.rules.insert(concurrent_config.rules.begin(),slow_rule);
             auto concurrent_router=std::make_shared<nd::Router>(concurrent_config,route_log);
             nd::LocalProxy proxy(concurrent_router,fast.server(),route_log);proxy.start();
-            const SOCKET slow_client=connect_loopback(proxy.status().port,SOCK_DGRAM);const auto slow_query=nd::make_query("slow.example");
-            check(send(slow_client,reinterpret_cast<const char*>(slow_query.data()),static_cast<int>(slow_query.size()),0)==static_cast<int>(slow_query.size()),"send slow UDP query");
+            std::array<SOCKET,slow_count> slow_clients{};
+            for(unsigned request=0;request<slow_count;++request){auto& client=slow_clients[request];const auto slow_query=nd::make_query("slow"+std::to_string(request)+".example");client=connect_loopback(proxy.status().port,SOCK_DGRAM);check(send(client,reinterpret_cast<const char*>(slow_query.data()),static_cast<int>(slow_query.size()),0)==static_cast<int>(slow_query.size()),"send slow UDP query");}
             std::this_thread::sleep_for(std::chrono::milliseconds(40));
             auto local=fast.server();local.port=proxy.status().port;
-            const auto started=std::chrono::steady_clock::now();const auto result=nd::test_server(local,"example.com");
+            const auto started=std::chrono::steady_clock::now();bool all_succeeded=true;
+            for(unsigned request=0;request<normal_count;++request)all_succeeded=nd::test_server(local,"normal"+std::to_string(request)+".example").success&&all_succeeded;
             const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
-            closesocket(slow_client);proxy.stop();slow.verify();fast.verify();
-            check(result.success&&elapsed<400,"slow UDP upstream must not block unrelated local proxy queries");
+            for(const auto client:slow_clients)closesocket(client);proxy.stop();slow.verify();fast.verify();
+            check(all_succeeded&&elapsed<1000,"several slow UDP upstream requests must not block 100 normal local proxy queries");
         }
         {
             Peer fast(true,Mode::good);auto concurrent_router=std::make_shared<nd::Router>(nd::default_config(),route_log);
