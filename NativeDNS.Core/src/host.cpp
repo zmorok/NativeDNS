@@ -14,7 +14,7 @@ CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string
       log_pipe_name_(pipe_name_==core_pipe_name?core_log_pipe_name:pipe_name_+".logs"),logger_(4096){
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
-    if(mode==InterceptionMode::transparent)prepare_secure_endpoints(config_);
+    if(mode==InterceptionMode::transparent)prepare_secure_endpoints(config_,45000);
     try{
         if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory());
         logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;

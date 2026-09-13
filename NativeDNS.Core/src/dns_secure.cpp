@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 namespace nd {
 namespace {
@@ -248,7 +249,10 @@ private:
     std::map<std::string,std::vector<std::shared_ptr<Entry>>> pool_;
 };
 }
-void prepare_secure_endpoints(Config& config) {
+void prepare_secure_endpoints(Config& config,uint32_t retry_ms) {
+    const auto deadline=Clock::now()+std::chrono::milliseconds(retry_ms);
+    std::map<std::string,std::string> resolved;
+
     for(auto& server:config.servers) {
         if(!server.enabled||(server.protocol!=Protocol::doh&&server.protocol!=Protocol::dot)||!server.ip.empty()||!server.bootstrap.empty())continue;
         std::string hostname;
@@ -260,11 +264,30 @@ void prepare_secure_endpoints(Config& config) {
         }
         if(hostname.empty())throw Error("ENDPOINT","Secure DNS endpoint hostname is empty");
         if(hostname.size()>2&&hostname.front()=='['&&hostname.back()==']')hostname=hostname.substr(1,hostname.size()-2);
-        if(platform::is_numeric_ip(hostname))server.ip=hostname;
-        else {
-            const auto addresses=platform::resolve_host(hostname);
-            if(addresses.empty())throw Error("BOOTSTRAP","Secure upstream hostname has no usable address: "+hostname);
-            server.ip=addresses.front();
+
+        if(platform::is_numeric_ip(hostname)){
+            server.ip=hostname;
+            continue;
+        }
+
+        if(const auto cached=resolved.find(hostname);cached!=resolved.end()){
+            server.ip=cached->second;
+            continue;
+        }
+
+        for(;;){
+            try{
+                const auto addresses=platform::resolve_host(hostname);
+                if(addresses.empty())throw Error("BOOTSTRAP","Secure upstream hostname has no usable address: "+hostname);
+                server.ip=addresses.front();
+                resolved.emplace(hostname,server.ip);
+                break;
+            }catch(const Error& error){
+                if(error.code!="BOOTSTRAP"||!retry_ms||Clock::now()>=deadline)throw;
+                const auto remaining=std::chrono::duration_cast<std::chrono::milliseconds>(deadline-Clock::now());
+                if(remaining.count()<=0)throw;
+                std::this_thread::sleep_for(std::min(std::chrono::milliseconds(1000),remaining));
+            }
         }
     }
 }

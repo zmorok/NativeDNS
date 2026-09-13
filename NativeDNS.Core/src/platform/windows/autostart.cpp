@@ -86,7 +86,7 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
 
     ComPtr<IRegistrationInfo> registration;
     check(definition->get_RegistrationInfo(registration.put()),"Open task registration info");
-    Bstr author(L"NativeDNS"),description(L"Starts the NativeDNS transparent DNS Core on demand for the desktop application.");
+    Bstr author(L"NativeDNS"),description(L"Starts the NativeDNS transparent DNS Core at user logon and on demand for the desktop application.");
     check(registration->put_Author(author.value),"Set task author");
     check(registration->put_Description(description.value),"Set task description");
 
@@ -103,10 +103,20 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     check(settings->put_DisallowStartIfOnBatteries(VARIANT_FALSE),"Allow task on battery");
     check(settings->put_StopIfGoingOnBatteries(VARIANT_FALSE),"Keep task on battery");
     check(settings->put_MultipleInstances(TASK_INSTANCES_IGNORE_NEW),"Set single task instance");
-    check(settings->put_RestartCount(3),"Set task restart count");
+    check(settings->put_RestartCount(10),"Set task restart count");
     Bstr restart_interval(L"PT1M"),execution_limit(L"PT0S");
     check(settings->put_RestartInterval(restart_interval.value),"Set task restart interval");
     check(settings->put_ExecutionTimeLimit(execution_limit.value),"Remove task execution limit");
+
+    ComPtr<ITriggerCollection> core_triggers;
+    check(definition->get_Triggers(core_triggers.put()),"Open Core task triggers");
+    ComPtr<ITrigger> core_trigger;
+    check(core_triggers->Create(TASK_TRIGGER_LOGON,core_trigger.put()),"Create Core logon trigger");
+    ComPtr<ILogonTrigger> core_logon;
+    check(core_trigger->QueryInterface(IID_PPV_ARGS(core_logon.put())),"Configure Core logon trigger");
+    Bstr core_trigger_id(L"NativeDNS Core user logon"),core_delay(L"PT10S");
+    check(core_logon->put_Id(core_trigger_id.value),"Set Core logon trigger id");
+    check(core_logon->put_Delay(core_delay.value),"Set Core logon delay");
 
     ComPtr<IActionCollection> actions;
     check(definition->get_Actions(actions.put()),"Open task actions");
@@ -157,7 +167,7 @@ void enable_autostart(const std::filesystem::path& executable,const std::filesys
     check(gui_triggers->Create(TASK_TRIGGER_LOGON,gui_trigger.put()),"Create GUI logon trigger");
     ComPtr<ILogonTrigger> gui_logon;
     check(gui_trigger->QueryInterface(IID_PPV_ARGS(gui_logon.put())),"Configure GUI logon trigger");
-    Bstr gui_trigger_id(L"NativeDNS GUI user logon"),gui_delay(L"PT5S");
+    Bstr gui_trigger_id(L"NativeDNS GUI user logon"),gui_delay(L"PT15S");
     check(gui_logon->put_Id(gui_trigger_id.value),"Set GUI logon trigger id");
     check(gui_logon->put_Delay(gui_delay.value),"Set GUI logon delay");
     ComPtr<IActionCollection> gui_actions;
@@ -212,7 +222,7 @@ AutostartStatus autostart_status() {
     result.enabled=core_enabled==VARIANT_TRUE||enabled==VARIANT_TRUE;
     if(!result.enabled)return result;
 
-    bool core_is_on_demand=false;
+    bool core_has_logon_trigger=false;
     if(core_enabled==VARIANT_TRUE){
         ComPtr<ITaskDefinition> core_definition;
         check(core_task->get_Definition(core_definition.put()),"Read Core autostart definition");
@@ -220,9 +230,9 @@ AutostartStatus autostart_status() {
         check(core_definition->get_Triggers(core_triggers.put()),"Read Core autostart triggers");
         LONG trigger_count=0;
         check(core_triggers->get_Count(&trigger_count),"Count Core autostart triggers");
-        core_is_on_demand=trigger_count==0;
+        core_has_logon_trigger=trigger_count==1;
     }
-    result.needs_repair=core_enabled!=VARIANT_TRUE||enabled!=VARIANT_TRUE||!core_is_on_demand;
+    result.needs_repair=core_enabled!=VARIANT_TRUE||enabled!=VARIANT_TRUE||!core_has_logon_trigger;
     if(enabled!=VARIANT_TRUE)return result;
 
     ComPtr<ITaskDefinition> definition;

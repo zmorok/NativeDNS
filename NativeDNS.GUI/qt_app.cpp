@@ -975,7 +975,7 @@ void NativeDnsWindow::importConfiguration(){const auto file=QFileDialog::getOpen
 void NativeDnsWindow::exportConfiguration(){const auto file=QFileDialog::getSaveFileName(this,uiText("Export Configuration..."),"NativeDNS.xml","XML (*.xml)");if(file.isEmpty())return;try{nd::save_config(config_,fsPath(file));}catch(const std::exception& e){QMessageBox::critical(this,uiText("Export"),e.what());}}
 
 void NativeDnsWindow::startCore(bool transparent){
-    if(coreLaunchPending_&&coreLaunchTimer_.isValid()&&coreLaunchTimer_.elapsed()<10000)return;
+    if(coreLaunchPending_&&coreLaunchTimer_.isValid()&&coreLaunchTimer_.elapsed()<45000)return;
     if(coreStartOperationPending_.exchange(true))return;
     const QString helper=QCoreApplication::applicationDirPath()+
 #ifdef _WIN32
@@ -1108,7 +1108,7 @@ void NativeDnsWindow::refreshStatus(){
             if(!failed){
                 self->coreLaunchPending_=false;
                 self->setStatusText(friendlyCoreStatus(status),status.startsWith("ERROR"));
-            }else if(self->coreLaunchPending_&&self->coreLaunchTimer_.isValid()&&self->coreLaunchTimer_.elapsed()<10000){
+            }else if(self->coreLaunchPending_&&self->coreLaunchTimer_.isValid()&&self->coreLaunchTimer_.elapsed()<45000){
                 self->setStatusText(uiText("Core: starting..."));
             }else{
                 self->coreLaunchPending_=false;

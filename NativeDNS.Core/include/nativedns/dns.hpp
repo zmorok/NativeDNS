@@ -36,7 +36,7 @@ std::unique_ptr<IDnsTransport> make_transport(Protocol protocol);
 // Resolve secure endpoints before transparent interception is enabled. The
 // returned configuration contains numeric connection endpoints while retaining
 // the configured hostname for TLS identity verification.
-void prepare_secure_endpoints(Config& config);
+void prepare_secure_endpoints(Config& config,uint32_t retry_ms=0);
 struct TestResult {
     bool success = false;
     Protocol protocol = Protocol::udp;
