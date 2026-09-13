@@ -14,11 +14,18 @@
 #include <algorithm>
 
 namespace {
-std::filesystem::path find_diagnostic_log(const std::filesystem::path& directory) {
+std::vector<std::filesystem::path> diagnostic_logs(const std::filesystem::path& directory) {
+    std::vector<std::filesystem::path> result;
+    if(!std::filesystem::is_directory(directory))return result;
     for(const auto& entry:std::filesystem::directory_iterator(directory)){
         const auto name=entry.path().filename().string();
-        if(name.starts_with("NativeDNS-")&&name.ends_with(".log"))return entry.path();
+        if(name.starts_with("NativeDNS-")&&name.ends_with(".log"))result.push_back(entry.path());
     }
+    return result;
+}
+std::filesystem::path find_new_diagnostic_log(const std::filesystem::path& directory,const std::vector<std::filesystem::path>& existing) {
+    for(const auto& path:diagnostic_logs(directory))
+        if(std::find(existing.begin(),existing.end(),path)==existing.end())return path;
     throw std::runtime_error("timestamped diagnostic log not found");
 }
 }
@@ -99,24 +106,15 @@ int main() {
             check(failed&&retrying.status().state==nd::State::stopped,"interception failure rolls back partial local proxy startup");
             port_owner.stop();retrying.start();check(retrying.status().state==nd::State::running,"host retries after interception failure");retrying.stop();
         }
-        if(!nd::platform::is_elevated()){
-            const auto obstruction=std::filesystem::current_path()/("ipc-log-obstruction-"+std::to_string(nd::platform::process_id()));
-            {std::ofstream stream(obstruction);stream<<"not a directory";}
-            auto logging_failure=rollback_config;logging_failure.logging.file_enabled=true;logging_failure.logging.directory=(obstruction/"logs").string();
-            nd::CoreHost tolerant(logging_failure,rollback_original,0,name+".LoggingFailure");
-            const auto events=tolerant.logger().snapshot(nd::Level::debug,0);
-            check(std::any_of(events.begin(),events.end(),[](const nd::LogEvent& event){return event.code=="FILE_LOG_INIT_FAILED";}),"file logging failure is diagnosed without aborting CoreHost construction");
-            tolerant.start();check(tolerant.status().state==nd::State::running,"optional file logging failure must not stop DNS core");tolerant.stop();
-            std::filesystem::remove(obstruction);
-        }
         const auto host_name=name+".Host";
         const auto host_log_name=host_name+".logs";
-        const auto log_directory=std::filesystem::current_path()/("ipc-log-test-"+std::to_string(nd::platform::process_id()));
-        auto config=nd::default_config(); config.logging.file_enabled=false; config.logging.directory=log_directory.string(); config.rules.back().action=nd::Action::block;
+        const auto log_directory=nd::platform::application_root_directory()/"logs";
+        const auto existing_logs=diagnostic_logs(log_directory);
+        auto config=nd::default_config(); config.logging.file_enabled=false; config.logging.directory="ignored-custom-log-directory"; config.rules.back().action=nd::Action::block;
         nd::Server original; original.name="unused"; original.ip="127.0.0.1"; original.port=1;
         nd::CoreHost host(config,original,0,host_name); host.start();
         std::optional<std::filesystem::path> diagnostic_log;
-        if(!nd::platform::is_elevated())check(nd::pipe_request(host_name,nd::IpcOperation::configure_file_log,"1\t2").payload=="FILE_LOG_ENABLED","enable file log through IPC");
+        check(nd::pipe_request(host_name,nd::IpcOperation::configure_file_log,"1\t2").payload=="FILE_LOG_ENABLED","enable file log through IPC");
         response=nd::pipe_request(host_name,nd::IpcOperation::status);
         check(response.payload.starts_with("RUNNING") && response.payload.find("transparent=0")!=std::string::npos,"host status");
         check(nd::pipe_request(host_name,nd::IpcOperation::status,"unexpected").status==1,"reject payload for payload-free privileged operation");
@@ -124,12 +122,12 @@ int main() {
         const auto port=static_cast<uint16_t>(std::stoul(response.payload.substr(marker+5,finish-marker-5)));
         auto local=original; local.port=port;
         check(nd::test_server(local,"example.com").success,"host routes actual local DNS request");
-        if(!nd::platform::is_elevated()){
-            host.logger().flush_file();
-            diagnostic_log=find_diagnostic_log(log_directory);
+        host.logger().flush_file();
+        diagnostic_log=find_new_diagnostic_log(log_directory,existing_logs);
+        {
             std::ifstream stream(*diagnostic_log,std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)),{});
-            check(contents.find("[INFO]")!=std::string::npos&&contents.find("FILE_LOG_CONFIGURED")!=std::string::npos&&contents.find("DNS_ROUTE")!=std::string::npos,"runtime file log configuration");
+            check(contents.find("[INFO]")!=std::string::npos&&contents.find("FILE_LOG_CONFIGURED")!=std::string::npos&&contents.find("DNS_ROUTE")!=std::string::npos,"runtime file log configuration in application root");
         }
         response=nd::pipe_request(host_log_name,nd::IpcOperation::logs,"0\t0\t3");
         check(response.payload.find("CORE_STARTED")!=std::string::npos && response.payload.find("DNS_ROUTE")!=std::string::npos,"host log stream snapshot");
@@ -161,7 +159,8 @@ int main() {
             check(first!=std::string::npos&&contents.find("CORE_STOPPED",first+1)==std::string::npos,"host stop is logged once");
         }
         host.logger().configure_file(false,nd::Level::normal,{});
-        if(std::filesystem::exists(log_directory)){for(const auto& entry:std::filesystem::directory_iterator(log_directory))std::filesystem::remove(entry.path());std::filesystem::remove(log_directory);}
+        if(diagnostic_log)std::filesystem::remove(*diagnostic_log);
+        std::error_code cleanup_error;std::filesystem::remove(log_directory,cleanup_error);
         std::cout << "cross-platform IPC protocol tests passed\n"; return 0;
     } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

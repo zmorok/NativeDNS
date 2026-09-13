@@ -3,7 +3,6 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/utsname.h>
 #include <fcntl.h>
@@ -59,15 +58,6 @@ std::filesystem::path user_config_directory(){
     return executable_path().parent_path();
 }
 bool is_elevated(){return geteuid()==0;}
-std::filesystem::path privileged_log_directory(){return "/var/log/nativedns";}
-void prepare_privileged_log_directory(){
-    const auto directory=privileged_log_directory();
-    struct stat status{};
-    if(lstat(directory.c_str(),&status)==0&&(S_ISLNK(status.st_mode)||!S_ISDIR(status.st_mode)))throw Error("LOG_SECURITY","Privileged log path must be a real directory");
-    std::error_code error;std::filesystem::create_directories(directory,error);
-    if(error||lstat(directory.c_str(),&status)!=0||S_ISLNK(status.st_mode)||!S_ISDIR(status.st_mode))throw Error("LOG_SECURITY","Cannot create safe privileged log directory");
-    if(chown(directory.c_str(),0,0)<0||chmod(directory.c_str(),0750)<0)throw Error("LOG_SECURITY","Cannot secure privileged log directory: "+std::string(std::strerror(errno)));
-}
 std::string system_summary(){
     utsname details{};
     const bool available=::uname(&details)==0;

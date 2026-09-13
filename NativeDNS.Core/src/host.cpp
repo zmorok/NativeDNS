@@ -7,12 +7,7 @@
 
 namespace nd {
 namespace {
-std::filesystem::path file_log_directory(const LoggingSettings& settings){
-    if(platform::is_elevated()){platform::prepare_privileged_log_directory();return platform::privileged_log_directory();}
-    auto directory=std::filesystem::path(settings.directory);
-    if(directory.is_relative()) directory=platform::application_root_directory()/directory;
-    return directory;
-}
+std::filesystem::path file_log_directory(){return platform::application_root_directory()/"logs";}
 }
 CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string pipe_name,InterceptionMode mode)
     :config_(std::move(config)),original_(std::move(original)),local_port_(local_port),pipe_name_(std::move(pipe_name)),
@@ -21,7 +16,7 @@ CoreHost::CoreHost(Config config,Server original,uint16_t local_port,std::string
     logger_.set_display_level(config_.logging.screen);
     if(mode==InterceptionMode::transparent)prepare_secure_endpoints(config_);
     try{
-        if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
+        if(config_.logging.file_enabled)file_log_path_=timestamped_log_path(file_log_directory());
         logger_.configure_file(config_.logging.file_enabled,config_.logging.file,file_log_path_);file_log_enabled_=config_.logging.file_enabled;
     }
     catch(const std::exception& error){logger_.write(Level::errors_only,"FILE_LOG_INIT_FAILED",error.what());}
@@ -98,7 +93,7 @@ IpcResponse CoreHost::handle(IpcOperation operation,const std::string& payload){
         auto[end,error]=std::from_chars(level_text.data(),level_text.data()+level_text.size(),requested_level);
         if(level_text.empty()||error!=std::errc{}||end!=level_text.data()+level_text.size()||requested_level>3)throw Error("IPC_PROTOCOL","file log level must be 0..3");
         const bool enabled=enabled_text=="1";
-        if(enabled&&!file_log_enabled_)file_log_path_=timestamped_log_path(file_log_directory(config_.logging));
+        if(enabled&&!file_log_enabled_)file_log_path_=timestamped_log_path(file_log_directory());
         logger_.configure_file(enabled,static_cast<Level>(requested_level),file_log_path_);
         file_log_enabled_=enabled;
         if(enabled)logger_.write(Level::normal,"FILE_LOG_CONFIGURED","path="+file_log_path_.string()+" level="+level_text);
