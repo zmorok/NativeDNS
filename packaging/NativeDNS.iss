@@ -22,6 +22,7 @@ AppPublisher=NativeDNS
 DefaultDirName={autopf}\NativeDNS
 DefaultGroupName=NativeDNS
 DisableProgramGroupPage=yes
+SetupIconFile=..\NativeDNS.GUI\resources\nativedns.ico
 OutputDir={#OutputDir}
 OutputBaseFilename=NativeDNS-0.4.0-windows-x64-setup{#ConfigurationSuffix}
 Compression=lzma2/ultra64
