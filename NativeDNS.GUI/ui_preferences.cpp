@@ -31,6 +31,8 @@ QPalette lightPalette(){
     palette.setColor(QPalette::PlaceholderText,QColor(120,120,120));
     palette.setColor(QPalette::Disabled,QPalette::WindowText,disabledText);
     palette.setColor(QPalette::Disabled,QPalette::Text,disabledText);
+    palette.setColor(QPalette::Disabled,QPalette::Base,QColor(226,226,226));
+    palette.setColor(QPalette::Disabled,QPalette::Button,QColor(226,226,226));
     palette.setColor(QPalette::Disabled,QPalette::ButtonText,disabledText);
     palette.setColor(QPalette::Disabled,QPalette::HighlightedText,QColor(230,230,230));
     return palette;
@@ -58,6 +60,8 @@ QPalette darkPalette(){
     palette.setColor(QPalette::PlaceholderText,QColor(155,155,155));
     palette.setColor(QPalette::Disabled,QPalette::WindowText,disabledText);
     palette.setColor(QPalette::Disabled,QPalette::Text,disabledText);
+    palette.setColor(QPalette::Disabled,QPalette::Base,QColor(46,46,48));
+    palette.setColor(QPalette::Disabled,QPalette::Button,QColor(46,46,48));
     palette.setColor(QPalette::Disabled,QPalette::ButtonText,disabledText);
     palette.setColor(QPalette::Disabled,QPalette::HighlightedText,QColor(175,175,175));
     return palette;
@@ -89,7 +93,7 @@ constexpr std::array translations{
     Translation{"DNS Server:","DNS-сервер:"}, Translation{"Block mode:","Режим блокировки:"},
     Translation{"Original/System","Исходный/системный"}, Translation{"Silent drop","Без ответа"},
     Translation{"process","обрабатывать"}, Translation{"bypass","обходить"}, Translation{"block","блокировать"},
-    Translation{"Rules","Правила"}, Translation{"Action","Действие"},
+    Translation{"Rules","Правила"}, Translation{"Action","Действие"}, Translation{"Hostnames","Доменные имена"},
     Translation{"DNS Server","DNS-сервер"}, Translation{"Up","Вверх"},
     Translation{"Down","Вниз"}, Translation{"Clone","Копировать"},
     Translation{"New Rule","Новое правило"},
@@ -123,7 +127,8 @@ constexpr std::array translations{
     Translation{"Core: Stopped","Ядро: остановлено"}, Translation{"Core: Starting","Ядро: запускается"},
     Translation{"Transparent","Прозрачный перехват"}, Translation{"Local proxy","Локальный прокси"},
     Translation{"Active","Активен"}, Translation{"Inactive","Неактивен"},
-    Translation{"Mode","Режим"}, Translation{"DNS port","Порт DNS"}, Translation{"UDP","UDP"}, Translation{"TCP","TCP"}
+    Translation{"Mode","Режим"}, Translation{"DNS port","Порт DNS"}, Translation{"UDP","UDP"}, Translation{"TCP","TCP"},
+    Translation{"Anonymized DNSCrypt","Анонимизированный DNSCrypt"}
 };
 }
 
@@ -145,6 +150,8 @@ void applyUiTheme(QApplication& application,bool dark){
         "QMenu { background-color: #333335; color: #e8e8e8; border: 1px solid #555557; }"
         "QMenuBar::item:selected, QMenu::item:selected { background-color: #0078d7; color: #ffffff; }"
         "QMenu::item:disabled, QToolButton:disabled { color: #878787; }"
+        "QLineEdit, QPlainTextEdit, QComboBox { background-color: #1e1e1e; border: 1px solid #5d5d60; }"
+        "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled { background-color: #2e2e30; color: #878787; border-color: #3d3d40; }"
         "QToolButton:hover, QPushButton:hover, QTabBar::tab:hover { background-color: #454547; border-color: #777779; }"
         "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { background-color: #3f4f5f; color: #ffffff; }"
         "QComboBox QAbstractItemView::item:selected { background-color: #0078d7; color: #ffffff; }"
@@ -154,6 +161,8 @@ void applyUiTheme(QApplication& application,bool dark){
         "QMenu { background-color: #ffffff; }"
         "QMenuBar::item:selected, QMenu::item:selected { background-color: #0078d7; color: #ffffff; }"
         "QMenu::item:disabled, QToolButton:disabled { color: #7d7d7d; }"
+        "QLineEdit, QPlainTextEdit, QComboBox { background-color: #ffffff; border: 1px solid #8a8a8a; }"
+        "QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled { background-color: #e2e2e2; color: #7d7d7d; border-color: #c4c4c4; }"
         "QToolButton:hover, QPushButton:hover, QTabBar::tab:hover { background-color: #dcecf9; border-color: #7eb4dd; }"
         "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { background-color: #e5f1fb; color: #202020; }"
         "QComboBox QAbstractItemView::item:selected { background-color: #0078d7; color: #ffffff; }"

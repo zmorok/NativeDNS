@@ -27,6 +27,7 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPaintEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QStandardPaths>
@@ -80,10 +81,23 @@ QString qPath(const std::filesystem::path& value){
     return q(value.string());
 #endif
 }
-QString protocolText(nd::Protocol p){return q(nd::protocol_name(p));}
+QString protocolText(nd::Protocol p){
+    switch(p){
+        case nd::Protocol::udp:return "UDP";
+        case nd::Protocol::tcp:return "TCP";
+        case nd::Protocol::doh:return "DoH";
+        case nd::Protocol::dot:return "DoT";
+        case nd::Protocol::doh3:return "DoH3";
+        case nd::Protocol::doq:return "DoQ";
+        case nd::Protocol::dnscrypt:return "DNSCrypt";
+        case nd::Protocol::anonymized_dnscrypt:return uiText("Anonymized DNSCrypt");
+    }
+    return {};
+}
 nd::Protocol protocolFrom(int index){static const nd::Protocol values[]{nd::Protocol::udp,nd::Protocol::tcp,nd::Protocol::doh,nd::Protocol::dot,nd::Protocol::doh3,nd::Protocol::doq,nd::Protocol::dnscrypt,nd::Protocol::anonymized_dnscrypt};return values[std::clamp(index,0,7)];}
 int protocolIndex(nd::Protocol p){for(int i=0;i<8;++i)if(protocolFrom(i)==p)return i;return 0;}
 QString joinPatterns(const std::vector<std::string>& patterns){QStringList list;for(const auto& p:patterns)list<<q(p);return list.join(";\n");}
+QString previewPatterns(const std::vector<std::string>& patterns){QStringList list;for(const auto& p:patterns)list<<q(p);return list.join("; ");}
 uint32_t nextServerId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.servers)id=std::max(id,v.id);return id+1;}
 uint32_t nextRuleId(const nd::Config& c){uint32_t id=0;for(const auto& v:c.rules)id=std::max(id,v.id);return id+1;}
 
@@ -172,6 +186,19 @@ void translateDialogButtons(QDialogButtonBox* buttons){
     if(auto* cancel=buttons->button(QDialogButtonBox::Cancel))cancel->setText(uiText("Cancel"));
 }
 
+void configureFixedTableRows(QTableView* table){
+    const int height=table->fontMetrics().height()+8;
+    table->setWordWrap(false);
+    table->verticalHeader()->setSectionResizeMode(QHeaderView::Fixed);
+    table->verticalHeader()->setMinimumSectionSize(height);
+    table->verticalHeader()->setDefaultSectionSize(height);
+}
+
+void setFormFieldEnabled(QFormLayout* form,QWidget* field,bool enabled){
+    field->setEnabled(enabled);
+    if(auto* label=form->labelForField(field))label->setEnabled(enabled);
+}
+
 void showAboutDialog(QWidget* parent){
     QDialog dialog(parent);
     dialog.setWindowTitle(uiText("About"));
@@ -240,7 +267,7 @@ bool editServer(QWidget* parent,nd::Server& server){
     bootstrap.setText([&]{QStringList x;for(const auto& v:server.bootstrap)x<<q(v);return x.join(';');}());
     fallbacks.setText([&]{QStringList x;for(const auto id:server.fallback_ids)x<<QString::number(id);return x.join(';');}());
     form->addRow(uiText("Name:"),&name);form->addRow(uiText("Protocol:"),&protocol);form->addRow(uiText("IP:"),&ip);form->addRow(uiText("Port:"),&port);form->addRow(uiText("Hostname:"),&host);form->addRow(uiText("URL:"),&url);form->addRow(uiText("Fallback server IDs:"),&fallbacks);form->addRow(uiText("Bootstrap:"),&bootstrap);form->addRow(uiText("Public key:"),&publicKey);form->addRow(uiText("Provider:"),&provider);form->addRow(uiText("Relay:"),&relay);form->addRow(&directCertificateFallback);form->addRow(&enabled);form->addRow(&dnssec);
-    auto update=[&]{const auto p=protocolFrom(protocol.currentIndex());const bool plain=p==nd::Protocol::udp||p==nd::Protocol::tcp;const bool doh=p==nd::Protocol::doh||p==nd::Protocol::doh3;const bool dot=p==nd::Protocol::dot||p==nd::Protocol::doq;const bool crypt=p==nd::Protocol::dnscrypt||p==nd::Protocol::anonymized_dnscrypt;ip.setEnabled(plain||crypt||dot||doh);url.setEnabled(doh);host.setEnabled(dot||doh);publicKey.setEnabled(crypt);provider.setEnabled(crypt);relay.setEnabled(p==nd::Protocol::anonymized_dnscrypt);directCertificateFallback.setEnabled(p==nd::Protocol::anonymized_dnscrypt);};
+    auto update=[&]{const auto p=protocolFrom(protocol.currentIndex());const bool plain=p==nd::Protocol::udp||p==nd::Protocol::tcp;const bool doh=p==nd::Protocol::doh||p==nd::Protocol::doh3;const bool dot=p==nd::Protocol::dot||p==nd::Protocol::doq;const bool crypt=p==nd::Protocol::dnscrypt||p==nd::Protocol::anonymized_dnscrypt;setFormFieldEnabled(form,&ip,plain||crypt||dot||doh);setFormFieldEnabled(form,&url,doh);setFormFieldEnabled(form,&host,dot||doh);setFormFieldEnabled(form,&publicKey,crypt);setFormFieldEnabled(form,&provider,crypt);setFormFieldEnabled(form,&relay,p==nd::Protocol::anonymized_dnscrypt);directCertificateFallback.setEnabled(p==nd::Protocol::anonymized_dnscrypt);};
     QObject::connect(&protocol,&QComboBox::currentIndexChanged,&dialog,[&]{update();});update();
     auto* buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);translateDialogButtons(buttons);QObject::connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);QObject::connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
     auto* root=new QVBoxLayout(&dialog);root->addLayout(form);root->addWidget(buttons);
@@ -264,6 +291,7 @@ public:
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        configureFixedTableRows(table_);
 
         auto* add=new QPushButton(uiText("Add..."));
         auto* edit=new QPushButton(uiText("Edit..."));
@@ -390,10 +418,10 @@ bool editRule(QWidget* parent,nd::Config& config,nd::Rule& rule){
     form->addRow(uiText("Block mode:"),&block);
     form->addRow(&enabled);
     auto update=[&]{
-        server.setEnabled(action.currentIndex()==0);
-        block.setEnabled(action.currentIndex()==2);
-        name.setEnabled(!rule.is_default);
-        hosts.setEnabled(!rule.is_default);
+        setFormFieldEnabled(form,&server,action.currentIndex()==0);
+        setFormFieldEnabled(form,&block,action.currentIndex()==2);
+        setFormFieldEnabled(form,&name,!rule.is_default);
+        setFormFieldEnabled(form,&hosts,!rule.is_default);
         enabled.setEnabled(!rule.is_default);
     };
     QObject::connect(&action,&QComboBox::currentIndexChanged,&dialog,[&]{update();});
@@ -422,26 +450,28 @@ public:
         :QAbstractTableModel(parent),current_(current),original_(original){rebuildIndexes();}
 
     int rowCount(const QModelIndex& parent={}) const override{return parent.isValid()?0:static_cast<int>(current_.rules.size());}
-    int columnCount(const QModelIndex& parent={}) const override{return parent.isValid()?0:4;}
+    int columnCount(const QModelIndex& parent={}) const override{return parent.isValid()?0:5;}
     QVariant headerData(int section,Qt::Orientation orientation,int role) const override{
         if(orientation!=Qt::Horizontal||role!=Qt::DisplayRole)return {};
-        static const char* keys[]{"Enabled","Name","Action","DNS Server"};
-        return section>=0&&section<4?uiText(keys[section]):QVariant{};
+        static const char* keys[]{"Enabled","Name","Hostnames","Action","DNS Server"};
+        return section>=0&&section<5?uiText(keys[section]):QVariant{};
     }
     QVariant data(const QModelIndex& index,int role=Qt::DisplayRole) const override{
         if(!index.isValid()||index.row()<0||static_cast<size_t>(index.row())>=current_.rules.size())return {};
         const auto& rule=current_.rules[static_cast<size_t>(index.row())];
         if(role==ruleIdRole)return rule.id;
         if(role==Qt::UserRole){
-            if(index.column()==2)return rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2;
-            if(index.column()==3)return rule.server_id;
+            if(index.column()==3)return rule.action==nd::Action::process?0:rule.action==nd::Action::bypass?1:2;
+            if(index.column()==4)return rule.server_id;
             return {};
         }
+        if(role==Qt::ToolTipRole&&index.column()==2)return joinPatterns(rule.patterns);
         if(role==Qt::DisplayRole){
             if(index.column()==0)return rule.enabled?QStringLiteral("✓"):QString{};
             if(index.column()==1)return q(rule.name);
-            if(index.column()==2)return uiText(rule.action==nd::Action::process?"process":rule.action==nd::Action::bypass?"bypass":"block");
-            if(index.column()==3){
+            if(index.column()==2)return previewPatterns(rule.patterns);
+            if(index.column()==3)return uiText(rule.action==nd::Action::process?"process":rule.action==nd::Action::bypass?"bypass":"block");
+            if(index.column()==4){
                 if(rule.action!=nd::Action::process||!rule.server_id)return uiText("Original/System");
                 const auto server=server_names_.find(rule.server_id);return server==server_names_.end()?uiText("Original/System"):server->second;
             }
@@ -453,8 +483,8 @@ public:
     Qt::ItemFlags flags(const QModelIndex& index) const override{
         if(!index.isValid())return Qt::NoItemFlags;
         auto result=Qt::ItemIsEnabled|Qt::ItemIsSelectable;
-        if(index.column()==2)result|=Qt::ItemIsEditable;
-        if(index.column()==3){
+        if(index.column()==3)result|=Qt::ItemIsEditable;
+        if(index.column()==4){
             const auto& rule=current_.rules[static_cast<size_t>(index.row())];
             if(rule.action==nd::Action::process)result|=Qt::ItemIsEditable;
             else result&=~Qt::ItemIsEnabled;
@@ -468,9 +498,10 @@ private:
         const auto found=original_rules_.find(rule.id);if(found==original_rules_.end())return true;
         const auto& before=*found->second;
         if(column==0)return before.enabled!=rule.enabled;
-        if(column==1){const auto row=original_rows_.find(rule.id);return before.name!=rule.name||before.patterns!=rule.patterns||before.interface_id!=rule.interface_id||before.metadata!=rule.metadata||row==original_rows_.end()||row->second!=static_cast<size_t>(&rule-current_.rules.data());}
-        if(column==2)return before.action!=rule.action||before.block_mode!=rule.block_mode||before.dnssec_validate!=rule.dnssec_validate||before.dnssec_reject_unsigned!=rule.dnssec_reject_unsigned;
-        return column==3&&before.server_id!=rule.server_id;
+        if(column==1){const auto row=original_rows_.find(rule.id);return before.name!=rule.name||before.interface_id!=rule.interface_id||before.metadata!=rule.metadata||row==original_rows_.end()||row->second!=static_cast<size_t>(&rule-current_.rules.data());}
+        if(column==2)return before.patterns!=rule.patterns;
+        if(column==3)return before.action!=rule.action||before.block_mode!=rule.block_mode||before.dnssec_validate!=rule.dnssec_validate||before.dnssec_reject_unsigned!=rule.dnssec_reject_unsigned;
+        return column==4&&before.server_id!=rule.server_id;
     }
     void rebuildIndexes(){
         original_rules_.clear();original_rows_.clear();server_names_.clear();
@@ -488,15 +519,17 @@ private:
 class RulesDialog final:public QDialog{
 public:
     RulesDialog(QWidget* parent,nd::Config& config,std::function<bool()> changed)
-        :QDialog(parent),target_(config),original_(config),working_(config),changed_(std::move(changed)){
+        :QDialog(parent),target_(config),changed_(std::move(changed)){
         setWindowTitle(uiText("Rules"));resize(880,480);
         model_=new RulesTableModel(working_,original_,this);
         table_=new QTableView(this);
         table_->setModel(model_);
         table_->horizontalHeader()->setSectionResizeMode(1,QHeaderView::Stretch);
+        table_->horizontalHeader()->setSectionResizeMode(2,QHeaderView::Stretch);
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
         table_->setSelectionMode(QAbstractItemView::SingleSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        configureFixedTableRows(table_);
 
         auto* up=new QPushButton(uiText("Up"));auto* down=new QPushButton(uiText("Down"));
         auto* add=new QPushButton(uiText("Add..."));auto* edit=new QPushButton(uiText("Edit..."));
@@ -508,8 +541,10 @@ public:
         auto* content=new QHBoxLayout;content->addWidget(table_,1);content->addLayout(side);
         auto* bottom=new QHBoxLayout;bottom->addWidget(ok);bottom->addStretch();bottom->addWidget(close);
         auto* root=new QVBoxLayout(this);root->addLayout(content,1);root->addLayout(bottom);
+        initializationControls_={table_,up,down,add,edit,clone,remove,ok};
+        for(auto* control:initializationControls_)control->setEnabled(false);
 
-        table_->setItemDelegateForColumn(2,new LazyComboDelegate(
+        table_->setItemDelegateForColumn(3,new LazyComboDelegate(
             []{return std::vector<ComboOption>{{uiText("process"),0},{uiText("bypass"),1},{uiText("block"),2}};},
             [this](const QModelIndex& index,uint32_t value){
                 const auto id=index.siblingAtColumn(0).data(ruleIdRole).toUInt();
@@ -518,7 +553,7 @@ public:
                     if(rule.action!=nd::Action::process)rule.server_id=0;
                 });});
             },table_));
-        table_->setItemDelegateForColumn(3,new LazyComboDelegate(
+        table_->setItemDelegateForColumn(4,new LazyComboDelegate(
             [this]{
                 std::vector<ComboOption> options{{uiText("Original/System"),0}};
                 options.reserve(working_.servers.size()+1);
@@ -540,8 +575,20 @@ public:
         connect(remove,&QPushButton::clicked,this,[this]{const int row=table_->currentIndex().row();if(row<0)return;if(working_.rules[static_cast<size_t>(row)].is_default){QMessageBox::information(this,"NativeDNS",uiText("Default rule cannot be removed."));return;}apply([&](nd::ConfigEditor& editor){editor.remove_rule(working_.rules[static_cast<size_t>(row)].id);});});
         connect(ok,&QPushButton::clicked,this,[this]{commit();});
         connect(close,&QPushButton::clicked,this,&QDialog::reject);
-        connect(table_,&QTableView::clicked,this,[this](const QModelIndex& index){if(index.column()>=2&&index.column()<=3&&(index.flags()&Qt::ItemIsEnabled))table_->edit(index);});
-        connect(table_,&QTableView::doubleClicked,this,[edit](const QModelIndex& index){if(index.column()<2)edit->click();});
+        connect(table_,&QTableView::clicked,this,[this](const QModelIndex& index){if(index.column()>=3&&index.column()<=4&&(index.flags()&Qt::ItemIsEnabled))table_->edit(index);});
+        connect(table_,&QTableView::doubleClicked,this,[edit](const QModelIndex& index){if(index.column()<3)edit->click();});
+    }
+protected:
+    void paintEvent(QPaintEvent* event) override{
+        QDialog::paintEvent(event);
+        if(initializationScheduled_)return;
+        initializationScheduled_=true;
+        QTimer::singleShot(0,this,[this]{
+            original_=target_;
+            working_=target_;
+            model_->refresh();
+            for(auto* control:initializationControls_)control->setEnabled(true);
+        });
     }
 private:
     void commit(){
@@ -580,6 +627,8 @@ private:
     std::function<bool()> changed_;
     RulesTableModel* model_=nullptr;
     QTableView* table_=nullptr;
+    std::vector<QWidget*> initializationControls_;
+    bool initializationScheduled_=false;
 };
 }
 
