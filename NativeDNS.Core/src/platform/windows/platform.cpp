@@ -82,26 +82,44 @@ void prepare_privileged_log_directory(){
     if(!restore_enabled)throw Error("LOG_SECURITY","Cannot enable protected log ownership privilege");
     wchar_t* user_sid=nullptr;
     if(!ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(token_data.data())->User.Sid,&user_sid))throw Error("LOG_SECURITY","Cannot format elevated user SID");
-    const std::wstring sddl=L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GR;;;"+std::wstring(user_sid)+L")";LocalFree(user_sid);
+    const std::wstring sddl=L"O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GR;;;"+std::wstring(user_sid)+L")";LocalFree(user_sid);
     PSECURITY_DESCRIPTOR descriptor=nullptr;
     if(!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr))throw Error("LOG_SECURITY","Cannot create protected log ACL");
     PACL dacl=nullptr;BOOL present=FALSE,defaulted=FALSE;
     if(!GetSecurityDescriptorDacl(descriptor,&present,&dacl,&defaulted)||!present){LocalFree(descriptor);throw Error("LOG_SECURITY","Cannot inspect protected log ACL");}
+    PSID desired_owner=nullptr;
+    BOOL owner_defaulted=FALSE;
+    if(!GetSecurityDescriptorOwner(descriptor,&desired_owner,&owner_defaulted)||!desired_owner){LocalFree(descriptor);throw Error("LOG_SECURITY","Cannot inspect protected log owner");}
+    SECURITY_ATTRIBUTES security_attributes{sizeof(SECURITY_ATTRIBUTES),descriptor,FALSE};
     try{
         for(const auto& directory:{root,logs}){
-            if(!CreateDirectoryW(directory.c_str(),nullptr)&&GetLastError()!=ERROR_ALREADY_EXISTS)throw Error("LOG_SECURITY","Cannot create protected log directory: "+std::to_string(GetLastError()));
-            HANDLE handle=CreateFileW(directory.c_str(),FILE_READ_ATTRIBUTES|WRITE_DAC|WRITE_OWNER,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+            const bool created=CreateDirectoryW(directory.c_str(),&security_attributes)!=FALSE;
+            if(!created&&GetLastError()!=ERROR_ALREADY_EXISTS)throw Error("LOG_SECURITY","Cannot create protected log directory: "+std::to_string(GetLastError()));
+            HANDLE handle=CreateFileW(directory.c_str(),READ_CONTROL|FILE_READ_ATTRIBUTES|WRITE_DAC|WRITE_OWNER,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
             if(handle==INVALID_HANDLE_VALUE)throw Error("LOG_SECURITY","Cannot open protected log directory: "+std::to_string(GetLastError()));
             FILE_ATTRIBUTE_TAG_INFO attributes{};
-            const bool reparse=!GetFileInformationByHandleEx(handle,FileAttributeTagInfo,&attributes,sizeof(attributes))||(attributes.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
-            DWORD admin_size=SECURITY_MAX_SID_SIZE;std::vector<uint8_t> admin_sid(admin_size);
-            const bool admin=CreateWellKnownSid(WinBuiltinAdministratorsSid,nullptr,admin_sid.data(),&admin_size)!=FALSE;
-            const DWORD dacl_applied=reparse?ERROR_CANT_ACCESS_FILE:SetSecurityInfo(handle,SE_FILE_OBJECT,DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,nullptr,nullptr,dacl,nullptr);
-            const DWORD owner_applied=dacl_applied==ERROR_SUCCESS&&admin?SetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION,admin_sid.data(),nullptr,nullptr,nullptr):(admin?dacl_applied:ERROR_INVALID_SID);
+            const bool invalid=!GetFileInformationByHandleEx(handle,FileAttributeTagInfo,&attributes,sizeof(attributes))||(attributes.FileAttributes&FILE_ATTRIBUTE_DIRECTORY)==0||(attributes.FileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)!=0;
+            DWORD dacl_applied=ERROR_SUCCESS,owner_applied=ERROR_SUCCESS;
+            if(!created&&!invalid){
+                auto name=directory.native();
+                dacl_applied=SetNamedSecurityInfoW(name.data(),SE_FILE_OBJECT,DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,nullptr,nullptr,dacl,nullptr);
+                if(dacl_applied==ERROR_SUCCESS)owner_applied=SetNamedSecurityInfoW(name.data(),SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION,desired_owner,nullptr,nullptr,nullptr);
+                else owner_applied=dacl_applied;
+            }
+            PSECURITY_DESCRIPTOR applied_descriptor=nullptr;
+            PSID applied_owner=nullptr;
+            const DWORD inspected=invalid?ERROR_CANT_ACCESS_FILE:GetSecurityInfo(handle,SE_FILE_OBJECT,OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION,&applied_owner,nullptr,nullptr,nullptr,&applied_descriptor);
+            SECURITY_DESCRIPTOR_CONTROL control=0;DWORD revision=0;
+            const bool protected_dacl=inspected==ERROR_SUCCESS&&GetSecurityDescriptorControl(applied_descriptor,&control,&revision)&&(control&SE_DACL_PROTECTED)!=0;
+            const bool correct_owner=inspected==ERROR_SUCCESS&&applied_owner&&EqualSid(applied_owner,desired_owner)!=FALSE;
+            if(applied_descriptor)LocalFree(applied_descriptor);
             CloseHandle(handle);
-            if(reparse)throw Error("LOG_SECURITY","Protected log directory must not be a reparse point");
+            if(invalid)throw Error("LOG_SECURITY","Protected log path must be a real directory");
             if(dacl_applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot protect log directory DACL: "+std::to_string(dacl_applied));
             if(owner_applied!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot secure log directory owner: "+std::to_string(owner_applied));
+            if(inspected!=ERROR_SUCCESS)throw Error("LOG_SECURITY","Cannot verify protected log directory: "+std::to_string(inspected));
+            if(!protected_dacl)throw Error("LOG_SECURITY","Protected log directory still inherits permissions");
+            if(!correct_owner)throw Error("LOG_SECURITY","Protected log directory has an unsafe owner");
         }
     }catch(...){LocalFree(descriptor);throw;}
     LocalFree(descriptor);
