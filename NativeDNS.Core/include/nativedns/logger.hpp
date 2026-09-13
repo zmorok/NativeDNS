@@ -30,21 +30,26 @@ public:
     void set_display_level(Level level);
     void write(Level level, std::string code, std::string message);
     std::vector<LogEvent> snapshot(Level level, uint64_t after = 0) const;
-    std::vector<LogEvent> wait_snapshot(Level level, uint64_t after, std::chrono::milliseconds timeout) const;
+    std::vector<LogEvent>
+    wait_snapshot(Level level, uint64_t after, std::chrono::milliseconds timeout) const;
     void clear_display();
-    void configure_file(bool enabled, Level level, std::filesystem::path path,
-                        uint64_t maximum_bytes = 4 * 1024 * 1024, uint32_t retained_files = 3);
+    void configure_file(bool enabled,
+                        Level level,
+                        std::filesystem::path path,
+                        uint64_t maximum_bytes = 4 * 1024 * 1024,
+                        uint32_t retained_files = 3);
     void clear_file();
     void flush_file();
+
 private:
     struct FileTask {
-        enum class Kind { event, configure, clear, flush, stop } kind=Kind::event;
+        enum class Kind { event, configure, clear, flush, stop } kind = Kind::event;
         LogEvent event{};
-        bool enabled=false;
-        Level level=Level::normal;
+        bool enabled = false;
+        Level level = Level::normal;
         std::filesystem::path path;
-        uint64_t maximum_bytes=0;
-        uint32_t retained_files=0;
+        uint64_t maximum_bytes = 0;
+        uint32_t retained_files = 0;
         std::shared_ptr<std::promise<void>> completion;
     };
     void file_loop();
@@ -64,9 +69,9 @@ private:
     std::condition_variable file_changed_;
     std::deque<FileTask> file_tasks_;
     std::jthread file_thread_;
-    std::atomic_uint64_t dropped_file_events_=0;
+    std::atomic_uint64_t dropped_file_events_ = 0;
     std::filesystem::path file_path_;
     uint64_t maximum_bytes_ = 4 * 1024 * 1024;
     uint32_t retained_files_ = 3;
 };
-}
+} // namespace nd

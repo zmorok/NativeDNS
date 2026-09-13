@@ -23,7 +23,14 @@ namespace {
 constexpr uint32_t magic = 0x31444e4e;
 constexpr uint32_t max_payload = 1024 * 1024;
 constexpr size_t header_size = 20;
-std::string owner_name(const std::string& name){uint64_t hash=1469598103934665603ULL;for(const unsigned char value:name){hash^=value;hash*=1099511628211ULL;}return "NativeDNS.IPC."+std::to_string(hash);}
+std::string owner_name(const std::string& name) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char value : name) {
+        hash ^= value;
+        hash *= 1099511628211ULL;
+    }
+    return "NativeDNS.IPC." + std::to_string(hash);
+}
 
 void put16(uint8_t* out, uint16_t value) {
     out[0] = static_cast<uint8_t>(value);
@@ -50,7 +57,8 @@ uint32_t get32(const uint8_t* data) {
     return value;
 }
 
-std::vector<uint8_t> frame(uint16_t operation, uint64_t request, uint32_t status, const std::string& payload) {
+std::vector<uint8_t>
+frame(uint16_t operation, uint64_t request, uint32_t status, const std::string& payload) {
     if (payload.size() > max_payload) {
         throw Error("IPC_LIMIT", "IPC payload exceeds 1 MiB");
     }
@@ -65,13 +73,16 @@ std::vector<uint8_t> frame(uint16_t operation, uint64_t request, uint32_t status
     if (extra) {
         put32(output.data() + header_size, status);
     }
-    std::copy(payload.begin(), payload.end(), output.begin() + static_cast<ptrdiff_t>(header_size + extra));
+    std::copy(payload.begin(),
+              payload.end(),
+              output.begin() + static_cast<ptrdiff_t>(header_size + extra));
     return output;
 }
 
 class Fd {
 public:
-    explicit Fd(int value = -1) : value_(value) {}
+    explicit Fd(int value = -1) : value_(value) {
+    }
     ~Fd() {
         if (value_ >= 0) {
             ::close(value_);
@@ -81,8 +92,14 @@ public:
     Fd(const Fd&) = delete;
     Fd& operator=(const Fd&) = delete;
 
-    int get() const { return value_; }
-    int release(){const int value=value_;value_=-1;return value;}
+    int get() const {
+        return value_;
+    }
+    int release() {
+        const int value = value_;
+        value_ = -1;
+        return value;
+    }
 
 private:
     int value_ = -1;
@@ -92,16 +109,23 @@ private:
     throw Error("IPC_IO", std::string(what) + ": " + std::strerror(errno));
 }
 
-void wait_fd(int fd, short events, std::chrono::steady_clock::time_point deadline,const std::atomic_bool* running=nullptr) {
+void wait_fd(int fd,
+             short events,
+             std::chrono::steady_clock::time_point deadline,
+             const std::atomic_bool* running = nullptr) {
     for (;;) {
-        if(running&&!*running)throw Error("IPC_STOPPED","IPC server is stopping");
-        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        if (running && !*running)
+            throw Error("IPC_STOPPED", "IPC server is stopping");
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              deadline - std::chrono::steady_clock::now())
+                              .count();
         if (left <= 0) {
             throw Error("IPC_TIMEOUT", "IPC request timed out");
         }
 
         pollfd item{fd, events, 0};
-        const int result = poll(&item, 1, static_cast<int>(std::min<long long>(left, running?100:1000)));
+        const int result =
+            poll(&item, 1, static_cast<int>(std::min<long long>(left, running ? 100 : 1000)));
         if (result > 0) {
             if (item.revents & events) {
                 return;
@@ -118,13 +142,17 @@ void wait_fd(int fd, short events, std::chrono::steady_clock::time_point deadlin
     }
 }
 
-void transfer(int fd, uint8_t* data, size_t size, bool writing, std::chrono::steady_clock::time_point deadline,const std::atomic_bool* running=nullptr) {
+void transfer(int fd,
+              uint8_t* data,
+              size_t size,
+              bool writing,
+              std::chrono::steady_clock::time_point deadline,
+              const std::atomic_bool* running = nullptr) {
     size_t offset = 0;
     while (offset < size) {
-        wait_fd(fd, writing ? POLLOUT : POLLIN, deadline,running);
-        const auto count = writing
-            ? send(fd, data + offset, size - offset, MSG_NOSIGNAL)
-            : recv(fd, data + offset, size - offset, 0);
+        wait_fd(fd, writing ? POLLOUT : POLLIN, deadline, running);
+        const auto count = writing ? send(fd, data + offset, size - offset, MSG_NOSIGNAL)
+                                   : recv(fd, data + offset, size - offset, 0);
 
         if (count < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -148,7 +176,7 @@ sockaddr_un address_for(const std::string& name) {
     std::memcpy(address.sun_path, name.c_str(), name.size() + 1);
     return address;
 }
-}
+} // namespace
 
 PipeServer::PipeServer(std::string name, Handler handler)
     : name_(std::move(name)), handler_(std::move(handler)) {
@@ -165,8 +193,12 @@ void PipeServer::start() {
     if (running_.exchange(true)) {
         throw Error("IPC_LIFECYCLE", "IPC server already running");
     }
-    owner_=std::make_unique<platform::ProcessInstanceLock>(owner_name(name_));
-    if(!owner_->acquired()){owner_.reset();running_=false;throw Error("IPC_LIFECYCLE","Another IPC server owns this endpoint");}
+    owner_ = std::make_unique<platform::ProcessInstanceLock>(owner_name(name_));
+    if (!owner_->acquired()) {
+        owner_.reset();
+        running_ = false;
+        throw Error("IPC_LIFECYCLE", "Another IPC server owns this endpoint");
+    }
 
     {
         std::lock_guard lock(error_mutex_);
@@ -210,7 +242,8 @@ void PipeServer::run() {
         }
 
         const auto address = address_for(name_);
-        if (bind(listener.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) < 0) {
+        if (bind(listener.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) <
+            0) {
             io_error("bind");
         }
         if (chmod(name_.c_str(), 0600) < 0) {
@@ -242,9 +275,15 @@ void PipeServer::run() {
         }
         startup_cv_.notify_all();
 
-        struct Worker { std::jthread thread;std::shared_ptr<std::atomic_bool> done; };
+        struct Worker {
+            std::jthread thread;
+            std::shared_ptr<std::atomic_bool> done;
+        };
         std::vector<Worker> workers;
-        const auto reap_workers=[&](bool all=false){std::erase_if(workers,[&](const Worker& worker){return all||worker.done->load();});};
+        const auto reap_workers = [&](bool all = false) {
+            std::erase_if(workers,
+                          [&](const Worker& worker) { return all || worker.done->load(); });
+        };
         while (running_) {
             pollfd item{listener.get(), POLLIN, 0};
             const int poll_result = poll(&item, 1, 100);
@@ -267,39 +306,54 @@ void PipeServer::run() {
             }
 
             reap_workers();
-            if(workers.size()>=16)continue;
-            const int client_fd=client.get();
-            auto done=std::make_shared<std::atomic_bool>(false);
-            workers.push_back({std::jthread([this,client_fd,done] {
-              Fd client(client_fd);
-              try {
-                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-                uint8_t header[header_size]{};
-                transfer(client.get(), header, sizeof(header), false, deadline,&running_);
-                const auto parsed=detail::parse_ipc_header(header,false);
-                const uint16_t operation=parsed.operation;const uint64_t request=parsed.request;const uint32_t length=parsed.length;
+            if (workers.size() >= 16)
+                continue;
+            const int client_fd = client.get();
+            auto done = std::make_shared<std::atomic_bool>(false);
+            workers.push_back(
+                {std::jthread([this, client_fd, done] {
+                     Fd client(client_fd);
+                     try {
+                         const auto deadline =
+                             std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                         uint8_t header[header_size]{};
+                         transfer(client.get(), header, sizeof(header), false, deadline, &running_);
+                         const auto parsed = detail::parse_ipc_header(header, false);
+                         const uint16_t operation = parsed.operation;
+                         const uint64_t request = parsed.request;
+                         const uint32_t length = parsed.length;
 
-                std::string payload(length, '\0');
-                if (length) {
-                    transfer(client.get(), reinterpret_cast<uint8_t*>(payload.data()), length, false, deadline,&running_);
-                }
+                         std::string payload(length, '\0');
+                         if (length) {
+                             transfer(client.get(),
+                                      reinterpret_cast<uint8_t*>(payload.data()),
+                                      length,
+                                      false,
+                                      deadline,
+                                      &running_);
+                         }
 
-                IpcResponse response;
-                try {
-                    response = handler_(static_cast<IpcOperation>(operation), payload);
-                } catch (const Error& e) {
-                    response = {1, e.code + ": " + e.what()};
-                } catch (const std::exception& e) {
-                    response = {2, std::string("INTERNAL: ") + e.what()};
-                }
+                         IpcResponse response;
+                         try {
+                             response = handler_(static_cast<IpcOperation>(operation), payload);
+                         } catch (const Error& e) {
+                             response = {1, e.code + ": " + e.what()};
+                         } catch (const std::exception& e) {
+                             response = {2, std::string("INTERNAL: ") + e.what()};
+                         }
 
-                auto output = frame(static_cast<uint16_t>(operation | 0x8000), request, response.status, response.payload);
-                transfer(client.get(), output.data(), output.size(), true, deadline,&running_);
-            } catch (const std::exception&) {
-                // Malformed or disconnected clients are isolated from the server.
-            }
-              done->store(true);
-            }),done});
+                         auto output = frame(static_cast<uint16_t>(operation | 0x8000),
+                                             request,
+                                             response.status,
+                                             response.payload);
+                         transfer(
+                             client.get(), output.data(), output.size(), true, deadline, &running_);
+                     } catch (const std::exception&) {
+                         // Malformed or disconnected clients are isolated from the server.
+                     }
+                     done->store(true);
+                 }),
+                 done});
             (void)client.release();
         }
         reap_workers(true);
@@ -315,7 +369,10 @@ void PipeServer::run() {
     std::filesystem::remove(name_, error);
 }
 
-IpcResponse pipe_request(const std::string& name, IpcOperation operation, const std::string& payload, uint32_t timeout_ms) {
+IpcResponse pipe_request(const std::string& name,
+                         IpcOperation operation,
+                         const std::string& payload,
+                         uint32_t timeout_ms) {
     Fd socket_fd(socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0));
     if (socket_fd.get() < 0) {
         io_error("socket");
@@ -329,7 +386,9 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
         io_error("fcntl");
     }
 
-    if (connect(socket_fd.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) < 0 && errno != EINPROGRESS) {
+    if (connect(socket_fd.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) <
+            0 &&
+        errno != EINPROGRESS) {
         throw Error("IPC_CONNECT", "Cannot connect CoreHost: " + std::string(std::strerror(errno)));
     }
 
@@ -340,24 +399,30 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
         io_error("getsockopt");
     }
     if (connection_error) {
-        throw Error("IPC_CONNECT", "Cannot connect CoreHost: " + std::string(std::strerror(connection_error)));
+        throw Error("IPC_CONNECT",
+                    "Cannot connect CoreHost: " + std::string(std::strerror(connection_error)));
     }
     if (fcntl(socket_fd.get(), F_SETFL, flags) < 0) {
         io_error("fcntl restore");
     }
 
-    static std::atomic_uint64_t next_request{(static_cast<uint64_t>(platform::secure_random_u32())<<32)|platform::secure_random_u32()};
-    uint64_t request=next_request.fetch_add(1,std::memory_order_relaxed);if(!request)request=next_request.fetch_add(1,std::memory_order_relaxed);
+    static std::atomic_uint64_t next_request{
+        (static_cast<uint64_t>(platform::secure_random_u32()) << 32) |
+        platform::secure_random_u32()};
+    uint64_t request = next_request.fetch_add(1, std::memory_order_relaxed);
+    if (!request)
+        request = next_request.fetch_add(1, std::memory_order_relaxed);
     auto output = frame(static_cast<uint16_t>(operation), request, 0, payload);
     transfer(socket_fd.get(), output.data(), output.size(), true, deadline);
 
     uint8_t header[header_size]{};
     transfer(socket_fd.get(), header, sizeof(header), false, deadline);
-    const auto parsed=detail::parse_ipc_header(header,true);
-    if (parsed.operation != (static_cast<uint16_t>(operation) | 0x8000) || parsed.request != request) {
+    const auto parsed = detail::parse_ipc_header(header, true);
+    if (parsed.operation != (static_cast<uint16_t>(operation) | 0x8000) ||
+        parsed.request != request) {
         throw Error("IPC_PROTOCOL", "Mismatched IPC response");
     }
-    const uint32_t length=parsed.length;
+    const uint32_t length = parsed.length;
 
     std::vector<uint8_t> body(length);
     transfer(socket_fd.get(), body.data(), body.size(), false, deadline);
@@ -367,4 +432,4 @@ IpcResponse pipe_request(const std::string& name, IpcOperation operation, const 
     response.payload.assign(reinterpret_cast<char*>(body.data() + 4), body.size() - 4);
     return response;
 }
-}
+} // namespace nd

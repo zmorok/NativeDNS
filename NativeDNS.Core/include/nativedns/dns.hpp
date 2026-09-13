@@ -25,7 +25,7 @@ uint16_t client_udp_payload_size(std::span<const uint8_t> request);
 Packet fit_udp_response(const Packet& request, const Packet& response);
 Question parse_question(std::span<const uint8_t> packet);
 DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expected);
-Packet age_dns_response(const Packet& response,uint16_t transaction_id,uint32_t elapsed_seconds);
+Packet age_dns_response(const Packet& response, uint16_t transaction_id, uint32_t elapsed_seconds);
 std::string dns_type_name(uint16_t type);
 class IDnsTransport {
 public:
@@ -36,7 +36,7 @@ std::unique_ptr<IDnsTransport> make_transport(Protocol protocol);
 // Resolve secure endpoints before transparent interception is enabled. The
 // returned configuration contains numeric connection endpoints while retaining
 // the configured hostname for TLS identity verification.
-void prepare_secure_endpoints(Config& config,uint32_t retry_ms=0);
+void prepare_secure_endpoints(Config& config, uint32_t retry_ms = 0);
 struct TestResult {
     bool success = false;
     Protocol protocol = Protocol::udp;
@@ -48,6 +48,9 @@ struct TestResult {
     std::vector<std::string> addresses;
     std::string error_code, message;
 };
-TestResult test_server(const Server& server, const std::string& hostname = "iana.org", uint16_t type = 1, Logger* logger = nullptr);
+TestResult test_server(const Server& server,
+                       const std::string& hostname = "iana.org",
+                       uint16_t type = 1,
+                       Logger* logger = nullptr);
 std::vector<TestResult> test_servers(const Config& config, Logger* logger = nullptr);
-}
+} // namespace nd

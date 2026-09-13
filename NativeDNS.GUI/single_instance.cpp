@@ -15,7 +15,7 @@ QString instanceDirectory() {
     QDir().mkpath(directory);
     return directory;
 }
-}
+} // namespace
 
 QString SingleInstanceGuard::lockFilePath() {
     return instanceDirectory() + "/gui-instance.lock";
@@ -23,12 +23,12 @@ QString SingleInstanceGuard::lockFilePath() {
 
 QString SingleInstanceGuard::serverName() {
     const auto identity = QDir::cleanPath(instanceDirectory()).toUtf8();
-    const auto digest = QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex().left(16);
+    const auto digest =
+        QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex().left(16);
     return QStringLiteral("NativeDNS.GUI.Instance.v2.") + QString::fromLatin1(digest);
 }
 
-SingleInstanceGuard::SingleInstanceGuard(QObject* parent)
-    : QObject(parent), lock_(lockFilePath()) {
+SingleInstanceGuard::SingleInstanceGuard(QObject* parent) : QObject(parent), lock_(lockFilePath()) {
     // PID/host based stale-lock detection remains active; do not expire a
     // healthy long-running NativeDNS instance just because it is old.
     lock_.setStaleLockTime(0);
@@ -71,7 +71,8 @@ bool SingleInstanceGuard::acquire(bool activateExisting) {
     server_.setSocketOptions(QLocalServer::UserAccessOption);
 
     if (server_.listen(serverName())) {
-        connect(&server_, &QLocalServer::newConnection, this, [this] { acceptPendingConnections(); });
+        connect(
+            &server_, &QLocalServer::newConnection, this, [this] { acceptPendingConnections(); });
     }
 
     // Even if the activation endpoint cannot be created, the lock still

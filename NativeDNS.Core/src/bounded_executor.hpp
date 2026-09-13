@@ -14,18 +14,23 @@ namespace nd::detail {
 class BoundedExecutor final {
 public:
     BoundedExecutor() = default;
-    ~BoundedExecutor() { stop(); }
+    ~BoundedExecutor() {
+        stop();
+    }
     BoundedExecutor(const BoundedExecutor&) = delete;
     BoundedExecutor& operator=(const BoundedExecutor&) = delete;
 
     void start(std::size_t workers, std::size_t capacity) {
-        if (!workers || !capacity) throw std::invalid_argument("executor workers and capacity must be positive");
+        if (!workers || !capacity)
+            throw std::invalid_argument("executor workers and capacity must be positive");
         std::lock_guard lock(mutex_);
-        if (!threads_.empty()) throw std::logic_error("executor already started");
+        if (!threads_.empty())
+            throw std::logic_error("executor already started");
         stopping_ = false;
         capacity_ = capacity;
         try {
-            for (std::size_t i = 0; i < workers; ++i) threads_.emplace_back([this] { run(); });
+            for (std::size_t i = 0; i < workers; ++i)
+                threads_.emplace_back([this] { run(); });
         } catch (...) {
             stopping_ = true;
             changed_.notify_all();
@@ -35,7 +40,8 @@ public:
 
     bool submit(std::function<void()> job) {
         std::lock_guard lock(mutex_);
-        if (stopping_ || threads_.empty() || jobs_.size() >= capacity_) return false;
+        if (stopping_ || threads_.empty() || jobs_.size() >= capacity_)
+            return false;
         jobs_.push_back(std::move(job));
         changed_.notify_one();
         return true;
@@ -48,7 +54,9 @@ public:
             jobs_.clear();
         }
         changed_.notify_all();
-        for (auto& thread : threads_) if (thread.joinable()) thread.join();
+        for (auto& thread : threads_)
+            if (thread.joinable())
+                thread.join();
         threads_.clear();
         capacity_ = 0;
     }
@@ -60,11 +68,15 @@ private:
             {
                 std::unique_lock lock(mutex_);
                 changed_.wait(lock, [this] { return stopping_ || !jobs_.empty(); });
-                if (stopping_ && jobs_.empty()) return;
+                if (stopping_ && jobs_.empty())
+                    return;
                 job = std::move(jobs_.front());
                 jobs_.pop_front();
             }
-            try { job(); } catch (...) { }
+            try {
+                job();
+            } catch (...) {
+            }
         }
     }
 
@@ -76,4 +88,4 @@ private:
     bool stopping_ = true;
 };
 
-}
+} // namespace nd::detail

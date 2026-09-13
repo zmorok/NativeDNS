@@ -15,9 +15,10 @@ public:
     void forget_connection(const std::string& original_ip, uint16_t client_port);
     TcpDnsProxy(const TcpDnsProxy&) = delete;
     TcpDnsProxy& operator=(const TcpDnsProxy&) = delete;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
 
-}
+} // namespace nd::detail

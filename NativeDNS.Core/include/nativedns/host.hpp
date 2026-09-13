@@ -7,16 +7,23 @@ namespace nd {
 enum class InterceptionMode { local_proxy, transparent, windivert = transparent };
 class CoreHost {
 public:
-    CoreHost(Config config, Server original, uint16_t local_port = 0,
+    CoreHost(Config config,
+             Server original,
+             uint16_t local_port = 0,
              std::string pipe_name = core_pipe_name,
              InterceptionMode mode = InterceptionMode::local_proxy);
     ~CoreHost();
     void start();
     void stop();
     void wait_for_shutdown();
-    bool restart_requested() const { return restart_requested_; }
+    bool restart_requested() const {
+        return restart_requested_;
+    }
     InterceptionStatus status() const;
-    Logger& logger() { return logger_; }
+    Logger& logger() {
+        return logger_;
+    }
+
 private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     mutable std::mutex mutex_;
@@ -37,4 +44,4 @@ private:
     std::unique_ptr<PipeServer> log_ipc_;
     std::atomic_bool restart_requested_ = false;
 };
-}
+} // namespace nd

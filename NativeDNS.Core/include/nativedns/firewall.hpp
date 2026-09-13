@@ -13,9 +13,10 @@ public:
     void disable() noexcept;
     FirewallPortRule(const FirewallPortRule&) = delete;
     FirewallPortRule& operator=(const FirewallPortRule&) = delete;
+
 private:
     bool com_initialized_ = false;
     bool enabled_ = false;
 };
 
-}
+} // namespace nd::detail

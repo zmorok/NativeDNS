@@ -24,8 +24,7 @@ public:
 
     Fd() = default;
 
-    explicit Fd(int fd)
-        : value(fd) {
+    explicit Fd(int fd) : value(fd) {
     }
 
     ~Fd() {
@@ -35,8 +34,7 @@ public:
     Fd(const Fd&) = delete;
     Fd& operator=(const Fd&) = delete;
 
-    Fd(Fd&& other) noexcept
-        : value(other.value) {
+    Fd(Fd&& other) noexcept : value(other.value) {
         other.value = -1;
     }
 
@@ -169,7 +167,7 @@ bool wait_readable(int fd, const std::atomic_bool& running) {
     return false;
 }
 
-}
+} // namespace
 
 struct LocalProxy::Impl {
     std::shared_ptr<const Router> router;
@@ -191,16 +189,8 @@ struct LocalProxy::Impl {
     detail::BoundedExecutor udp_handlers;
     detail::BoundedExecutor tcp_handlers;
 
-    Impl(
-        std::shared_ptr<const Router> r,
-        Server o,
-        Logger& l,
-        uint16_t p
-    )
-        : router(std::move(r)),
-          original(std::move(o)),
-          logger(l),
-          requested_port(p) {
+    Impl(std::shared_ptr<const Router> r, Server o, Logger& l, uint16_t p)
+        : router(std::move(r)), original(std::move(o)), logger(l), requested_port(p) {
         if (!router) {
             throw Error("CONFIG", "Local proxy requires a router");
         }
@@ -225,11 +215,9 @@ struct LocalProxy::Impl {
 
         if (result.disposition == Disposition::forward_original) {
             if (logger.enabled(Level::normal)) {
-                logger.write(
-                    Level::normal,
-                    "DNS_BYPASS",
-                    "Forwarding intact request to original fallback " + original.ip
-                );
+                logger.write(Level::normal,
+                             "DNS_BYPASS",
+                             "Forwarding intact request to original fallback " + original.ip);
             }
 
             return router->exchange(request, original);
@@ -238,24 +226,17 @@ struct LocalProxy::Impl {
         return result.packet;
     }
 
-    void handle_udp(
-        int fd,
-        Packet packet,
-        sockaddr_storage client,
-        socklen_t size
-    ) {
+    void handle_udp(int fd, Packet packet, sockaddr_storage client, socklen_t size) {
         try {
             const auto response = fit_udp_response(packet, process(packet));
 
             if (!response.empty()) {
-                const auto sent = sendto(
-                    fd,
-                    response.data(),
-                    response.size(),
-                    MSG_NOSIGNAL,
-                    reinterpret_cast<sockaddr*>(&client),
-                    size
-                );
+                const auto sent = sendto(fd,
+                                         response.data(),
+                                         response.size(),
+                                         MSG_NOSIGNAL,
+                                         reinterpret_cast<sockaddr*>(&client),
+                                         size);
 
                 if (sent != static_cast<ssize_t>(response.size())) {
                     sys_error("UDP reply send");
@@ -272,11 +253,7 @@ struct LocalProxy::Impl {
         while (running.load(std::memory_order_acquire)) {
             if (!wait_readable(fd, running)) {
                 if (running.load(std::memory_order_acquire)) {
-                    logger.write(
-                        Level::errors_only,
-                        "PROXY_IO",
-                        "Local UDP listener poll failed"
-                    );
+                    logger.write(Level::errors_only, "PROXY_IO", "Local UDP listener poll failed");
                     state = State::error;
                 }
 
@@ -288,13 +265,7 @@ struct LocalProxy::Impl {
             Packet packet(65535);
 
             const auto n = recvfrom(
-                fd,
-                packet.data(),
-                packet.size(),
-                0,
-                reinterpret_cast<sockaddr*>(&client),
-                &size
-            );
+                fd, packet.data(), packet.size(), 0, reinterpret_cast<sockaddr*>(&client), &size);
 
             if (n < 0) {
                 if (!running.load(std::memory_order_acquire)) {
@@ -305,11 +276,7 @@ struct LocalProxy::Impl {
                     continue;
                 }
 
-                logger.write(
-                    Level::errors_only,
-                    "PROXY_IO",
-                    std::strerror(errno)
-                );
+                logger.write(Level::errors_only, "PROXY_IO", std::strerror(errno));
                 state = State::error;
                 break;
             }
@@ -320,11 +287,9 @@ struct LocalProxy::Impl {
                     [this, fd, packet = std::move(packet), client, size]() mutable {
                         handle_udp(fd, std::move(packet), client, size);
                     })) {
-                logger.write(
-                    Level::errors_only,
-                    "PROXY_BUSY",
-                    "Local UDP proxy queue is full; query dropped"
-                );
+                logger.write(Level::errors_only,
+                             "PROXY_BUSY",
+                             "Local UDP proxy queue is full; query dropped");
             }
         }
     }
@@ -341,8 +306,7 @@ struct LocalProxy::Impl {
                     break;
                 }
 
-                const size_t length =
-                    (static_cast<size_t>(prefix[0]) << 8) | prefix[1];
+                const size_t length = (static_cast<size_t>(prefix[0]) << 8) | prefix[1];
 
                 if (length < 12) {
                     throw Error("DNS_MALFORMED", "Client DNS frame too short");
@@ -357,10 +321,8 @@ struct LocalProxy::Impl {
                     continue;
                 }
 
-                uint8_t out[]{
-                    static_cast<uint8_t>(response.size() >> 8),
-                    static_cast<uint8_t>(response.size())
-                };
+                uint8_t out[]{static_cast<uint8_t>(response.size() >> 8),
+                              static_cast<uint8_t>(response.size())};
 
                 send_exact(fd, out, 2);
                 send_exact(fd, response.data(), response.size());
@@ -376,11 +338,7 @@ struct LocalProxy::Impl {
         while (running.load(std::memory_order_acquire)) {
             if (!wait_readable(fd, running)) {
                 if (running.load(std::memory_order_acquire)) {
-                    logger.write(
-                        Level::errors_only,
-                        "PROXY_IO",
-                        "Local TCP listener poll failed"
-                    );
+                    logger.write(Level::errors_only, "PROXY_IO", "Local TCP listener poll failed");
                     state = State::error;
                 }
 
@@ -398,24 +356,15 @@ struct LocalProxy::Impl {
                     continue;
                 }
 
-                logger.write(
-                    Level::errors_only,
-                    "PROXY_IO",
-                    std::strerror(errno)
-                );
+                logger.write(Level::errors_only, "PROXY_IO", std::strerror(errno));
                 state = State::error;
                 break;
             }
 
-            if (!tcp_handlers.submit([this, client] {
-                    handle_client(client);
-                })) {
+            if (!tcp_handlers.submit([this, client] { handle_client(client); })) {
                 ::close(client);
                 logger.write(
-                    Level::errors_only,
-                    "PROXY_BUSY",
-                    "Local TCP proxy connection limit reached"
-                );
+                    Level::errors_only, "PROXY_BUSY", "Local TCP proxy connection limit reached");
             }
         }
     }
@@ -427,8 +376,7 @@ struct LocalProxy::Impl {
     }
 
     void join_listener_workers() {
-        for (std::jthread* thread :
-             {&udp4_worker, &tcp4_worker, &udp6_worker, &tcp6_worker}) {
+        for (std::jthread* thread : {&udp4_worker, &tcp4_worker, &udp6_worker, &tcp6_worker}) {
             if (thread->joinable()) {
                 thread->join();
             }
@@ -436,20 +384,11 @@ struct LocalProxy::Impl {
     }
 };
 
-LocalProxy::LocalProxy(
-    std::shared_ptr<const Router> router,
-    Server original,
-    Logger& logger,
-    uint16_t port
-)
-    : impl_(
-          std::make_unique<Impl>(
-              std::move(router),
-              std::move(original),
-              logger,
-              port
-          )
-      ) {
+LocalProxy::LocalProxy(std::shared_ptr<const Router> router,
+                       Server original,
+                       Logger& logger,
+                       uint16_t port)
+    : impl_(std::make_unique<Impl>(std::move(router), std::move(original), logger, port)) {
 }
 
 LocalProxy::~LocalProxy() {
@@ -476,10 +415,7 @@ void LocalProxy::start() {
             p.udp6.reset(socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP));
             p.tcp6.reset(socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP));
 
-            if (p.udp4.value < 0 ||
-                p.tcp4.value < 0 ||
-                p.udp6.value < 0 ||
-                p.tcp6.value < 0) {
+            if (p.udp4.value < 0 || p.tcp4.value < 0 || p.udp6.value < 0 || p.tcp6.value < 0) {
                 sys_error("socket");
             }
 
@@ -493,9 +429,7 @@ void LocalProxy::start() {
             const uint16_t chosen =
                 p.requested_port
                     ? p.requested_port
-                    : static_cast<uint16_t>(
-                          20000 + (platform::secure_random_u32() % 28000)
-                      );
+                    : static_cast<uint16_t>(20000 + (platform::secure_random_u32() % 28000));
 
             sockaddr_in a4{};
             a4.sin_family = AF_INET;
@@ -508,31 +442,14 @@ void LocalProxy::start() {
             a6.sin6_port = htons(chosen);
 
             const bool ok4 =
-                bind(
-                    p.tcp4.value,
-                    reinterpret_cast<sockaddr*>(&a4),
-                    sizeof(a4)
-                ) == 0 &&
+                bind(p.tcp4.value, reinterpret_cast<sockaddr*>(&a4), sizeof(a4)) == 0 &&
                 listen(p.tcp4.value, SOMAXCONN) == 0 &&
-                bind(
-                    p.udp4.value,
-                    reinterpret_cast<sockaddr*>(&a4),
-                    sizeof(a4)
-                ) == 0;
+                bind(p.udp4.value, reinterpret_cast<sockaddr*>(&a4), sizeof(a4)) == 0;
 
             const bool ok6 =
-                ok4 &&
-                bind(
-                    p.tcp6.value,
-                    reinterpret_cast<sockaddr*>(&a6),
-                    sizeof(a6)
-                ) == 0 &&
+                ok4 && bind(p.tcp6.value, reinterpret_cast<sockaddr*>(&a6), sizeof(a6)) == 0 &&
                 listen(p.tcp6.value, SOMAXCONN) == 0 &&
-                bind(
-                    p.udp6.value,
-                    reinterpret_cast<sockaddr*>(&a6),
-                    sizeof(a6)
-                ) == 0;
+                bind(p.udp6.value, reinterpret_cast<sockaddr*>(&a6), sizeof(a6)) == 0;
 
             if (ok6) {
                 p.bound_port = chosen;
@@ -548,11 +465,9 @@ void LocalProxy::start() {
         }
 
         if (!p.bound_port) {
-            throw Error(
-                "PROXY_BIND",
-                "Cannot bind IPv4/IPv6 UDP/TCP loopback listeners: " +
-                    std::string(std::strerror(last))
-            );
+            throw Error("PROXY_BIND",
+                        "Cannot bind IPv4/IPv6 UDP/TCP loopback listeners: " +
+                            std::string(std::strerror(last)));
         }
 
         p.udp_handlers.start(8, 1024);
@@ -566,21 +481,13 @@ void LocalProxy::start() {
         const int udp6_fd = p.udp6.value;
         const int tcp6_fd = p.tcp6.value;
 
-        p.udp4_worker = std::jthread([&p, udp4_fd] {
-            p.udp_loop(udp4_fd);
-        });
+        p.udp4_worker = std::jthread([&p, udp4_fd] { p.udp_loop(udp4_fd); });
 
-        p.tcp4_worker = std::jthread([&p, tcp4_fd] {
-            p.tcp_loop(tcp4_fd);
-        });
+        p.tcp4_worker = std::jthread([&p, tcp4_fd] { p.tcp_loop(tcp4_fd); });
 
-        p.udp6_worker = std::jthread([&p, udp6_fd] {
-            p.udp_loop(udp6_fd);
-        });
+        p.udp6_worker = std::jthread([&p, udp6_fd] { p.udp_loop(udp6_fd); });
 
-        p.tcp6_worker = std::jthread([&p, tcp6_fd] {
-            p.tcp_loop(tcp6_fd);
-        });
+        p.tcp6_worker = std::jthread([&p, tcp6_fd] { p.tcp_loop(tcp6_fd); });
     } catch (...) {
         p.running.store(false, std::memory_order_release);
         p.join_listener_workers();
@@ -616,15 +523,7 @@ void LocalProxy::stop() {
 InterceptionStatus LocalProxy::status() const {
     std::lock_guard lock(impl_->lifecycle);
 
-    return {
-        impl_->state.load(),
-        impl_->bound_port,
-        false,
-        true,
-        true,
-        {},
-        {}
-    };
+    return {impl_->state.load(), impl_->bound_port, false, true, true, {}, {}};
 }
 
-}
+} // namespace nd

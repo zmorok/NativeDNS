@@ -7,7 +7,9 @@ namespace nd {
 class Error : public std::runtime_error {
 public:
     std::string code;
-    Error(std::string error_code, std::string message) : std::runtime_error(std::move(message)), code(std::move(error_code)) {}
+    Error(std::string error_code, std::string message)
+        : std::runtime_error(std::move(message)), code(std::move(error_code)) {
+    }
 };
 std::wstring widen(const std::string& text);
 std::string narrow(const std::wstring& text);
@@ -20,7 +22,10 @@ std::vector<std::string> split_patterns(const std::string& text);
 bool host_matches(const std::string& normalized_host, const std::string& normalized_pattern);
 void validate(const Config& config);
 const Rule& match_rule(const Config& config, const std::string& hostname);
-struct ImportResult { Config config; std::vector<std::string> warnings; };
+struct ImportResult {
+    Config config;
+    std::vector<std::string> warnings;
+};
 ImportResult import_yoga(const std::filesystem::path& path);
 Config load_config(const std::filesystem::path& path);
 Config parse_config(std::string text);
@@ -32,7 +37,9 @@ std::string action_name(Action action);
 class ConfigEditor {
 public:
     explicit ConfigEditor(Config config);
-    const Config& get() const { return config_; }
+    const Config& get() const {
+        return config_;
+    }
     void add_rule(Rule rule);
     void update_rule(Rule rule);
     void remove_rule(uint32_t id);
@@ -41,8 +48,9 @@ public:
     void add_server(Server server);
     void update_server(Server server);
     void remove_server(uint32_t id);
+
 private:
     void commit(Config next);
     Config config_;
 };
-}
+} // namespace nd

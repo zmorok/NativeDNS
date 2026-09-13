@@ -30,9 +30,10 @@ std::string quote(const std::filesystem::path& path) {
     output += '\"';
     return output;
 }
-}
+} // namespace
 
-void enable_autostart(const std::filesystem::path& executable, const std::filesystem::path& config,
+void enable_autostart(const std::filesystem::path& executable,
+                      const std::filesystem::path& config,
                       const std::filesystem::path&) {
     if (!std::filesystem::is_regular_file(executable)) {
         throw Error("AUTOSTART", "NativeDNS executable does not exist");
@@ -92,4 +93,4 @@ AutostartStatus autostart_status() {
 bool start_autostart_core(const std::filesystem::path&, const std::filesystem::path&) {
     return false;
 }
-}
+} // namespace nd

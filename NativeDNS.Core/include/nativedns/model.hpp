@@ -64,4 +64,4 @@ inline Config default_config() {
     config.rules.push_back(rule);
     return config;
 }
-}
+} // namespace nd
