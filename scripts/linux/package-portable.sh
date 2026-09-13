@@ -6,7 +6,7 @@ NO_BUILD="${2:-}"
 if [[ "$NO_BUILD" != "--no-build" ]]; then "$ROOT/scripts/linux/build-linux.sh" "$CONFIG" standalone; fi
 APPDIR="$($ROOT/scripts/linux/_linuxdeploy.sh "$CONFIG" | tail -n1)"
 SUFFIX=""; [[ "$CONFIG" == debug ]] && SUFFIX="-debug"
-OUT="$ROOT/out/packages/NativeDNS-0.3.0-linux-x64${SUFFIX}-portable.tar.gz"
+OUT="$ROOT/out/packages/NativeDNS-0.4.0-linux-x64${SUFFIX}-portable.tar.gz"
 rm -f "$OUT"
 tar -C "$(dirname "$APPDIR")" -czf "$OUT" "$(basename "$APPDIR")"
 echo "Portable Linux bundle ready: $OUT"

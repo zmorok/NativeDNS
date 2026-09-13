@@ -10,7 +10,7 @@ LINUXDEPLOY="${LINUXDEPLOY:-$(command -v linuxdeploy 2>/dev/null || true)}"
 [[ -x "$LINUXDEPLOY" ]] || { echo "ERROR: linuxdeploy is missing" >&2; exit 7; }
 export PATH="${LINUXDEPLOY_PLUGIN_QT:+$(dirname "$LINUXDEPLOY_PLUGIN_QT"):}$ROOT/tools:$PATH"
 SUFFIX=""; [[ "$CONFIG" == debug ]] && SUFFIX="-debug"
-OUT="$ROOT/out/packages/NativeDNS-0.3.0-linux-x64${SUFFIX}.AppImage"
+OUT="$ROOT/out/packages/NativeDNS-0.4.0-linux-x64${SUFFIX}.AppImage"
 rm -f "$OUT"
 (
   cd "$ROOT/out/packages"

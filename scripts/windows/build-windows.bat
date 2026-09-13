@@ -105,7 +105,7 @@ call :make_installer || exit /b !errorlevel!
 goto :done
 
 :make_portable
-set "ZIP=%PACKAGES%\NativeDNS-0.3.0-windows-x64%SUFFIX%-portable.zip"
+set "ZIP=%PACKAGES%\NativeDNS-0.4.0-windows-x64%SUFFIX%-portable.zip"
 if exist "%ZIP%" del /q "%ZIP%"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%STAGE%\*' -DestinationPath '%ZIP%' -CompressionLevel Optimal"
 if errorlevel 1 exit /b %errorlevel%

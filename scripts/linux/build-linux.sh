@@ -7,7 +7,7 @@ cd "$ROOT"
 CONFIG="${1:-release}"
 TARGET="${2:-standalone}"
 TEST_MODE="${3:-tests}"
-VERSION="0.3.0"
+VERSION="0.4.0"
 
 case "$TEST_MODE" in
   tests|no-tests) ;;

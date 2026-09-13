@@ -20,7 +20,7 @@ function Get-Sha256Hex([string]$Path) {
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $build = [IO.Path]::GetFullPath((Join-Path $root $BuildDirectory))
 $output = [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
-$stage = Join-Path $output "NativeDNS-0.3.0-windows-x64-portable"
+$stage = Join-Path $output "NativeDNS-0.4.0-windows-x64-portable"
 $outputPrefix = $output.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $stage.StartsWith($outputPrefix,[StringComparison]::OrdinalIgnoreCase)) { throw 'Refusing to clean a staging path outside the package output directory' }
 if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }

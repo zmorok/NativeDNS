@@ -17,13 +17,13 @@
 [Setup]
 AppId={{2F47E185-E56B-42F0-A85F-D6F276F3AF6B}
 AppName=NativeDNS
-AppVersion=0.3.0
+AppVersion=0.4.0
 AppPublisher=NativeDNS
 DefaultDirName={autopf}\NativeDNS
 DefaultGroupName=NativeDNS
 DisableProgramGroupPage=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=NativeDNS-0.3.0-windows-x64-setup{#ConfigurationSuffix}
+OutputBaseFilename=NativeDNS-0.4.0-windows-x64-setup{#ConfigurationSuffix}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

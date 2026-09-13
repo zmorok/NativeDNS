@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(NativeDNS VERSION 0.3.0 LANGUAGES C CXX)
+project(NativeDNS VERSION 0.4.0 LANGUAGES C CXX)
 
 if(CMAKE_SIZEOF_VOID_P AND NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "NativeDNS currently supports x64 builds only")
