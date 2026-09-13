@@ -6,7 +6,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 CONFIG="${1:-release}"
 TARGET="${2:-standalone}"
+TEST_MODE="${3:-tests}"
 VERSION="0.3.0"
+
+case "$TEST_MODE" in
+  tests|no-tests) ;;
+  *) echo "ERROR: test mode must be tests or no-tests" >&2; exit 2 ;;
+esac
 
 case "$CONFIG" in
   debug) PRESET=linux-debug; SUFFIX=-debug ;;
@@ -28,8 +34,12 @@ echo "=== Configure $PRESET ==="
 cmake --preset "$PRESET"
 echo "=== Build $CONFIG ==="
 cmake --build --preset "$PRESET" --parallel
-echo "=== Tests $CONFIG ==="
-ctest --preset "$PRESET"
+if [[ "$TEST_MODE" == tests ]]; then
+  echo "=== Tests $CONFIG ==="
+  ctest --preset "$PRESET"
+else
+  echo "=== Tests skipped ==="
+fi
 
 echo "=== Stage standalone/developer tree ==="
 rm -rf "$STAGE"
@@ -50,4 +60,4 @@ case "$TARGET" in
   *) echo "ERROR: target must be standalone, portable, appimage, deb or all" >&2; exit 2 ;;
 esac
 
-echo "=== NativeDNS Linux $CONFIG / $TARGET completed ==="
+echo "=== NativeDNS Linux $CONFIG / $TARGET / $TEST_MODE completed ==="

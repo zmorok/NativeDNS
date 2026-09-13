@@ -35,8 +35,8 @@ windows-release
 ### Scripts
 
 ```bat
-scripts\windows\build-debug.bat [standalone|portable|installer|all]
-scripts\windows\build-release.bat [standalone|portable|installer|all]
+scripts\windows\build-debug.bat [standalone|portable|installer|all] [tests|no-tests]
+scripts\windows\build-release.bat [standalone|portable|installer|all] [tests|no-tests]
 ```
 
 Examples:
@@ -45,13 +45,14 @@ Examples:
 scripts\windows\build-debug.bat standalone
 scripts\windows\build-release.bat portable
 scripts\windows\build-release.bat installer
+scripts\windows\build-release.bat portable no-tests
 ```
 
 The script:
 
 1. configures CMake;
 2. builds;
-3. runs CTest;
+3. runs CTest unless `no-tests` was selected;
 4. installs to a staging directory;
 5. runs `windeployqt`;
 6. optionally creates portable/installer artifacts.
@@ -133,14 +134,16 @@ ctest --preset linux-core-debug
 ### Scripts
 
 ```bash
-./scripts/linux/build-debug.sh [standalone|portable|appimage|deb|all]
-./scripts/linux/build-release.sh [standalone|portable|appimage|deb|all]
+./scripts/linux/build-debug.sh [standalone|portable|appimage|deb|all] [tests|no-tests]
+./scripts/linux/build-release.sh [standalone|portable|appimage|deb|all] [tests|no-tests]
 ```
 
 Without an output argument, the Debug and Release scripts build, test and stage
 the `standalone` tree. Use `all` (or `build-all.sh`) only when the optional
 portable, AppImage and Debian packages are required. Run build scripts as the
 desktop user; runtime elevation is handled separately by CoreHost.
+Tests run by default; pass `no-tests` as the second wrapper argument for a faster
+packaging-only iteration.
 
 Output forms:
 

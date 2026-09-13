@@ -10,8 +10,15 @@ cd /d "%ROOT%" || (
 )
 set "CONFIG=%~1"
 set "TARGET=%~2"
+set "TEST_MODE=%~3"
 if "%CONFIG%"=="" set "CONFIG=release"
 if "%TARGET%"=="" set "TARGET=standalone"
+if "%TEST_MODE%"=="" set "TEST_MODE=tests"
+
+if /I not "%TEST_MODE%"=="tests" if /I not "%TEST_MODE%"=="no-tests" (
+  echo ERROR: test mode must be tests or no-tests.
+  exit /b 2
+)
 
 if /I "%CONFIG%"=="debug" (
   set "PRESET=windows-debug"
@@ -56,9 +63,13 @@ echo === Build %CMAKE_CONFIG% ===
 cmake --build --preset %PRESET% --parallel
 if errorlevel 1 exit /b %errorlevel%
 
-echo === Tests %CMAKE_CONFIG% ===
-ctest --preset %PRESET%
-if errorlevel 1 exit /b %errorlevel%
+if /I "%TEST_MODE%"=="tests" (
+  echo === Tests %CMAKE_CONFIG% ===
+  ctest --preset %PRESET%
+  if errorlevel 1 exit /b %errorlevel%
+) else (
+  echo === Tests skipped ===
+)
 
 echo === Stage standalone ===
 if exist "%STAGE%" rmdir /s /q "%STAGE%"
@@ -116,5 +127,5 @@ echo Installer ready in: %PACKAGES%
 exit /b 0
 
 :done
-echo === NativeDNS Windows %CONFIG% / %TARGET% completed ===
+echo === NativeDNS Windows %CONFIG% / %TARGET% / %TEST_MODE% completed ===
 exit /b 0
