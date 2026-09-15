@@ -221,13 +221,41 @@ int main(int argc, char**) {
             std::cout << "direct " << direct.success << " " << direct.rtt_ms << " "
                       << direct.error_code << " " << direct.message << '\n';
             check(direct.success, "live DNSCrypt request failed");
+
             const auto direct_configured = configured;
-            configured.protocol = nd::Protocol::anonymized_dnscrypt;
-            configured.relay = "94.198.41.235:443";
-            const auto anonymized = nd::test_server(configured);
-            std::cout << "anonymized " << anonymized.success << " " << anonymized.rtt_ms << " "
-                      << anonymized.error_code << " " << anonymized.message << '\n';
-            check(anonymized.success, "live Anonymized DNSCrypt request failed");
+
+            nd::Server anonymized_server = configured;
+            anonymized_server.id = 2;
+            anonymized_server.name = "Quad9 Anonymized DNSCrypt";
+            anonymized_server.protocol = nd::Protocol::anonymized_dnscrypt;
+            anonymized_server.ip = "9.9.9.11";
+            anonymized_server.port = 8443;
+            anonymized_server.public_key =
+                "67:c8:47:b8:c8:75:8c:d1:20:24:55:43:be:75:67:46:"
+                "df:34:df:1d:84:c0:0b:8c:47:03:68:df:82:1d:86:3e";
+            anonymized_server.provider_name = "2.dnscrypt-cert.quad9.net";
+            anonymized_server.timeout_ms = 5000;
+            anonymized_server.allow_direct_certificate_fallback = true;
+
+            const std::array<const char*, 2> relays{
+                "94.198.41.235:443", // CryptoStorm Vienna
+                "146.70.82.3:443"    // CryptoStorm Frankfurt
+            };
+
+            bool anonymized_ok = false;
+            for (const auto* relay : relays) {
+                anonymized_server.relay = relay;
+                const auto anonymized = nd::test_server(anonymized_server);
+                std::cout << "anonymized via " << relay << " " << anonymized.success << " "
+                          << anonymized.rtt_ms << " " << anonymized.error_code << " "
+                          << anonymized.message << '\n';
+                if (anonymized.success) {
+                    anonymized_ok = true;
+                    break;
+                }
+            }
+            check(anonymized_ok, "live Anonymized DNSCrypt request failed through all relays");
+
             auto transport = nd::make_transport(nd::Protocol::dnscrypt);
             std::vector<std::thread> refresh_clients;
             std::atomic_bool refresh_ok = true;
