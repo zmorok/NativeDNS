@@ -11,6 +11,15 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 `NativeDNS.Core` does not depend on Qt.
 
+## Download
+
+The current Windows release is [v0.4.2](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.2):
+
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.2/NativeDNS-0.4.2-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.2/NativeDNS-0.4.2-windows-x64-portable.zip)
+
+Linux packages are not part of this release. Linux interception still needs validation on a real privileged host.
+
 ## Features
 
 Current Core functionality includes:
@@ -37,6 +46,7 @@ Platform integration:
 
 The production desktop UI uses **Qt 6 Widgets** on both platforms.
 The GUI provides persistent light/dark themes and English/Russian interface languages under `Other`.
+The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
 
 ## Application lifecycle
 
@@ -48,7 +58,9 @@ NativeDNS is designed around one GUI instance and one CoreHost instance.
 - With `Hide to tray` disabled, closing the window exits the GUI and shuts down CoreHost.
 - Explicit `Exit` always shuts down both GUI and CoreHost.
 - With autostart enabled on Windows, Task Scheduler starts the elevated CoreHost first and then launches `NativeDNS.exe --background` as the normal desktop user.
-- CoreHost startup includes recovery for temporary secure-DNS bootstrap failures while Windows networking is still initializing.
+- Configuration changes reload CoreHost routing without stopping transparent DNS interception.
+- The toolbar and tray provide a Restart action to reload CoreHost routing or start CoreHost when it is absent.
+- If a secure upstream cannot be resolved while offline, the GUI shows the error in the live log and retries startup after network and DNS resolution return.
 
 The GUI itself should run as the normal desktop user. Privileged interception is handled by the separate non-Qt CoreHost process.
 
