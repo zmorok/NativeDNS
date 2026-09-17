@@ -502,7 +502,8 @@ public:
         auto* add = new QPushButton(uiText("Add..."));
         auto* edit = new QPushButton(uiText("Edit..."));
         auto* remove = new QPushButton(uiText("Remove"));
-        auto* check = new QPushButton(uiText("Check"));
+        check_ = new QPushButton(uiText("Check"));
+        checkAll_ = new QPushButton(uiText("Check All"));
         auto* ok = new QPushButton(uiText("OK"));
         auto* close = new QPushButton(uiText("Close"));
         auto* side = new QVBoxLayout;
@@ -510,7 +511,8 @@ public:
         side->addWidget(edit);
         side->addWidget(remove);
         side->addSpacing(add->sizeHint().height());
-        side->addWidget(check);
+        side->addWidget(check_);
+        side->addWidget(checkAll_);
         side->addStretch();
         auto* content = new QHBoxLayout;
         content->addWidget(table_, 1);
@@ -570,7 +572,8 @@ public:
                 QMessageBox::critical(this, "NativeDNS", e.what());
             }
         });
-        connect(check, &QPushButton::clicked, this, [this] { checkSelected(); });
+        connect(check_, &QPushButton::clicked, this, [this] { checkSelected(); });
+        connect(checkAll_, &QPushButton::clicked, this, [this] { checkAll(); });
         connect(ok, &QPushButton::clicked, this, [this] { commit(); });
         connect(close, &QPushButton::clicked, this, &QDialog::reject);
         connect(
@@ -644,6 +647,9 @@ private:
         }
         if (selectedRow >= 0)
             table_->selectRow(selectedRow);
+        const bool hasServers = !working_.servers.empty();
+        check_->setEnabled(hasServers);
+        checkAll_->setEnabled(hasServers);
         table_->setUpdatesEnabled(true);
         table_->viewport()->update();
     }
@@ -684,6 +690,15 @@ private:
         auto rows = table_->selectionModel()->selectedRows();
         if (rows.isEmpty() && table_->currentRow() >= 0)
             rows << table_->model()->index(table_->currentRow(), 0);
+        checkRows(rows);
+    }
+    void checkAll() {
+        QModelIndexList rows;
+        for (int row = 0; row < table_->rowCount(); ++row)
+            rows << table_->model()->index(row, 0);
+        checkRows(rows);
+    }
+    void checkRows(const QModelIndexList& rows) {
         for (const auto& index : rows) {
             const int row = index.row();
             if (row < 0 || row >= static_cast<int>(working_.servers.size()))
@@ -730,6 +745,8 @@ private:
     nd::Config working_;
     std::function<bool()> changed_;
     QTableWidget* table_ = nullptr;
+    QPushButton* check_ = nullptr;
+    QPushButton* checkAll_ = nullptr;
 };
 
 bool editRule(QWidget* parent, nd::Config& config, nd::Rule& rule) {

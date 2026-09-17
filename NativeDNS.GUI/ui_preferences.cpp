@@ -96,6 +96,7 @@ constexpr std::array translations{
     Translation{"Edit...", "Изменить..."},
     Translation{"Remove", "Удалить"},
     Translation{"Check", "Проверить"},
+    Translation{"Check All", "Проверить все"},
     Translation{"Close", "Закрыть"},
     Translation{"OK", "ОК"},
     Translation{"Cancel", "Отмена"},
