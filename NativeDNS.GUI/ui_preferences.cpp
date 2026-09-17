@@ -160,6 +160,7 @@ constexpr std::array translations{
     Translation{"&Help", "&Справка"},
     Translation{"About NativeDNS", "О NativeDNS"},
     Translation{"Open", "Открыть"},
+    Translation{"Open NativeDNS", "Открыть NativeDNS"},
     Translation{"Create a new configuration?", "Создать новую конфигурацию?"},
     Translation{"Remove selected DNS server?", "Удалить выбранный DNS-сервер?"},
     Translation{"Configuration imported.", "Конфигурация импортирована."},
@@ -236,8 +237,8 @@ void applyUiTheme(QApplication& application, bool dark) {
                "#454547; border-color: #777779; }"
                "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { "
                "background-color: #3f4f5f; color: #ffffff; }"
-               "QToolBar#mainToolBar QToolButton { min-height: 42px; padding-left: 12px; "
-               "padding-right: 12px; }"
+               "QToolBar#mainToolBar QToolButton { min-height: 64px; min-width: 86px; "
+               "padding: 2px 7px; }"
              : "QMenuBar, QMenu, QToolBar, QToolButton, QStatusBar { color: #202020; }"
                "QMenuBar, QToolBar, QStatusBar { background-color: #f5f5f5; }"
                "QMenu { background-color: #ffffff; }"
@@ -252,6 +253,6 @@ void applyUiTheme(QApplication& application, bool dark) {
                "#dcecf9; border-color: #7eb4dd; }"
                "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { "
                "background-color: #e5f1fb; color: #202020; }"
-               "QToolBar#mainToolBar QToolButton { min-height: 42px; padding-left: 12px; "
-               "padding-right: 12px; }");
+               "QToolBar#mainToolBar QToolButton { min-height: 64px; min-width: 86px; "
+               "padding: 2px 7px; }");
 }

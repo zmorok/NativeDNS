@@ -1,4 +1,5 @@
 #include "qt_app.hpp"
+#include "action_icons.hpp"
 #include "platform_launcher.hpp"
 #include "ui_preferences.hpp"
 #include <nativedns/autostart.hpp>
@@ -19,6 +20,7 @@
 #include <QDesktopServices>
 #include <QDateTime>
 #include <QFileDialog>
+#include <QFont>
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QIcon>
@@ -1346,8 +1348,24 @@ void NativeDnsWindow::buildUi() {
     auto* bar = addToolBar("Main");
     bar->setObjectName("mainToolBar");
     bar->setMovable(false);
-    bar->addAction(servers);
-    bar->addAction(rules);
+    bar->setIconSize(QSize(32, 32));
+    bar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    auto* toolbarServers = mark(new QAction(this), "DNS Servers");
+    auto* toolbarRules = mark(new QAction(this), "Rules");
+    const auto setActionIcons =
+        [servers, rules, clear, restart, toolbarServers, toolbarRules](bool dark) {
+            const auto serverIcon = makeActionIcon(ActionIcon::dns_servers, dark);
+            const auto rulesIcon = makeActionIcon(ActionIcon::rules, dark);
+            servers->setIcon(serverIcon);
+            toolbarServers->setIcon(serverIcon);
+            rules->setIcon(rulesIcon);
+            toolbarRules->setIcon(rulesIcon);
+            clear->setIcon(makeActionIcon(ActionIcon::clear_display, dark));
+            restart->setIcon(makeActionIcon(ActionIcon::restart, dark));
+        };
+    setActionIcons(darkTheme_);
+    bar->addAction(toolbarServers);
+    bar->addAction(toolbarRules);
     bar->addSeparator();
     bar->addAction(clear);
     bar->addAction(restart);
@@ -1359,7 +1377,11 @@ void NativeDnsWindow::buildUi() {
     tray_ = new QSystemTrayIcon(trayIcon, this);
     tray_->setToolTip("NativeDNS");
     auto* trayMenu = new QMenu(this);
-    auto* open = addAction(trayMenu, "Open");
+    auto* open = addAction(trayMenu, "Open NativeDNS");
+    QFont openFont = open->font();
+    openFont.setBold(true);
+    open->setFont(openFont);
+    trayMenu->setDefaultAction(open);
     trayMenu->addAction(servers);
     trayMenu->addAction(rules);
     trayMenu->addAction(restart);
@@ -1391,15 +1413,17 @@ void NativeDnsWindow::buildUi() {
         QSettings().setValue("ui/language", "ru");
         retranslateUi();
     });
-    connect(light, &QAction::triggered, this, [this] {
+    connect(light, &QAction::triggered, this, [this, setActionIcons] {
         darkTheme_ = false;
         QSettings().setValue("ui/darkTheme", false);
         applyUiTheme(*qApp, false);
+        setActionIcons(false);
     });
-    connect(dark, &QAction::triggered, this, [this] {
+    connect(dark, &QAction::triggered, this, [this, setActionIcons] {
         darkTheme_ = true;
         QSettings().setValue("ui/darkTheme", true);
         applyUiTheme(*qApp, true);
+        setActionIcons(true);
     });
 
     connect(newCfg, &QAction::triggered, this, [this] {
@@ -1414,6 +1438,8 @@ void NativeDnsWindow::buildUi() {
     connect(exportCfg, &QAction::triggered, this, [this] { exportConfiguration(); });
     connect(servers, &QAction::triggered, this, [this] { openServers(); });
     connect(rules, &QAction::triggered, this, [this] { openRules(); });
+    connect(toolbarServers, &QAction::triggered, this, [this] { openServers(); });
+    connect(toolbarRules, &QAction::triggered, this, [this] { openRules(); });
     connect(restart, &QAction::triggered, this, [this] { requestCoreRestart(); });
     connect(clear, &QAction::triggered, this, [this] {
         log_->clear();
