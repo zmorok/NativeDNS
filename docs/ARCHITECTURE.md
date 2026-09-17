@@ -126,7 +126,9 @@ Expected behavior:
 - a second GUI launch activates the existing instance;
 - `Hide to tray` is persisted as a boolean UI setting;
 - CoreHost starts automatically with every GUI instance and remains active while the GUI is visible or in the tray;
-- there are no interactive Start/Stop controls; only a full application exit shuts CoreHost down;
+- the toolbar and tray offer Restart, which reloads routing state without stopping DNS interception; if CoreHost is absent, the GUI launches it;
+- without network connectivity, the GUI records a red live-log error and defers startup or a requested Restart when CoreHost is absent; a running CoreHost can still reload rules and previously resolved servers;
+- only a full application exit shuts CoreHost down permanently;
 - close hides the window only when tray mode is enabled and a tray is available;
 - otherwise close performs a full application exit and shuts down CoreHost;
 - explicit Exit always performs full shutdown.

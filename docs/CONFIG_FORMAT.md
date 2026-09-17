@@ -27,7 +27,9 @@ The `Logging` element controls the live GUI log and the rotating diagnostic file
 - `enabled`: enables or disables the file sink;
 - `directory`: retained for compatibility with existing configurations. Runtime logs are always written to the `logs` directory in the application root. Each recording starts in a timestamped file such as `NativeDNS-143705-12092026.log` (`HHmmss-ddMMyyyy`).
 
-File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. It rotates at 4 MiB, gives each new segment its own recording-start timestamp, and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
+File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. On Windows, the environment row shows the OS edition, architecture, display version, and full build number. The file rotates at 4 MiB, gives each new segment its own recording-start timestamp, and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
+
+Saving servers or rules in the GUI applies the new configuration to the running CoreHost without stopping DNS interception. If CoreHost rejects the new configuration, its previous routing state remains active.
 
 GUI rows begin with local time in `[dd.MM HH:mm:ss]` form. File rows use `[dd.MM.yyyy HH:mm:ss]` so exported diagnostics retain the year.
 The GUI retains the newest 2,000 live-log rows; older rows are removed from the display only and remain available in the diagnostic file.

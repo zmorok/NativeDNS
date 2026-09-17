@@ -138,6 +138,7 @@ constexpr std::array translations{
     Translation{"Additional modules will appear here", "Здесь появятся дополнительные модули"},
     Translation{"&Log", "&Журнал"},
     Translation{"Clear Display", "Очистить экран"},
+    Translation{"Restart", "Перезапустить"},
     Translation{"Screen", "Экран"},
     Translation{"Errors Only", "Только ошибки"},
     Translation{"Normal", "Обычный"},
@@ -169,6 +170,25 @@ constexpr std::array translations{
     Translation{"Core: starting...", "Ядро: запуск..."},
     Translation{"Core: restarting...", "Ядро: перезапуск..."},
     Translation{"Core: stopped", "Ядро: остановлено"},
+    Translation{"Core: waiting for network", "Ядро: ожидание сети"},
+    Translation{"Offline", "Нет сети"},
+    Translation{"Cannot restart DNS core: no internet connection. Restart deferred until the "
+                "network returns.",
+                "Не удаётся перезапустить ядро DNS: нет подключения к интернету. Перезапуск "
+                "выполнится после восстановления сети."},
+    Translation{"Cannot start DNS core: no internet connection. Waiting for the network.",
+                "Не удаётся запустить ядро DNS: нет подключения к интернету. Ожидание сети."},
+    Translation{"Internet connection lost. DNS resolution may fail; core startup will wait for the "
+                "network.",
+                "Подключение к интернету потеряно. DNS-запросы могут завершаться ошибкой; запуск "
+                "ядра дождётся сети."},
+    Translation{"Internet connection restored.", "Подключение к интернету восстановлено."},
+    Translation{"DNS configuration reloaded without stopping the core.",
+                "Конфигурация DNS обновлена без остановки ядра."},
+    Translation{"DNS configuration reload failed: ", "Ошибка обновления конфигурации DNS: "},
+    Translation{"Core startup failed: ", "Ошибка запуска ядра: "},
+    Translation{"Core startup timed out. Check network and DNS configuration.",
+                "Время ожидания запуска ядра истекло. Проверьте сеть и конфигурацию DNS."},
     Translation{"Core: Unknown", "Ядро: состояние неизвестно"},
     Translation{"Core: Error", "Ядро: ошибка"},
     Translation{"Core: Running", "Ядро: работает"},

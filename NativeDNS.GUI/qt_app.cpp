@@ -40,6 +40,8 @@
 #include <QHBoxLayout>
 #include <QPointer>
 #include <QMetaObject>
+#include <QNetworkInformation>
+#include <QNetworkInterface>
 #include <QBrush>
 #include <QColor>
 #include <QFileInfo>
@@ -58,12 +60,32 @@
 #include <thread>
 #include <algorithm>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
 namespace {
 constexpr auto repositoryUrl = "https://github.com/zmorok/NativeDNS";
 constexpr int ruleIdRole = Qt::UserRole + 1;
+
+bool networkAvailable() {
+    if (const auto* information = QNetworkInformation::instance()) {
+        if (information->reachability() == QNetworkInformation::Reachability::Online)
+            return true;
+        if (information->reachability() != QNetworkInformation::Reachability::Unknown)
+            return false;
+    }
+    for (const auto& interface : QNetworkInterface::allInterfaces()) {
+        if (!(interface.flags() & QNetworkInterface::IsUp) ||
+            !(interface.flags() & QNetworkInterface::IsRunning) ||
+            (interface.flags() & QNetworkInterface::IsLoopBack))
+            continue;
+        for (const auto& address : interface.addressEntries())
+            if (!address.ip().isNull() && !address.ip().isLoopback())
+                return true;
+    }
+    return false;
+}
 
 QString q(const std::string& value) {
     return QString::fromUtf8(value.c_str(), static_cast<int>(value.size()));
@@ -1115,6 +1137,8 @@ NativeDnsWindow::NativeDnsWindow(bool background) {
     (void)background;
     loadConfiguration();
     buildUi();
+    QNetworkInformation::loadDefaultBackend();
+    networkAvailable_ = networkAvailable();
     connect(&statusTimer_, &QTimer::timeout, this, [this] { refreshStatus(); });
     connect(&logTimer_, &QTimer::timeout, this, [this] { refreshLogs(); });
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdownCoreForExit(); });
@@ -1202,6 +1226,7 @@ void NativeDnsWindow::buildUi() {
 
     auto* logMenu = addMenu("&Log");
     auto* clear = addAction(logMenu, "Clear Display");
+    auto* restart = mark(new QAction(this), "Restart");
     auto* screen = addSubMenu(logMenu, "Screen");
     auto* group = new QActionGroup(this);
     group->setExclusive(true);
@@ -1306,6 +1331,7 @@ void NativeDnsWindow::buildUi() {
     bar->addAction(rules);
     bar->addSeparator();
     bar->addAction(clear);
+    bar->addAction(restart);
 
     trayAvailable_ = QSystemTrayIcon::isSystemTrayAvailable();
     QIcon trayIcon = QApplication::windowIcon();
@@ -1317,6 +1343,7 @@ void NativeDnsWindow::buildUi() {
     auto* open = addAction(trayMenu, "Open");
     trayMenu->addAction(servers);
     trayMenu->addAction(rules);
+    trayMenu->addAction(restart);
     trayMenu->addSeparator();
     trayMenu->addAction(exit);
     tray_->setContextMenu(trayMenu);
@@ -1368,6 +1395,7 @@ void NativeDnsWindow::buildUi() {
     connect(exportCfg, &QAction::triggered, this, [this] { exportConfiguration(); });
     connect(servers, &QAction::triggered, this, [this] { openServers(); });
     connect(rules, &QAction::triggered, this, [this] { openRules(); });
+    connect(restart, &QAction::triggered, this, [this] { restartCore(); });
     connect(clear, &QAction::triggered, this, [this] {
         log_->clear();
         logSequence_ = 0;
@@ -1479,25 +1507,70 @@ bool NativeDnsWindow::saveConfiguration() {
     }
 }
 bool NativeDnsWindow::applyConfiguration() {
+    std::optional<nd::Config> previous;
+    try {
+        if (std::filesystem::exists(configPath()))
+            previous = nd::load_config(configPath());
+    } catch (const std::exception& error) {
+        QMessageBox::critical(this, uiText("Configuration"), error.what());
+        return false;
+    }
     if (!saveConfiguration())
         return false;
+    if (restartCore())
+        return true;
+    if (!reloadRejected_)
+        return true;
+    if (previous) {
+        try {
+            nd::save_config(*previous, configPath());
+        } catch (const std::exception& error) {
+            QMessageBox::critical(this, uiText("Configuration"), error.what());
+        }
+    }
+    return false;
+}
+bool NativeDnsWindow::restartCore() {
+    reloadRejected_ = false;
+    bool coreAvailable = true;
+    if (!networkAvailable()) {
+        try {
+            coreAvailable =
+                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::ping, {}, 150).status == 0;
+        } catch (...) {
+            coreAvailable = false;
+        }
+    }
+    if (!coreAvailable) {
+        restartWhenNetworkReturns_ = true;
+        coreLaunchPending_ = false;
+        setStatusText(uiText("Core: waiting for network"), true);
+        appendLocalLog(uiText("Cannot restart DNS core: no internet connection. Restart deferred "
+                              "until the network returns."),
+                       true);
+        networkErrorLogged_ = true;
+        return true;
+    }
     try {
         const auto response =
-            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::restart, {}, 500);
-        if (response.status)
+            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, {}, 10000);
+        if (response.status) {
+            reloadRejected_ = true;
             throw std::runtime_error(response.payload);
-        coreLaunchPending_ = true;
-        coreLaunchTimer_.restart();
-        logSequence_ = 0;
-        setStatusText(uiText("Core: restarting..."));
+        }
+        restartWhenNetworkReturns_ = false;
+        appendLocalLog(uiText("DNS configuration reloaded without stopping the core."));
+        refreshStatus();
     } catch (const nd::Error& error) {
         if (error.code != "IPC_CONNECT") {
+            appendLocalLog(uiText("DNS configuration reload failed: ") + error.what(), true);
             QMessageBox::critical(this, "NativeDNS", error.what());
             return false;
         }
         coreLaunchPending_ = false;
         startCore(true);
     } catch (const std::exception& error) {
+        appendLocalLog(uiText("DNS configuration reload failed: ") + error.what(), true);
         QMessageBox::critical(this, "NativeDNS", error.what());
         return false;
     }
@@ -1557,7 +1630,19 @@ void NativeDnsWindow::exportConfiguration() {
     }
 }
 
-void NativeDnsWindow::startCore(bool transparent) {
+void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
+    if (!networkAvailable()) {
+        restartWhenNetworkReturns_ = true;
+        coreLaunchPending_ = false;
+        setStatusText(uiText("Core: waiting for network"), true);
+        if (!networkErrorLogged_) {
+            appendLocalLog(
+                uiText("Cannot start DNS core: no internet connection. Waiting for the network."),
+                true);
+            networkErrorLogged_ = true;
+        }
+        return;
+    }
     if (coreLaunchPending_ && coreLaunchTimer_.isValid() && coreLaunchTimer_.elapsed() < 45000)
         return;
     if (coreStartOperationPending_.exchange(true))
@@ -1579,7 +1664,7 @@ void NativeDnsWindow::startCore(bool transparent) {
     setStatusText(uiText("Core: starting..."));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start(
-        [self, helper, args, configuration, transparent, cancellation] {
+        [self, helper, args, configuration, transparent, reportFailure, cancellation] {
             bool success = false, running = false;
             QString failure;
             try {
@@ -1624,7 +1709,7 @@ void NativeDnsWindow::startCore(bool transparent) {
             }
             QMetaObject::invokeMethod(
                 qApp,
-                [self, success, running, failure, cancellation] {
+                [self, success, running, failure, reportFailure, cancellation] {
                     if (!self)
                         return;
                     self->coreStartOperationPending_ = false;
@@ -1633,7 +1718,9 @@ void NativeDnsWindow::startCore(bool transparent) {
                     if (!success) {
                         self->coreLaunchPending_ = false;
                         self->setStatusText(uiText("Core: stopped"), true);
-                        QMessageBox::critical(self, "NativeDNS", failure);
+                        self->appendLocalLog(uiText("Core startup failed: ") + failure, true);
+                        if (reportFailure)
+                            QMessageBox::critical(self, "NativeDNS", failure);
                         return;
                     }
                     self->coreLaunchPending_ = !running;
@@ -1743,15 +1830,51 @@ void NativeDnsWindow::refreshStatus() {
                 if (!self)
                     return;
                 self->statusRefreshPending_ = false;
-                if (!failed) {
+                const bool available = networkAvailable();
+                const bool networkReturned = available && !self->networkAvailable_;
+                self->networkAvailable_ = available;
+                if (!available) {
                     self->coreLaunchPending_ = false;
-                    self->setStatusText(friendlyCoreStatus(status), status.startsWith("ERROR"));
-                } else if (self->coreLaunchPending_ && self->coreLaunchTimer_.isValid() &&
-                           self->coreLaunchTimer_.elapsed() < 45000) {
-                    self->setStatusText(uiText("Core: starting..."));
+                    if (failed)
+                        self->restartWhenNetworkReturns_ = true;
+                    self->setStatusText(failed ? uiText("Core: waiting for network")
+                                               : friendlyCoreStatus(status) + " | " +
+                                                     uiText("Offline"),
+                                        true);
+                    if (!self->networkErrorLogged_) {
+                        self->appendLocalLog(
+                            uiText("Internet connection lost. DNS resolution may fail; core "
+                                   "startup will wait for the network."),
+                            true);
+                        self->networkErrorLogged_ = true;
+                    }
                 } else {
-                    self->coreLaunchPending_ = false;
-                    self->setStatusText(uiText("Core: stopped"));
+                    if (networkReturned) {
+                        self->networkErrorLogged_ = false;
+                        self->appendLocalLog(uiText("Internet connection restored."));
+                    }
+                    if (!self->exiting_ && self->restartWhenNetworkReturns_ &&
+                        !self->coreStartOperationPending_ && !self->coreLaunchPending_) {
+                        self->restartWhenNetworkReturns_ = false;
+                        if (failed)
+                            self->startCore(true, false);
+                        else
+                            self->restartCore();
+                    } else if (!failed) {
+                        self->coreLaunchPending_ = false;
+                        self->setStatusText(friendlyCoreStatus(status), status.startsWith("ERROR"));
+                    } else if (self->coreLaunchPending_ && self->coreLaunchTimer_.isValid() &&
+                               self->coreLaunchTimer_.elapsed() < 45000) {
+                        self->setStatusText(uiText("Core: starting..."));
+                    } else {
+                        if (self->coreLaunchPending_)
+                            self->appendLocalLog(
+                                uiText(
+                                    "Core startup timed out. Check network and DNS configuration."),
+                                true);
+                        self->coreLaunchPending_ = false;
+                        self->setStatusText(uiText("Core: stopped"), true);
+                    }
                 }
             },
             Qt::QueuedConnection);
@@ -1832,6 +1955,20 @@ void NativeDnsWindow::setStatusText(const QString& text, bool error) {
     colors.setColor(QPalette::WindowText,
                     error ? QColor(190, 0, 0) : palette().color(QPalette::Text));
     coreStatus_->setPalette(colors);
+}
+void NativeDnsWindow::appendLocalLog(const QString& message, bool error) {
+    auto* scrollBar = log_->verticalScrollBar();
+    const bool follow = scrollBar->value() >= scrollBar->maximum() - 2;
+    auto cursor = QTextCursor(log_->document());
+    cursor.movePosition(QTextCursor::End);
+    QTextCharFormat format;
+    if (error)
+        format.setForeground(darkTheme_ ? QColor(255, 105, 105) : QColor(190, 0, 0));
+    cursor.insertText('[' + QDateTime::currentDateTime().toString("dd.MM HH:mm:ss") + "] " +
+                          message + '\n',
+                      format);
+    if (follow)
+        scrollBar->setValue(scrollBar->maximum());
 }
 
 void NativeDnsWindow::closeEvent(QCloseEvent* event) {

@@ -31,18 +31,20 @@ private:
     void loadConfiguration();
     bool saveConfiguration();
     bool applyConfiguration();
+    bool restartCore();
     void applyFileLogging();
     void openServers();
     void openRules();
     void importConfiguration();
     void exportConfiguration();
-    void startCore(bool transparent = true);
+    void startCore(bool transparent = true, bool reportFailure = true);
     void shutdownCoreForExit();
     bool waitForCoreShutdown(int timeoutMs);
     void exitApplication();
     void refreshStatus();
     void refreshLogs();
     void setStatusText(const QString& text, bool error = false);
+    void appendLocalLog(const QString& message, bool error = false);
     void appendLogLines(const QString& payload);
     std::filesystem::path configPath() const;
 
@@ -59,6 +61,10 @@ private:
     bool darkTheme_ = false;
     bool trayAvailable_ = false;
     bool coreLaunchPending_ = false;
+    bool networkAvailable_ = false;
+    bool restartWhenNetworkReturns_ = false;
+    bool reloadRejected_ = false;
+    bool networkErrorLogged_ = false;
     bool coreShutdownAttempted_ = false;
     std::atomic_bool coreStartOperationPending_ = false;
     std::shared_ptr<std::atomic_bool> coreStartCancelled_ =

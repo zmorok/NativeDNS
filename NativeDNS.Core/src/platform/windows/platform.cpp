@@ -8,6 +8,7 @@
 #include <cstring>
 #include <sstream>
 #include <set>
+#include <optional>
 
 namespace nd::platform {
 namespace {
@@ -28,6 +29,55 @@ void winsock_ready() {
         return true;
     }();
     (void)ready;
+}
+constexpr wchar_t windows_version_key[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+
+std::wstring version_registry_string(const wchar_t* name) {
+    wchar_t value[256]{};
+    DWORD bytes = sizeof(value);
+    if (RegGetValueW(
+            HKEY_LOCAL_MACHINE, windows_version_key, name, RRF_RT_REG_SZ, nullptr, value, &bytes) !=
+        ERROR_SUCCESS)
+        return {};
+    return value;
+}
+std::optional<DWORD> version_registry_dword(const wchar_t* name) {
+    DWORD value = 0;
+    DWORD bytes = sizeof(value);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE,
+                     windows_version_key,
+                     name,
+                     RRF_RT_REG_DWORD,
+                     nullptr,
+                     &value,
+                     &bytes) != ERROR_SUCCESS)
+        return std::nullopt;
+    return value;
+}
+std::string utf8(const std::wstring& value) {
+    if (value.empty())
+        return {};
+    const int size = WideCharToMultiByte(CP_UTF8,
+                                         WC_ERR_INVALID_CHARS,
+                                         value.data(),
+                                         static_cast<int>(value.size()),
+                                         nullptr,
+                                         0,
+                                         nullptr,
+                                         nullptr);
+    if (size <= 0)
+        return {};
+    std::string result(static_cast<size_t>(size), '\0');
+    if (!WideCharToMultiByte(CP_UTF8,
+                             WC_ERR_INVALID_CHARS,
+                             value.data(),
+                             static_cast<int>(value.size()),
+                             result.data(),
+                             size,
+                             nullptr,
+                             nullptr))
+        return {};
+    return result;
 }
 } // namespace
 bool parse_ip(const std::string& text, std::array<uint8_t, 16>& bytes, bool& ipv6) {
@@ -118,10 +168,39 @@ std::string system_summary() {
                 reinterpret_cast<RtlGetVersionFunction>(GetProcAddress(module, "RtlGetVersion")))
             (void)get_version(&version);
 
+    SYSTEM_INFO system{};
+    GetNativeSystemInfo(&system);
+    const char* architecture = "unknown";
+    switch (system.wProcessorArchitecture) {
+        case PROCESSOR_ARCHITECTURE_AMD64:
+            architecture = "x64";
+            break;
+        case PROCESSOR_ARCHITECTURE_INTEL:
+            architecture = "x86";
+            break;
+        case PROCESSOR_ARCHITECTURE_ARM64:
+            architecture = "arm64";
+            break;
+    }
+
+    auto product_name = version_registry_string(L"ProductName");
+    // Windows 11 can still report "Windows 10" in this registry value.
+    if (version.dwBuildNumber >= 22000 && product_name.starts_with(L"Windows 10 "))
+        product_name.replace(0, 10, L"Windows 11");
+    if (product_name.empty())
+        product_name = L"Windows";
+    const auto display_version = utf8(version_registry_string(L"DisplayVersion"));
+    const auto ubr = version_registry_dword(L"UBR");
+
     std::ostringstream output;
-    output << "platform=windows-x64 os=" << version.dwMajorVersion << '.' << version.dwMinorVersion
-           << " build=" << version.dwBuildNumber << " pid=" << process_id()
-           << " elevated=" << (is_elevated() ? 1 : 0);
+    output << "platform=windows-" << architecture << " os=\"" << utf8(product_name) << ' '
+           << architecture << '"';
+    if (!display_version.empty())
+        output << " version=" << display_version;
+    output << " build=" << version.dwBuildNumber;
+    if (ubr)
+        output << '.' << *ubr;
+    output << " pid=" << process_id() << " elevated=" << (is_elevated() ? 1 : 0);
     return output.str();
 }
 void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::time_point deadline) {
