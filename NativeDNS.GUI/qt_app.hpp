@@ -32,6 +32,7 @@ private:
     bool saveConfiguration();
     bool applyConfiguration();
     bool restartCore();
+    void requestCoreRestart();
     void applyFileLogging();
     void openServers();
     void openRules();
@@ -54,7 +55,8 @@ private:
     QSystemTrayIcon* tray_ = nullptr;
     QAction* hideToTrayAction_ = nullptr;
     QTimer statusTimer_, logTimer_;
-    QElapsedTimer coreLaunchTimer_;
+    QElapsedTimer coreLaunchTimer_, networkProbeTimer_;
+    QString networkSignature_;
     uint64_t logSequence_ = 0;
     bool exiting_ = false;
     bool hideToTray_ = true;
@@ -67,6 +69,7 @@ private:
     bool networkErrorLogged_ = false;
     bool coreShutdownAttempted_ = false;
     std::atomic_bool coreStartOperationPending_ = false;
+    std::atomic_bool restartOperationPending_ = false;
     std::shared_ptr<std::atomic_bool> coreStartCancelled_ =
         std::make_shared<std::atomic_bool>(false);
     std::atomic_bool statusRefreshPending_ = false;

@@ -26,7 +26,7 @@ CoreHost::CoreHost(Config config,
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
     if (mode == InterceptionMode::transparent)
-        prepare_secure_endpoints(config_, 45000);
+        prepare_secure_endpoints(config_);
     try {
         if (config_.logging.file_enabled)
             file_log_path_ = timestamped_log_path(file_log_directory());

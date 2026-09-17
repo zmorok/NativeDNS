@@ -168,16 +168,11 @@ constexpr std::array translations{
     Translation{"Export", "Экспорт"},
     Translation{"Core: unknown", "Ядро: состояние неизвестно"},
     Translation{"Core: starting...", "Ядро: запуск..."},
+    Translation{"Core: checking network...", "Ядро: проверка сети..."},
     Translation{"Core: restarting...", "Ядро: перезапуск..."},
     Translation{"Core: stopped", "Ядро: остановлено"},
     Translation{"Core: waiting for network", "Ядро: ожидание сети"},
     Translation{"Offline", "Нет сети"},
-    Translation{"Cannot restart DNS core: no internet connection. Restart deferred until the "
-                "network returns.",
-                "Не удаётся перезапустить ядро DNS: нет подключения к интернету. Перезапуск "
-                "выполнится после восстановления сети."},
-    Translation{"Cannot start DNS core: no internet connection. Waiting for the network.",
-                "Не удаётся запустить ядро DNS: нет подключения к интернету. Ожидание сети."},
     Translation{"Internet connection lost. DNS resolution may fail; core startup will wait for the "
                 "network.",
                 "Подключение к интернету потеряно. DNS-запросы могут завершаться ошибкой; запуск "
@@ -185,6 +180,9 @@ constexpr std::array translations{
     Translation{"Internet connection restored.", "Подключение к интернету восстановлено."},
     Translation{"DNS configuration reloaded without stopping the core.",
                 "Конфигурация DNS обновлена без остановки ядра."},
+    Translation{"Reloading DNS configuration...", "Обновление конфигурации DNS..."},
+    Translation{"Cannot resolve secure DNS upstream: ",
+                "Не удаётся определить адрес защищённого DNS-сервера: "},
     Translation{"DNS configuration reload failed: ", "Ошибка обновления конфигурации DNS: "},
     Translation{"Core startup failed: ", "Ошибка запуска ядра: "},
     Translation{"Core startup timed out. Check network and DNS configuration.",
