@@ -360,7 +360,6 @@ struct WinDivertInterception::Impl {
     using SetParam = decltype(&WinDivertSetParam);
     using Compile = decltype(&WinDivertHelperCompileFilter);
     using CalcChecksums = decltype(&WinDivertHelperCalcChecksums);
-    Config config;
     Logger& logger;
     Router router;
     detail::TcpDnsProxy tcp_proxy;
@@ -381,6 +380,7 @@ struct WinDivertInterception::Impl {
     struct Job {
         Packet packet;
         WINDIVERT_ADDRESS address{};
+        Router::SnapshotPtr snapshot;
     };
     std::mutex queue_mutex;
     std::condition_variable queue_changed;
@@ -391,9 +391,8 @@ struct WinDivertInterception::Impl {
     uint16_t tcp_proxy_port = 0, intercepted_tcp_port;
     bool stop_driver_on_release = false;
     Impl(Config value, Logger& output, uint16_t target)
-        : config(std::move(value)), logger(output), router(config, logger),
-          tcp_proxy(router, logger, target), intercepted_tcp_port(target) {
-        validate(config);
+        : logger(output), router(std::move(value), logger), tcp_proxy(router, logger, target),
+          intercepted_tcp_port(target) {
     }
     template <class T> T symbol(const char* name) {
         auto address = GetProcAddress(module, name);
@@ -414,13 +413,13 @@ struct WinDivertInterception::Impl {
             const auto query =
                 Packet(job.packet.begin() + static_cast<ptrdiff_t>(view.payload), job.packet.end());
             const auto question = parse_question(query);
-            const auto& rule = match_rule(config, question.name);
+            const auto& rule = match_rule(job.snapshot->config, question.name);
             if (rule.action == Action::bypass ||
                 (rule.action == Action::process && rule.server_id == 0)) {
                 inject(job.packet, job.address);
                 return;
             }
-            auto routed = router.route(query, original_server(job.packet, view));
+            auto routed = router.route(query, original_server(job.packet, view), job.snapshot);
             if (routed.disposition == Disposition::forward_original) {
                 inject(job.packet, job.address);
                 return;
@@ -524,7 +523,9 @@ struct WinDivertInterception::Impl {
                     }
                     const auto captured_question = parse_question(Packet(
                         packet.begin() + static_cast<ptrdiff_t>(view.payload), packet.end()));
-                    const auto& captured_rule = match_rule(config, captured_question.name);
+                    auto snapshot = router.snapshot();
+                    const auto& captured_rule =
+                        match_rule(snapshot->config, captured_question.name);
                     if (logger.enabled(Level::debug))
                         logger.write(Level::debug,
                                      "DNS_CAPTURE",
@@ -532,7 +533,7 @@ struct WinDivertInterception::Impl {
                                          " rule=" + captured_rule.name +
                                          " action=" + action_name(captured_rule.action) +
                                          " server=" + std::to_string(captured_rule.server_id));
-                    if (should_reinject_udp_immediately(config, packet)) {
+                    if (should_reinject_udp_immediately(snapshot->config, packet)) {
                         const auto original = original_server(packet, view);
                         if (logger.enabled(Level::normal))
                             logger.write(
@@ -552,7 +553,7 @@ struct WinDivertInterception::Impl {
                     {
                         std::lock_guard lock(queue_mutex);
                         if (jobs.size() < 4096) {
-                            jobs.push_back({std::move(packet), address});
+                            jobs.push_back({std::move(packet), address, std::move(snapshot)});
                             queued = true;
                         }
                     }
@@ -779,6 +780,9 @@ void WinDivertInterception::stop() {
         p.release();
         p.state = State::stopped;
     }
+}
+void WinDivertInterception::reload(Config config) {
+    impl_->router.reload(std::move(config));
 }
 InterceptionStatus WinDivertInterception::status() const {
     const auto& p = *impl_;

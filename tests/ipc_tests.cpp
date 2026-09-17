@@ -216,11 +216,16 @@ int main() {
         config.logging.file_enabled = false;
         config.logging.directory = "ignored-custom-log-directory";
         config.rules.back().action = nd::Action::block;
+        const auto config_path = std::filesystem::temp_directory_path() /
+                                 ("nativedns-reload-" + std::to_string(nd::platform::process_id()) +
+                                  '-' + std::to_string(nd::platform::monotonic_millis()) + ".xml");
+        nd::save_config(config, config_path);
         nd::Server original;
         original.name = "unused";
         original.ip = "127.0.0.1";
         original.port = 1;
-        nd::CoreHost host(config, original, 0, host_name);
+        nd::CoreHost host(
+            config, original, 0, host_name, nd::InterceptionMode::local_proxy, config_path);
         host.start();
         std::optional<std::filesystem::path> diagnostic_log;
         check(nd::pipe_request(host_name, nd::IpcOperation::configure_file_log, "1\t2").payload ==
@@ -240,6 +245,31 @@ int main() {
         local.port = port;
         check(nd::test_server(local, "example.com").success,
               "host routes actual local DNS request");
+        config.logging.file_enabled = true;
+        config.rules.back().block_mode = nd::BlockMode::nxdomain;
+        nd::save_config(config, config_path);
+        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config).payload == "RELOADED",
+              "reload configuration without stopping CoreHost");
+        check(nd::pipe_request(host_name, nd::IpcOperation::status)
+                      .payload.find("port=" + std::to_string(port)) != std::string::npos,
+              "reload retains the listening port");
+        check(nd::test_server(local, "example.com").error_code == "DNS_RCODE",
+              "reloaded rule takes effect on the existing listener");
+        {
+            std::ofstream invalid(config_path, std::ios::binary | std::ios::trunc);
+            invalid << "<invalid/>";
+        }
+        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config).status != 0,
+              "invalid reload is rejected");
+        check(nd::test_server(local, "example.com").error_code == "DNS_RCODE",
+              "failed reload preserves the active routing state");
+        std::filesystem::remove(config_path);
+        config.rules.back().block_mode = nd::BlockMode::zero_address;
+        nd::save_config(config, config_path);
+        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config).status == 0,
+              "reload restores original rule");
+        check(nd::test_server(local, "example.com").success,
+              "listener remains usable after repeated reloads");
         host.logger().flush_file();
         diagnostic_log = find_new_diagnostic_log(log_directory, existing_logs);
         {
@@ -314,6 +344,10 @@ int main() {
         host.logger().configure_file(false, nd::Level::normal, {});
         if (diagnostic_log)
             std::filesystem::remove(*diagnostic_log);
+        std::filesystem::remove(config_path);
+        auto config_backup = config_path;
+        config_backup += ".bak";
+        std::filesystem::remove(config_backup);
         std::error_code cleanup_error;
         std::filesystem::remove(log_directory, cleanup_error);
         std::cout << "cross-platform IPC protocol tests passed\n";

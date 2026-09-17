@@ -4,6 +4,7 @@
 #include <charconv>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
 
 namespace nd {
 namespace {
@@ -15,9 +16,11 @@ CoreHost::CoreHost(Config config,
                    Server original,
                    uint16_t local_port,
                    std::string pipe_name,
-                   InterceptionMode mode)
-    : config_(std::move(config)), original_(std::move(original)), local_port_(local_port),
-      pipe_name_(std::move(pipe_name)),
+                   InterceptionMode mode,
+                   std::filesystem::path config_path)
+    : config_(std::move(config)), original_(std::move(original)), mode_(mode),
+      local_port_(local_port), pipe_name_(std::move(pipe_name)),
+      config_path_(std::move(config_path)),
       log_pipe_name_(pipe_name_ == core_pipe_name ? core_log_pipe_name : pipe_name_ + ".logs"),
       logger_(4096) {
     validate(config_);
@@ -152,6 +155,50 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         throw Error("IPC_PROTOCOL", "This operation requires an empty payload");
     if (operation == IpcOperation::ping)
         return {0, "NativeDNS Core API 1"};
+    if (operation == IpcOperation::reload_config) {
+        std::lock_guard reload_lock(reload_mutex_);
+        if (config_path_.empty())
+            throw Error("CONFIG_IO", "CoreHost has no configuration path to reload");
+        auto next = load_config(config_path_);
+        if (mode_ == InterceptionMode::transparent) {
+            std::lock_guard lock(mutex_);
+            for (auto& server : next.servers) {
+                if (!server.ip.empty())
+                    continue;
+                const auto previous =
+                    std::find_if(config_.servers.begin(),
+                                 config_.servers.end(),
+                                 [&](const Server& value) { return value.id == server.id; });
+                if (previous == config_.servers.end() || previous->ip.empty())
+                    continue;
+                auto resolved = server;
+                resolved.ip = previous->ip;
+                if (resolved == *previous)
+                    server.ip = previous->ip;
+            }
+        }
+        if (mode_ == InterceptionMode::transparent)
+            prepare_secure_endpoints(next);
+        {
+            std::lock_guard lock(mutex_);
+            interception_->reload(next);
+            config_ = std::move(next);
+            logger_.set_display_level(config_.logging.screen);
+            try {
+                if (config_.logging.file_enabled && !file_log_enabled_)
+                    file_log_path_ = timestamped_log_path(file_log_directory());
+                logger_.configure_file(
+                    config_.logging.file_enabled, config_.logging.file, file_log_path_);
+                file_log_enabled_ = config_.logging.file_enabled;
+            } catch (const std::exception& error) {
+                logger_.write(Level::errors_only, "FILE_LOG_CONFIG_FAILED", error.what());
+            }
+        }
+        logger_.write(Level::normal,
+                      "CONFIG_RELOADED",
+                      "Configuration applied without stopping DNS interception");
+        return {0, "RELOADED"};
+    }
     if (operation == IpcOperation::status) {
         const auto value = interception_->status();
         const char* state = "ERROR";
@@ -199,8 +246,11 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, operation == IpcOperation::restart ? "RESTARTING" : "SHUTTING_DOWN"};
     }
     if (operation == IpcOperation::logs) {
-        uint64_t after = 0, wait_ms = 0,
-                 requested_level = static_cast<uint64_t>(config_.logging.screen);
+        uint64_t after = 0, wait_ms = 0, requested_level = 0;
+        {
+            std::lock_guard lock(mutex_);
+            requested_level = static_cast<uint64_t>(config_.logging.screen);
+        }
         const auto separator = payload.find('\t');
         const auto level_separator =
             separator == std::string::npos ? std::string::npos : payload.find('\t', separator + 1);

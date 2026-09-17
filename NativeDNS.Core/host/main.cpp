@@ -102,7 +102,8 @@ int main(int argc, char** argv) {
                               port,
                               nd::core_pipe_name,
                               transparent ? nd::InterceptionMode::transparent
-                                          : nd::InterceptionMode::local_proxy);
+                                          : nd::InterceptionMode::local_proxy,
+                              config_path);
             host.start();
             host.wait_for_shutdown();
             const bool restart = host.restart_requested();

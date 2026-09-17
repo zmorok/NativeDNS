@@ -21,7 +21,7 @@ int print_test(const nd::TestResult& result) {
 void usage() {
     std::cerr << "Usage:\n"
                  "  nativednsctl core status|start|stop|logs [AFTER "
-                 "[WAIT_MS]]|clear-file|clear-display|shutdown|restart\n"
+                 "[WAIT_MS]]|clear-file|clear-display|shutdown|restart|reload\n"
                  "  nativednsctl config import-yoga INPUT OUTPUT\n"
                  "  nativednsctl config export INPUT OUTPUT\n"
                  "  nativednsctl rules list CONFIG\n"
@@ -51,6 +51,8 @@ int main(int argc, char** argv) {
                 op = nd::IpcOperation::shutdown;
             else if (cmd == "restart")
                 op = nd::IpcOperation::restart;
+            else if (cmd == "reload")
+                op = nd::IpcOperation::reload_config;
             else if (cmd == "clear-file")
                 op = nd::IpcOperation::clear_file_log;
             else if (cmd == "clear-display")
@@ -64,8 +66,12 @@ int main(int argc, char** argv) {
             }
             const auto endpoint =
                 op == nd::IpcOperation::logs ? nd::core_log_pipe_name : nd::core_pipe_name;
-            auto r =
-                nd::pipe_request(endpoint, op, payload, op == nd::IpcOperation::logs ? 2000 : 3000);
+            auto r = nd::pipe_request(endpoint,
+                                      op,
+                                      payload,
+                                      op == nd::IpcOperation::logs            ? 2000
+                                      : op == nd::IpcOperation::reload_config ? 10000
+                                                                              : 3000);
             std::cout << r.payload;
             if (r.payload.empty() || r.payload.back() != '\n')
                 std::cout << '\n';

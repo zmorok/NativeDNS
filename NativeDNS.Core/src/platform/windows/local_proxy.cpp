@@ -383,6 +383,9 @@ void LocalProxy::stop() {
     p.cleanup();
     p.state = State::stopped;
 }
+void LocalProxy::reload(Config config) {
+    impl_->router->reload(std::move(config));
+}
 InterceptionStatus LocalProxy::status() const {
     std::lock_guard lock(impl_->lifecycle);
     return {impl_->state.load(), impl_->bound_port, false, true, true};

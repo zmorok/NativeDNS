@@ -67,12 +67,16 @@ Current operations include:
 | 8 | Clear display |
 | 9 | Restart |
 | 10 | Configure file log (`enabled<TAB>level`) |
+| 11 | Reload config (empty payload) |
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
 
-After writing a new configuration or changing servers/rules, the GUI sends `Restart`.
-CoreHost then stops its current interception backend, reloads the configured XML file,
-and starts a fresh Router/interception state in the same privileged process.
+After writing a new configuration or changing servers/rules, the GUI sends `Reload config`.
+CoreHost validates and prepares the saved XML before atomically replacing the routing snapshot.
+WinDivert, nftables, and DNS listeners remain active. Queries already in progress finish with
+their original snapshot; later queries use the new one. If validation or endpoint preparation
+fails, CoreHost retains the current routing snapshot. `Restart` (ID 9) remains available to
+fully stop and start CoreHost for recovery.
 
 Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in milliseconds, code, and message. The GUI formats that timestamp in local time.
 

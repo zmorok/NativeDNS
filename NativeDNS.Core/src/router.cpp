@@ -46,8 +46,15 @@ std::string route_log_message(const Question& question,
         output << ", time=" << std::fixed << std::setprecision(2) << *elapsed_ms << " ms";
     return output.str();
 }
-Router::Router(Config config, Logger& logger) : config_(std::move(config)), logger_(logger) {
-    validate(config_);
+Router::Router(Config config, Logger& logger) : logger_(logger) {
+    reload(std::move(config));
+}
+Router::SnapshotPtr Router::snapshot() const {
+    return snapshot_.load();
+}
+void Router::reload(Config config) const {
+    validate(config);
+    snapshot_.store(std::make_shared<Snapshot>(std::move(config)));
 }
 Packet Router::exchange(const Packet& request, const Server& server) const {
     const auto index = static_cast<size_t>(server.protocol);
@@ -58,7 +65,8 @@ Packet Router::exchange(const Packet& request, const Server& server) const {
     });
     return transports_[index]->exchange(request, server);
 }
-std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
+std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot,
+                                                        const Packet& request,
                                                         const Server& primary) const {
     if (!primary.id || primary.fallback_ids.empty())
         return {exchange(request, primary), &primary};
@@ -69,10 +77,10 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
             return;
         candidates.push_back(&server);
         for (const auto id : server.fallback_ids) {
-            const auto found = std::find_if(config_.servers.begin(),
-                                            config_.servers.end(),
+            const auto found = std::find_if(snapshot.config.servers.begin(),
+                                            snapshot.config.servers.end(),
                                             [&](const Server& value) { return value.id == id; });
-            if (found != config_.servers.end())
+            if (found != snapshot.config.servers.end())
                 append(*found);
         }
     };
@@ -86,18 +94,18 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
         budget_ms = std::min<uint64_t>(120000, budget_ms + server->timeout_ms);
     const auto deadline = started + std::chrono::milliseconds(budget_ms);
     {
-        std::lock_guard lock(health_mutex_);
+        std::lock_guard lock(snapshot.health_mutex);
         const auto now = std::chrono::steady_clock::now();
         for (const auto* candidate : candidates)
-            health_.try_emplace(candidate->id);
+            snapshot.health.try_emplace(candidate->id);
         const bool any_ready =
             std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                return health_.at(server->id).retry_after <= now;
+                return snapshot.health.at(server->id).retry_after <= now;
             });
         std::stable_sort(
             candidates.begin(), candidates.end(), [&](const Server* left, const Server* right) {
-                const auto& a = health_.at(left->id);
-                const auto& b = health_.at(right->id);
+                const auto& a = snapshot.health.at(left->id);
+                const auto& b = snapshot.health.at(right->id);
                 const bool a_open = any_ready && a.retry_after > now,
                            b_open = any_ready && b.retry_after > now;
                 if (a_open != b_open)
@@ -117,12 +125,12 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
         if (now >= deadline)
             break;
         {
-            std::lock_guard lock(health_mutex_);
+            std::lock_guard lock(snapshot.health_mutex);
             const bool another_ready =
                 std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                    return server != candidate && health_[server->id].retry_after <= now;
+                    return server != candidate && snapshot.health[server->id].retry_after <= now;
                 });
-            if (health_[candidate->id].retry_after > now && another_ready)
+            if (snapshot.health[candidate->id].retry_after > now && another_ready)
                 continue;
         }
         auto attempt = *candidate;
@@ -137,8 +145,8 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
                                        std::chrono::steady_clock::now() - attempt_started)
                                        .count();
             {
-                std::lock_guard lock(health_mutex_);
-                auto& state = health_[candidate->id];
+                std::lock_guard lock(snapshot.health_mutex);
+                auto& state = snapshot.health[candidate->id];
                 state.consecutive_failures = 0;
                 state.retry_after = {};
                 state.latency_ms =
@@ -150,8 +158,8 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
             last_message = error.what();
             unsigned failures = 0;
             {
-                std::lock_guard lock(health_mutex_);
-                auto& state = health_[candidate->id];
+                std::lock_guard lock(snapshot.health_mutex);
+                auto& state = snapshot.health[candidate->id];
                 failures = ++state.consecutive_failures;
                 if (failures >= 2) {
                     const auto shift = std::min(failures - 2, 3u);
@@ -168,8 +176,10 @@ std::pair<Packet, const Server*> Router::exchange_group(const Packet& request,
     }
     throw Error(last_code, "Fallback group exhausted: " + last_message);
 }
-std::pair<Packet, uint32_t>
-Router::exchange_cached(const Packet& request, const Server& primary, bool configured) const {
+std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
+                                                    const Packet& request,
+                                                    const Server& primary,
+                                                    bool configured) const {
     if (request.size() < 2)
         throw Error("DNS_MALFORMED", "DNS request is too short");
     std::string key;
@@ -185,11 +195,11 @@ Router::exchange_cached(const Packet& request, const Server& primary, bool confi
     std::shared_ptr<Pending> pending;
     bool leader = false;
     {
-        std::unique_lock lock(cache_mutex_);
+        std::unique_lock lock(snapshot.cache_mutex);
         const auto now = std::chrono::steady_clock::now();
-        for (auto entry = cache_.begin(); entry != cache_.end();)
-            entry = entry->second.expires <= now ? cache_.erase(entry) : std::next(entry);
-        if (const auto found = cache_.find(key); found != cache_.end()) {
+        for (auto entry = snapshot.cache.begin(); entry != snapshot.cache.end();)
+            entry = entry->second.expires <= now ? snapshot.cache.erase(entry) : std::next(entry);
+        if (const auto found = snapshot.cache.find(key); found != snapshot.cache.end()) {
             const auto elapsed = static_cast<uint32_t>(
                 std::chrono::duration_cast<std::chrono::seconds>(now - found->second.stored)
                     .count());
@@ -198,12 +208,12 @@ Router::exchange_cached(const Packet& request, const Server& primary, bool confi
             return {age_dns_response(found->second.packet, transaction_id, elapsed),
                     found->second.used_server_id};
         }
-        const auto found = pending_.find(key);
-        if (found != pending_.end())
+        const auto found = snapshot.pending.find(key);
+        if (found != snapshot.pending.end())
             pending = found->second;
         else {
             pending = std::make_shared<Pending>();
-            pending_.emplace(key, pending);
+            snapshot.pending.emplace(key, pending);
             leader = true;
         }
         if (!leader) {
@@ -216,54 +226,62 @@ Router::exchange_cached(const Packet& request, const Server& primary, bool confi
         }
     }
     try {
-        auto exchanged = exchange_group(request, primary);
+        auto exchanged = exchange_group(snapshot, request, primary);
         const auto parsed = parse_response(exchanged.first, parse_question(request));
         const uint32_t used_id = configured ? exchanged.second->id : 0;
         {
-            std::lock_guard lock(cache_mutex_);
+            std::lock_guard lock(snapshot.cache_mutex);
             const auto now = std::chrono::steady_clock::now();
             if (parsed.cacheable) {
-                if (cache_.size() >= 4096) {
-                    const auto oldest = std::min_element(
-                        cache_.begin(), cache_.end(), [](const auto& left, const auto& right) {
-                            return left.second.expires < right.second.expires;
-                        });
-                    if (oldest != cache_.end())
-                        cache_.erase(oldest);
+                if (snapshot.cache.size() >= 4096) {
+                    const auto oldest =
+                        std::min_element(snapshot.cache.begin(),
+                                         snapshot.cache.end(),
+                                         [](const auto& left, const auto& right) {
+                                             return left.second.expires < right.second.expires;
+                                         });
+                    if (oldest != snapshot.cache.end())
+                        snapshot.cache.erase(oldest);
                 }
                 const auto ttl = std::min<uint32_t>(parsed.cache_ttl, 86400);
-                cache_[key] = {exchanged.first, now, now + std::chrono::seconds(ttl), used_id};
+                snapshot.cache[key] = {
+                    exchanged.first, now, now + std::chrono::seconds(ttl), used_id};
             }
             pending->packet = exchanged.first;
             pending->used_server_id = used_id;
             pending->done = true;
-            pending_.erase(key);
+            snapshot.pending.erase(key);
         }
         pending->changed.notify_all();
         return {std::move(exchanged.first), used_id};
     } catch (const Error& error) {
         {
-            std::lock_guard lock(cache_mutex_);
+            std::lock_guard lock(snapshot.cache_mutex);
             pending->error_code = error.code;
             pending->error_message = error.what();
             pending->done = true;
-            pending_.erase(key);
+            snapshot.pending.erase(key);
         }
         pending->changed.notify_all();
         throw;
     } catch (const std::exception& error) {
         {
-            std::lock_guard lock(cache_mutex_);
+            std::lock_guard lock(snapshot.cache_mutex);
             pending->error_code = "INTERNAL";
             pending->error_message = error.what();
             pending->done = true;
-            pending_.erase(key);
+            snapshot.pending.erase(key);
         }
         pending->changed.notify_all();
         throw;
     }
 }
 RouteResult Router::route(const Packet& request, const Server& original) const {
+    return route(request, original, snapshot());
+}
+RouteResult
+Router::route(const Packet& request, const Server& original, SnapshotPtr current) const {
+    const auto& snapshot = *current;
     RouteResult result;
     Question question;
     bool valid_question = false;
@@ -275,7 +293,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         if (question.flags & 0x8000)
             throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
         valid_question = true;
-        const auto& rule = match_rule(config_, question.name);
+        const auto& rule = match_rule(snapshot.config, question.name);
         matched_rule = &rule;
         result.rule_id = rule.id;
         result.server_id = rule.server_id;
@@ -304,10 +322,10 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
         }
         const Server* server = &original;
         if (rule.server_id) {
-            const auto it = std::find_if(config_.servers.begin(),
-                                         config_.servers.end(),
+            const auto it = std::find_if(snapshot.config.servers.begin(),
+                                         snapshot.config.servers.end(),
                                          [&](const Server& s) { return s.id == rule.server_id; });
-            if (it == config_.servers.end())
+            if (it == snapshot.config.servers.end())
                 throw Error("SERVER_REFERENCE", "Missing selected server");
             server = &*it;
         }
@@ -319,15 +337,15 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
                               " protocol=" + protocol_name(server->protocol) +
                               " address=" + server->ip + " port=" + std::to_string(server->port));
         exchange_started = std::chrono::steady_clock::now();
-        auto exchanged = exchange_cached(request, *server, rule.server_id != 0);
+        auto exchanged = exchange_cached(snapshot, request, *server, rule.server_id != 0);
         result.packet = std::move(exchanged.first);
         result.server_id = exchanged.second;
         if (result.server_id) {
             const auto used = std::find_if(
-                config_.servers.begin(), config_.servers.end(), [&](const Server& candidate) {
-                    return candidate.id == result.server_id;
-                });
-            if (used != config_.servers.end())
+                snapshot.config.servers.begin(),
+                snapshot.config.servers.end(),
+                [&](const Server& candidate) { return candidate.id == result.server_id; });
+            if (used != snapshot.config.servers.end())
                 selected_server = &*used;
         }
         const auto parsed = parse_response(result.packet, question);

@@ -632,6 +632,22 @@ int main() {
         }
         check(selected.requests == 1 && original.requests == 1,
               "Bypass and Block do not query custom servers");
+        {
+            auto blocked = nd::default_config();
+            blocked.rules.back().action = nd::Action::block;
+            blocked.rules.back().block_mode = nd::BlockMode::nxdomain;
+            nd::Router reloading(blocked, route_log);
+            auto in_flight = reloading.snapshot();
+            blocked.rules.back().block_mode = nd::BlockMode::zero_address;
+            reloading.reload(blocked);
+            const auto old_route = reloading.route(query, original.server(), in_flight);
+            const auto new_route = reloading.route(query, original.server());
+            check(nd::parse_response(old_route.packet, q).rcode == 3,
+                  "in-flight DNS query retains the previous configuration");
+            check(nd::parse_response(new_route.packet, q).addresses ==
+                      std::vector<std::string>{"0.0.0.0"},
+                  "new DNS query receives the updated configuration");
+        }
         for (const auto action : {nd::Action::process, nd::Action::bypass}) {
             Peer peer(false, Mode::good);
             auto proxy_config = nd::default_config();

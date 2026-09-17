@@ -130,6 +130,9 @@ public:
             proxy_->stop();
         status_ = {};
     }
+    void reload(Config config) override {
+        router_->reload(std::move(config));
+    }
     InterceptionStatus status() const override {
         std::lock_guard lock(mutex_);
         return status_;

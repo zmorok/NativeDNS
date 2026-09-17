@@ -18,7 +18,8 @@ enum class IpcOperation : uint16_t {
     clear_file_log = 7,
     clear_display = 8,
     restart = 9,
-    configure_file_log = 10
+    configure_file_log = 10,
+    reload_config = 11
 };
 struct IpcResponse {
     uint32_t status = 0;

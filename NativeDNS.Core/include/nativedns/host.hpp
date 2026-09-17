@@ -11,7 +11,8 @@ public:
              Server original,
              uint16_t local_port = 0,
              std::string pipe_name = core_pipe_name,
-             InterceptionMode mode = InterceptionMode::local_proxy);
+             InterceptionMode mode = InterceptionMode::local_proxy,
+             std::filesystem::path config_path = {});
     ~CoreHost();
     void start();
     void stop();
@@ -27,13 +28,16 @@ public:
 private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     mutable std::mutex mutex_;
+    std::mutex reload_mutex_;
     std::condition_variable shutdown_cv_;
     bool shutdown_requested_ = false;
     std::atomic_bool stopped_ = true;
     Config config_;
     Server original_;
+    InterceptionMode mode_;
     uint16_t local_port_;
     std::string pipe_name_;
+    std::filesystem::path config_path_;
     std::string log_pipe_name_;
     Logger logger_;
     std::filesystem::path file_log_path_;

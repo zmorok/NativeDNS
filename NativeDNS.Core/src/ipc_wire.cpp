@@ -27,7 +27,7 @@ IpcWireHeader parse_ipc_header(std::span<const uint8_t> bytes, bool response) {
     IpcWireHeader header{
         get16(bytes.data() + 6), get64(bytes.data() + 8), get32(bytes.data() + 16)};
     const auto base = static_cast<uint16_t>(header.operation & 0x7fff);
-    if (!header.request || base < 1 || base > 10 ||
+    if (!header.request || base < 1 || base > 11 ||
         (response ? (header.operation & 0x8000) == 0 : (header.operation & 0x8000) != 0))
         throw Error("IPC_PROTOCOL", "Invalid IPC request header");
     if (response ? (header.length < 4 || header.length > ipc_max_payload + 4)
