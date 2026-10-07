@@ -90,6 +90,7 @@ if(NATIVEDNS_BUILD_GUI)
   find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Network Test)
   # Exercise the internal Rules dialog without starting the application or CoreHost.
   set(rules_gui_sources rules_gui_tests.cpp
+    ../NativeDNS.GUI/update_checker.cpp
     ../NativeDNS.GUI/log_filter_config.cpp
     ../NativeDNS.GUI/log_filter.cpp
     ../NativeDNS.GUI/log_filter_ui.cpp
@@ -130,4 +131,14 @@ if(NATIVEDNS_BUILD_GUI)
     set_property(TEST log_display_filters PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")
   endif()
   set_tests_properties(log_display_filters PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+  add_executable(update_checker_tests update_checker_tests.cpp
+    ../NativeDNS.GUI/update_checker.cpp ../NativeDNS.GUI/ui_preferences.cpp)
+  set_target_properties(update_checker_tests PROPERTIES AUTOMOC ON)
+  target_link_libraries(update_checker_tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
+  add_test(NAME release_update_check COMMAND update_checker_tests)
+  if(WIN32)
+    set_property(TEST release_update_check PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")
+  endif()
+  set_tests_properties(release_update_check PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 endif()

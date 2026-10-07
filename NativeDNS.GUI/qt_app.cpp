@@ -1,4 +1,5 @@
 #include "qt_app.hpp"
+#include "update_checker.hpp"
 #include "toolbar_button.hpp"
 #include "bounded_table_header.hpp"
 #include "log_filter_ui.hpp"
@@ -1435,6 +1436,7 @@ void NativeDnsWindow::buildUi() {
     themeGroup->addAction(dark);
 
     auto* help = addMenu("&Help");
+    auto* checkUpdates = addAction(help, "Check for updates");
     auto* about = addAction(help, "About NativeDNS");
 
     auto* bar = addToolBar("Main");
@@ -1560,6 +1562,19 @@ void NativeDnsWindow::buildUi() {
     });
     connect(exit, &QAction::triggered, this, [this] { exitApplication(); });
     connect(about, &QAction::triggered, this, [this] { showAboutDialog(this); });
+    connect(checkUpdates, &QAction::triggered, this, [this] {
+        if (!updateDialog_) {
+            auto* dialog = new UpdateDialog(QCoreApplication::applicationVersion(), this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            updateDialog_ = dialog;
+            dialog->show();
+            dialog->check();
+        } else {
+            updateDialog_->show();
+            updateDialog_->raise();
+            updateDialog_->activateWindow();
+        }
+    });
 
     connect(autostart, &QAction::toggled, this, [this, autostart](bool enabled) {
         try {

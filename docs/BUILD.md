@@ -60,6 +60,39 @@ The script:
 
 Outputs are written under `out/`.
 
+### Release update information
+
+The GUI's **Help > Check for updates** command downloads the `update.json`
+asset from the latest stable GitHub release. It compares numeric version components
+and displays English/Russian release notes with links to the contributing commits.
+Only the notes scroll; the version labels and action buttons remain visible.
+This command checks metadata and opens the release page; it does not install packages.
+
+The release tag must be `v` followed by the version in `VERSION`.
+Prepare the manifest after committing the release version and before publishing:
+
+```powershell
+./scripts/make-update-manifest.ps1 -ReleaseRef HEAD -PreviousRef v0.4.2
+```
+
+Attach `out/release/update.json` alongside the release packages. Run the script
+with PowerShell 7 on Windows or Linux. If `PreviousRef` is omitted, it finds the highest
+earlier stable version tag reachable from the release commit. Non-merge commits
+since that tag become bullet points; release-preparation commits are omitted.
+`packaging/release-notes.json` supplies descriptions keyed by full commit hash.
+Other commits use their subject in English, also used as the Russian fallback.
+
+For mutable releases without an existing manifest, the release workflow generates
+and attaches it after publication. Until the upload completes, checks may report
+that the manifest is missing. Immutable releases must include it before publication.
+
+Manifest schema 1 contains `version` (`major.minor.patch`), `release_url`
+(`https://github.com/zmorok/NativeDNS/releases/tag/v<version>`) and a `whats_new`
+array. Each entry contains a full lowercase SHA-1 `commit` and a `text` object
+with required `en` and optional `ru` strings. The client accepts at most 256
+entries, 4096 characters per description and 512 KiB per manifest. A failed check
+can show the last successful result, explicitly marked as cached.
+
 ### Windows runtime model
 
 Official Qt MSVC builds use the dynamic MSVC CRT.

@@ -7,6 +7,7 @@ set(CMAKE_AUTORCC ON)
 set(NATIVEDNS_GUI_SOURCES
   qt_main.cpp
   qt_app.cpp
+  update_checker.cpp
   log_filter_config.cpp
   log_filter.cpp
   log_filter_ui.cpp

@@ -1,0 +1,39 @@
+name: Release update information
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  manifest:
+    # A manifest attached before publication also supports immutable releases.
+    if: >-
+      ${{ !github.event.release.prerelease && !github.event.release.draft &&
+      !github.event.release.immutable &&
+      !contains(github.event.release.assets.*.name, 'update.json') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - name: Prepare update.json
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($env:RELEASE_TAG -cne "v$version") { throw 'Release tag must match VERSION.' }
+          ./scripts/make-update-manifest.ps1 -ReleaseRef $env:RELEASE_TAG
+      - name: Attach update.json
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release upload $env:RELEASE_TAG out/release/update.json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not upload update.json.' }

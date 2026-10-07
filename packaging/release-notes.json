@@ -1,0 +1,22 @@
+{
+  "ab38ee3d2ae3d10e9f6ae6f84c13112712fe293b": {
+    "en": "Added bulk Action and DNS Server changes for rules selected with Ctrl or Shift, respecting Block and Bypass restrictions.",
+    "ru": "Добавлено групповое изменение Action и DNS Server для правил, выбранных через Ctrl или Shift, с учётом ограничений Block и Bypass."
+  },
+  "be823b735a780ff8d55a3e5d3d433106f02d8dba": {
+    "en": "Added the Clone button for duplicating the selected DNS server.",
+    "ru": "Добавлена кнопка Clone для клонирования выбранного DNS-сервера."
+  },
+  "1daa2033624a8986609460e89d66fb0e0eb010c3": {
+    "en": "Fixed column resizing in DNS Servers and Rules with minimum widths and table bounds. Action and DNS Server columns retain their fixed widths.",
+    "ru": "Исправлено изменение ширины колонок в DNS Servers и Rules: установлены минимальные размеры и границы таблицы. Колонки Action и DNS Server сохраняют фиксированную ширину."
+  },
+  "27e0a326bda8b922055a4275ec7ee316868af9d0": {
+    "en": "Added log filtering by address, DNS record type, rule, action and error with compound conditions. Added saved filter management, import/export, help and transactional editing. Aligned the log counter with the status line.",
+    "ru": "Добавлена фильтрация логов по адресу, типу DNS-записи, правилу, действию и ошибкам с поддержкой составных условий. Добавлены управление фильтрами, импорт/экспорт, справка и подтверждение изменений через OK. Счётчик логов выровнен со строкой состояния."
+  },
+  "c5c8fc06e9b33fee8a36e02cca52b52e34ba4326": {
+    "en": "Adjusted toolbar icon alignment, removed ellipses from buttons and menu commands, and temporarily hid the Advanced menu.",
+    "ru": "Исправлено положение иконок панели, убраны многоточия с кнопок и команд меню. Меню Advanced временно скрыто."
+  }
+}

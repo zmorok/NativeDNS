@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QMainWindow>
+#include <QPointer>
 #include <QPlainTextEdit>
 #include <QSystemTrayIcon>
 #include <QTimer>
@@ -14,6 +15,7 @@
 class LogPanel;
 class QAction;
 class QCloseEvent;
+class UpdateDialog;
 
 class NativeDnsWindow final : public QMainWindow {
 public:
@@ -55,6 +57,7 @@ private:
     QLabel* coreStatus_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
     QAction* hideToTrayAction_ = nullptr;
+    QPointer<UpdateDialog> updateDialog_;
     QTimer statusTimer_, logTimer_;
     QElapsedTimer coreLaunchTimer_, networkProbeTimer_;
     QString networkSignature_;
