@@ -18,5 +18,9 @@
   "c5c8fc06e9b33fee8a36e02cca52b52e34ba4326": {
     "en": "Adjusted toolbar icon alignment, removed ellipses from buttons and menu commands, and temporarily hid the Advanced menu.",
     "ru": "Исправлено положение иконок панели, убраны многоточия с кнопок и команд меню. Меню Advanced временно скрыто."
+  },
+  "e208662404667c529f12d009b9bfb36a409fcb20": {
+    "en": "Integrated update checking through GitHub release metadata, with scrollable release notes, commit links, English/Russian descriptions and retry support.",
+    "ru": "Добавлена проверка обновлений через данные GitHub-релиза с прокручиваемым списком изменений, ссылками на коммиты, описаниями на русском и английском и возможностью повторной проверки."
   }
 }

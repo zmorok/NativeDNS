@@ -13,10 +13,10 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 ## Download
 
-The current Windows release is [v0.4.2](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.2):
+The current Windows release is [v0.4.3](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.3):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.2/NativeDNS-0.4.2-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.2/NativeDNS-0.4.2-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.3/NativeDNS-0.4.3-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.3/NativeDNS-0.4.3-windows-x64-portable.zip)
 
 Linux packages are not part of this release. Linux interception still needs validation on a real privileged host.
 
@@ -47,6 +47,8 @@ Platform integration:
 The production desktop UI uses **Qt 6 Widgets** on both platforms.
 The GUI provides persistent light/dark themes and English/Russian interface languages under `Other`.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
+The live log supports compound display filters and saved filter management with import/export.
+`Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
 
 ## Application lifecycle
 
