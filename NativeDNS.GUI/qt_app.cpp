@@ -1,4 +1,5 @@
 #include "qt_app.hpp"
+#include "toolbar_button.hpp"
 #include "bounded_table_header.hpp"
 #include "log_filter_ui.hpp"
 #include "action_icons.hpp"
@@ -507,8 +508,8 @@ public:
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         configureFixedTableRows(table_);
 
-        auto* add = new QPushButton(uiText("Add..."));
-        auto* edit = new QPushButton(uiText("Edit..."));
+        auto* add = new QPushButton(uiText("Add"));
+        auto* edit = new QPushButton(uiText("Edit"));
         auto* clone = new QPushButton(uiText("Clone"));
         auto* remove = new QPushButton(uiText("Remove"));
         check_ = new QPushButton(uiText("Check"));
@@ -1008,8 +1009,8 @@ public:
 
         auto* up = new QPushButton(uiText("Up"));
         auto* down = new QPushButton(uiText("Down"));
-        auto* add = new QPushButton(uiText("Add..."));
-        auto* edit = new QPushButton(uiText("Edit..."));
+        auto* add = new QPushButton(uiText("Add"));
+        auto* edit = new QPushButton(uiText("Edit"));
         auto* clone = new QPushButton(uiText("Clone"));
         auto* remove = new QPushButton(uiText("Remove"));
         auto* ok = new QPushButton(uiText("OK"));
@@ -1317,8 +1318,8 @@ void NativeDnsWindow::buildUi() {
 
     auto* file = addMenu("&File");
     auto* newCfg = addAction(file, "New Configuration");
-    auto* import = addAction(file, "Import Configuration...");
-    auto* exportCfg = addAction(file, "Export Configuration...");
+    auto* import = addAction(file, "Import Configuration");
+    auto* exportCfg = addAction(file, "Export Configuration");
     file->addSeparator();
     auto* autostart = addAction(file, "Autostart");
     autostart->setCheckable(true);
@@ -1326,10 +1327,13 @@ void NativeDnsWindow::buildUi() {
     auto* exit = addAction(file, "Exit");
 
     auto* config = addMenu("&Configuration");
-    auto* servers = addAction(config, "DNS Servers...");
-    auto* rules = addAction(config, "Rules...");
+    auto* servers = addAction(config, "DNS Servers");
+    auto* rules = addAction(config, "Rules");
 
+    // Too early to expose Advanced features; keep the menu hidden for now.
     auto* advanced = addMenu("&Advanced");
+    advanced->menuAction()->setVisible(false);
+    // Too early to enable additional modules; preserve this placeholder for future work.
     auto* note = addAction(advanced, "Additional modules will appear here");
     note->setEnabled(false);
 
@@ -1452,11 +1456,18 @@ void NativeDnsWindow::buildUi() {
             restart->setIcon(makeActionIcon(ActionIcon::restart, dark));
         };
     setActionIcons(darkTheme_);
-    bar->addAction(toolbarServers);
-    bar->addAction(toolbarRules);
+    const auto addToolbarButton = [bar](QAction* action) {
+        auto* button = new ToolbarButton(bar);
+        button->setDefaultAction(action);
+        button->setIconSize(bar->iconSize());
+        button->setToolButtonStyle(bar->toolButtonStyle());
+        bar->addWidget(button);
+    };
+    addToolbarButton(toolbarServers);
+    addToolbarButton(toolbarRules);
     bar->addSeparator();
-    bar->addAction(clear);
-    bar->addAction(restart);
+    addToolbarButton(clear);
+    addToolbarButton(restart);
 
     trayAvailable_ = QSystemTrayIcon::isSystemTrayAvailable();
     QIcon trayIcon = QApplication::windowIcon();
@@ -1760,7 +1771,7 @@ void NativeDnsWindow::openRules() {
 }
 void NativeDnsWindow::importConfiguration() {
     const auto file = QFileDialog::getOpenFileName(
-        this, uiText("Import Configuration..."), {}, "DNS configuration (*.xml);;All files (*)");
+        this, uiText("Import Configuration"), {}, "DNS configuration (*.xml);;All files (*)");
     if (file.isEmpty())
         return;
     try {
@@ -1778,7 +1789,7 @@ void NativeDnsWindow::importConfiguration() {
 }
 void NativeDnsWindow::exportConfiguration() {
     const auto file = QFileDialog::getSaveFileName(
-        this, uiText("Export Configuration..."), "NativeDNS.xml", "XML (*.xml)");
+        this, uiText("Export Configuration"), "NativeDNS.xml", "XML (*.xml)");
     if (file.isEmpty())
         return;
     try {

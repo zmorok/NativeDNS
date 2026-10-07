@@ -185,7 +185,7 @@ SavedFiltersDialog::SavedFiltersDialog(QWidget* parent, const QList<SavedLogFilt
     for (const auto& filter : filters)
         appendFilter(filter);
     connect(table_, &QTableWidget::itemChanged, this, [this] { refreshChangedRows(); });
-    auto* add = new QPushButton(uiText("Add..."), this);
+    auto* add = new QPushButton(uiText("Add"), this);
     auto* clone = new QPushButton(uiText("Clone"), this);
     auto* remove = new QPushButton(uiText("Remove"), this);
     auto* importFilters = new QPushButton(uiText("Import"), this);
@@ -514,7 +514,7 @@ void LogPanel::populateMenu() {
     menu_->clear();
     auto* save = menu_->addAction(uiText("Save this filter"));
     auto* remove = menu_->addAction(uiText("Delete this filter"));
-    auto* manage = menu_->addAction(uiText("Manage filters..."));
+    auto* manage = menu_->addAction(uiText("Manage filters"));
     QString error;
     save->setEnabled(saved_.size() < 256 && LogFilter::compile(input_->text(), error).has_value() &&
                      std::none_of(saved_.begin(), saved_.end(), [this](const auto& saved) {

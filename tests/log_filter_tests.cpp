@@ -243,7 +243,7 @@ private slots:
         QVERIFY(table->item(1, 0)->data(Qt::UserRole) != table->item(0, 0)->data(Qt::UserRole));
         button(dialog, "Remove")->click();
         QCOMPARE(table->rowCount(), 1);
-        button(dialog, "Add...")->click();
+        button(dialog, "Add")->click();
         QCOMPARE(table->rowCount(), 2);
         table->item(1, 0)->setText("Processed");
         table->item(1, 1)->setText("action=\"process\"");

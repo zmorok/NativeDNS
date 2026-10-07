@@ -152,7 +152,7 @@ private slots:
         QCOMPARE(value(3, 4), 0u);
         QCOMPARE(value(4, 4), 10u);
         QCOMPARE(config_, before); // No publication until OK.
-        QVERIFY(!button("Edit...")->isEnabled());
+        QVERIFY(!button("Edit")->isEnabled());
         QVERIFY(!button("Remove")->isEnabled());
         QTest::mouseClick(button("OK"), Qt::LeftButton);
         QCOMPARE(commits_, 1);
@@ -213,7 +213,7 @@ private slots:
         choose(0);
         QCOMPARE(value(0, 4), 10u);
         QCOMPARE(value(1, 4), 0u);
-        QVERIFY(button("Edit...")->isEnabled());
+        QVERIFY(button("Edit")->isEnabled());
         QVERIFY(button("Clone")->isEnabled());
     }
     void cancelPopupAndDiscard() {
@@ -451,7 +451,7 @@ private slots:
         QCOMPARE(table->item(2, 4)->text(), QStringLiteral("—"));
         QCOMPARE(config_, before);
         QCoreApplication::processEvents();
-        QVERIFY(findButton("Edit...")->geometry().bottom() < clone->geometry().top());
+        QVERIFY(findButton("Edit")->geometry().bottom() < clone->geometry().top());
         QVERIFY(clone->geometry().bottom() < findButton("Remove")->geometry().top());
         QTest::mouseClick(findButton(save ? "OK" : "Close"), Qt::LeftButton);
         QCOMPARE(commits_, save ? 1 : 0);
