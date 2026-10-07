@@ -57,6 +57,22 @@ private:
     uint32_t value(int row, int column) const {
         return table_->model()->index(row, column).data(Qt::UserRole).toUInt();
     }
+    static QList<int> columnWidths(QHeaderView* header) {
+        QList<int> widths;
+        for (int column = 0; column < header->count(); ++column)
+            widths.push_back(header->sectionSize(column));
+        return widths;
+    }
+    static void dragDivider(QHeaderView* header, int column, int distance) {
+        const QPoint start(header->sectionViewportPosition(column) + header->sectionSize(column) -
+                               1,
+                           header->height() / 2);
+        QTest::mouseMove(header->viewport(), start);
+        QTest::mousePress(header->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+        QTest::mouseMove(header->viewport(), start + QPoint(distance, 0));
+        QTest::mouseRelease(
+            header->viewport(), Qt::LeftButton, Qt::NoModifier, start + QPoint(distance, 0));
+    }
 
 private slots:
     void init() {
@@ -238,6 +254,142 @@ private slots:
         QCOMPARE(commits_, 2);
         QCOMPARE(config_.rules[0].server_id, 0u);
         QCOMPARE(config_.rules[1].server_id, 0u);
+    }
+    void serverHeadersResizable() {
+        ServerDialog servers(nullptr, config_, [] { return true; });
+        servers.show();
+        auto* table = servers.findChild<QTableWidget*>();
+        QVERIFY(table);
+        auto* header = table->horizontalHeader();
+        QTRY_COMPARE(header->length(), table->viewport()->width());
+        servers.resize(servers.width() + 240, servers.height());
+        QCoreApplication::processEvents();
+        QTRY_COMPARE(header->length(), table->viewport()->width());
+        const QList<int> minimums{120, 85, 160, 95, 70};
+        for (int column = 0; column < 4; ++column) {
+            const auto before = columnWidths(header);
+            dragDivider(header, column, 30);
+            auto after = columnWidths(header);
+            QVERIFY(after[column] >= before[column]);
+            QCOMPARE(after[column] + after[column + 1], before[column] + before[column + 1]);
+            QCOMPARE(header->length(), table->viewport()->width());
+            dragDivider(header, column, -10000);
+            after = columnWidths(header);
+            QVERIFY(after[column] >= minimums[column]);
+            QVERIFY(after[column] <= before[column]);
+            QCOMPARE(header->length(), table->viewport()->width());
+            const auto atMinimum = after;
+            dragDivider(header, column, -10000);
+            QCOMPARE(columnWidths(header), atMinimum);
+            dragDivider(header, column, 10000);
+            after = columnWidths(header);
+            QVERIFY(after[column + 1] >= minimums[column + 1]);
+            QCOMPARE(header->length(), table->viewport()->width());
+            const auto atMaximum = after;
+            dragDivider(header, column, 10000);
+            QCOMPARE(columnWidths(header), atMaximum);
+        }
+        const auto resized = columnWidths(header);
+        dragDivider(header, 4, 10000); // The outside edge cannot move beyond the table.
+        QCOMPARE(columnWidths(header), resized);
+        table->selectRow(0);
+        for (auto* candidate : servers.findChildren<QPushButton*>())
+            if (candidate->text() == uiText("Clone"))
+                QTest::mouseClick(candidate, Qt::LeftButton);
+        QCOMPARE(table->rowCount(), 3);
+        QCOMPARE(columnWidths(header), resized);
+        servers.resize(1, servers.height());
+        QCoreApplication::processEvents();
+        QTRY_COMPARE(header->length(), table->viewport()->width());
+        for (int column = 0; column < 5; ++column)
+            QVERIFY(header->sectionSize(column) >= minimums[column]);
+        QVERIFY(!table->horizontalScrollBar()->isVisible());
+    }
+    void rulesHeadersResizableWithFixedActions() {
+        auto* header = table_->horizontalHeader();
+        QTRY_COMPARE(header->length(), table_->viewport()->width());
+        const auto initial = columnWidths(header);
+        dialog_->resize(dialog_->width() + 240, dialog_->height());
+        QCoreApplication::processEvents();
+        QTRY_COMPARE(header->length(), table_->viewport()->width());
+        const QList<int> minimums{75, 140, 180, 100, 100};
+        for (int column = 0; column < 2; ++column) {
+            const auto before = columnWidths(header);
+            dragDivider(header, column, 30);
+            auto after = columnWidths(header);
+            QVERIFY(after[column] >= before[column]);
+            QCOMPARE(after[column] + after[column + 1], before[column] + before[column + 1]);
+            QCOMPARE(header->length(), table_->viewport()->width());
+            dragDivider(header, column, -10000);
+            QVERIFY(header->sectionSize(column) >= minimums[column]);
+            QCOMPARE(header->length(), table_->viewport()->width());
+            const auto atMinimum = columnWidths(header);
+            dragDivider(header, column, -10000);
+            QCOMPARE(columnWidths(header), atMinimum);
+            dragDivider(header, column, 10000);
+            QVERIFY(header->sectionSize(column + 1) >= minimums[column + 1]);
+            QCOMPARE(header->length(), table_->viewport()->width());
+            const auto atMaximum = columnWidths(header);
+            dragDivider(header, column, 10000);
+            QCOMPARE(columnWidths(header), atMaximum);
+        }
+        for (int column : {2, 3, 4}) {
+            const auto before = columnWidths(header);
+            dragDivider(header, column, 10000);
+            QCOMPARE(columnWidths(header), before);
+            const QPoint border(header->sectionViewportPosition(column) +
+                                    header->sectionSize(column) - 1,
+                                header->height() / 2);
+            QTest::mouseDClick(header->viewport(), Qt::LeftButton, Qt::NoModifier, border);
+            QCOMPARE(columnWidths(header), before);
+        }
+        const auto resized = columnWidths(header);
+        click(0, 1);
+        click(1, 1, Qt::ControlModifier);
+        click(0, 3);
+        choose(2);
+        QCOMPARE(columnWidths(header), resized);
+        dialog_->resize(1, dialog_->height());
+        QCoreApplication::processEvents();
+        QTRY_COMPARE(header->length(), table_->viewport()->width());
+        for (int column = 0; column < 5; ++column)
+            QVERIFY(header->sectionSize(column) >= minimums[column]);
+        QCOMPARE(header->sectionSize(3), initial[3]);
+        QCOMPARE(header->sectionSize(4), initial[4]);
+        QVERIFY(!table_->horizontalScrollBar()->isVisible());
+    }
+    void headersTrackVerticalScrollbar() {
+        auto many = config_;
+        for (uint32_t id = 100; id < 140; ++id) {
+            auto server = many.servers.front();
+            server.id = id;
+            many.servers.push_back(server);
+            auto rule = many.rules.front();
+            rule.id = id;
+            many.rules.insert(many.rules.end() - 1, rule);
+        }
+        RulesDialog rules(nullptr, many, [] { return true; });
+        ServerDialog servers(nullptr, many, [] { return true; });
+        rules.show();
+        servers.show();
+        const QList<QTableView*> tables{rules.findChild<QTableView*>(),
+                                        servers.findChild<QTableWidget*>()};
+        for (auto* table : tables) {
+            QVERIFY(table);
+            QTRY_VERIFY(table->isEnabled());
+            QTRY_VERIFY(table->verticalScrollBar()->isVisible());
+            QTRY_COMPARE(table->horizontalHeader()->length(), table->viewport()->width());
+        }
+        const int actionWidth = tables.front()->columnWidth(3);
+        const int serverWidth = tables.front()->columnWidth(4);
+        rules.resize(rules.width(), 1600);
+        servers.resize(servers.width(), 1600);
+        for (auto* table : tables) {
+            QTRY_VERIFY(!table->verticalScrollBar()->isVisible());
+            QTRY_COMPARE(table->horizontalHeader()->length(), table->viewport()->width());
+        }
+        QCOMPARE(tables.front()->columnWidth(3), actionWidth);
+        QCOMPARE(tables.front()->columnWidth(4), serverWidth);
     }
     void serverClone_data() {
         QTest::addColumn<bool>("save");
