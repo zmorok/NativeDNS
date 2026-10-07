@@ -2,6 +2,7 @@
 // real widgets without exposing test-only APIs or constructing NativeDnsWindow.
 #include "../NativeDNS.GUI/qt_app.cpp"
 #include <QtTest>
+#include <QScrollBar>
 
 class RulesGuiTests final : public QObject {
     Q_OBJECT

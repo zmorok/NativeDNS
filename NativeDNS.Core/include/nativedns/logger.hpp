@@ -15,11 +15,15 @@ std::filesystem::path timestamped_log_path(
     const std::filesystem::path& directory,
     std::chrono::system_clock::time_point started_at = std::chrono::system_clock::now());
 
+struct LogContext {
+    std::string address, dns_type, rule, action;
+};
 struct LogEvent {
     uint64_t sequence;
     std::chrono::system_clock::time_point time;
     Level level;
     std::string code, message;
+    LogContext context;
 };
 // Bounded in-memory log with an optional independently filtered rotating file sink.
 class Logger {
@@ -28,7 +32,7 @@ public:
     ~Logger();
     bool enabled(Level level) const noexcept;
     void set_display_level(Level level);
-    void write(Level level, std::string code, std::string message);
+    void write(Level level, std::string code, std::string message, LogContext context = {});
     std::vector<LogEvent> snapshot(Level level, uint64_t after = 0) const;
     std::vector<LogEvent>
     wait_snapshot(Level level, uint64_t after, std::chrono::milliseconds timeout) const;

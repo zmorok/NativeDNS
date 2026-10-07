@@ -90,6 +90,9 @@ if(NATIVEDNS_BUILD_GUI)
   find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Network Test)
   # Exercise the internal Rules dialog without starting the application or CoreHost.
   set(rules_gui_sources rules_gui_tests.cpp
+    ../NativeDNS.GUI/log_filter_config.cpp
+    ../NativeDNS.GUI/log_filter.cpp
+    ../NativeDNS.GUI/log_filter_ui.cpp
     ../NativeDNS.GUI/action_icons.cpp
     ../NativeDNS.GUI/ui_preferences.cpp)
   if(WIN32)
@@ -111,4 +114,20 @@ if(NATIVEDNS_BUILD_GUI)
     set_property(TEST rules_gui_bulk_edit PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")
   endif()
   set_tests_properties(rules_gui_bulk_edit PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+endif()
+
+if(NATIVEDNS_BUILD_GUI)
+  add_executable(log_filter_tests log_filter_tests.cpp
+    ../NativeDNS.GUI/log_filter_config.cpp
+    ../NativeDNS.GUI/log_filter.cpp ../NativeDNS.GUI/log_filter_ui.cpp
+    ../NativeDNS.GUI/action_icons.cpp ../NativeDNS.GUI/ui_preferences.cpp)
+  set_target_properties(log_filter_tests PROPERTIES AUTOMOC ON)
+  target_link_libraries(log_filter_tests PRIVATE NativeDNS.Core.Internal Qt6::Widgets Qt6::Test)
+  target_compile_definitions(log_filter_tests PRIVATE LOG_FILTER_EXAMPLE_PATH="${CMAKE_SOURCE_DIR}/examples/log-filters.xml")
+  add_test(NAME log_display_filters COMMAND log_filter_tests)
+  if(WIN32)
+    nativedns_copy_sodium_runtime(log_filter_tests)
+    set_property(TEST log_display_filters PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")
+  endif()
+  set_tests_properties(log_display_filters PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 endif()

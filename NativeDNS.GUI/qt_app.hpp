@@ -11,6 +11,7 @@
 #include <memory>
 #include <nativedns/config.hpp>
 
+class LogPanel;
 class QAction;
 class QCloseEvent;
 
@@ -50,7 +51,7 @@ private:
     std::filesystem::path configPath() const;
 
     nd::Config config_;
-    QPlainTextEdit* log_ = nullptr;
+    LogPanel* log_ = nullptr;
     QLabel* coreStatus_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
     QAction* hideToTrayAction_ = nullptr;

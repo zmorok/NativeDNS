@@ -286,6 +286,34 @@ int main() {
               "host log stream snapshot");
         check(nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t4").status == 1,
               "reject invalid requested log level");
+        const auto structured =
+            nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t3\tstructured");
+        check(structured.status == 0 &&
+                  structured.payload.find("\texample.com\tA\t" + config.rules.back().name +
+                                          "\tblock\n") != std::string::npos,
+              "structured logs preserve actual routed DNS fields");
+        std::istringstream legacy_rows(response.payload), structured_rows(structured.payload);
+        std::string legacy_row, structured_row;
+        while (std::getline(legacy_rows, legacy_row)) {
+            check(std::getline(structured_rows, structured_row).good(),
+                  "structured and legacy rows align");
+            check(std::count(legacy_row.begin(), legacy_row.end(), '\t') == 4 &&
+                      std::count(structured_row.begin(), structured_row.end(), '\t') == 8 &&
+                      structured_row.starts_with(legacy_row + '\t'),
+                  "structured format retains backwards-compatible prefix");
+        }
+        host.logger().write(
+            nd::Level::errors_only,
+            "TEST_CONTEXT",
+            "failure",
+            {"example.com", "AAAA", "punctuation, time=1 ms, error=x\tline\nbreak", "process"});
+        const auto sanitized =
+            nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t3\tstructured");
+        check(sanitized.payload.find(
+                  "\texample.com\tAAAA\tpunctuation, time=1 ms, error=x line break\tprocess\n") !=
+                  std::string::npos,
+              "structured context sanitizes delimiters without parsing message punctuation");
+        response = nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t3");
         uint64_t last_sequence = 0;
         std::istringstream rows(response.payload);
         std::string row;

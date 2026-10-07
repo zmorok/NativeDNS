@@ -96,6 +96,12 @@ QPixmap render(ActionIcon icon, const Colors& colors, int size) {
         case ActionIcon::clear_display:
             drawClear(painter, colors);
             break;
+        case ActionIcon::bookmark:
+            painter.setPen(QPen(colors.line, 1.5));
+            painter.setBrush(colors.blue);
+            painter.drawPolygon(QPolygonF{
+                QPointF(10, 4), QPointF(24, 4), QPointF(24, 30), QPointF(17, 24), QPointF(10, 30)});
+            break;
         case ActionIcon::restart:
             drawRestart(painter, colors);
             break;

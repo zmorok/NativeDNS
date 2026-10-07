@@ -147,6 +147,26 @@ NativeDNS uses a versioned UTF-8 XML configuration.
 Writes are validated before publishing. Atomic file publication is implemented behind platform-specific filesystem primitives.
 The DNS Servers and Rules dialogs edit private working copies. `OK` validates and publishes the complete copy, while `Close` or the window close button discards all unapplied changes.
 
+## Log display filters
+
+The GUI keeps the latest 2000 received log records before applying display filters, so
+clearing a filter restores retained hidden records. New records use the same applied filter.
+Display filtering does not change Core logging levels or diagnostic file output.
+
+Predicates use quoted values: `addr="example.com"`, `dns_type="A"`, `rule="Default"`,
+`action="process"`, and `err="*"`. Address means the requested DNS domain. Rule actions are
+`process`, `block`, and `bypass`; DNS types also accept numeric values. Matching is case
+insensitive. Address, type, and rule predicates match whole values with optional `*` and `?`
+wildcards. Error predicates search error codes/messages; an empty value or `*` selects all
+errors. Conditions combine with `&&`, `||`, `!`, and parentheses. Precedence is `!`, then
+`&&`, then `||`; parentheses override it.
+Quotes and backslashes inside values are escaped with a backslash.
+
+The Apply button or Enter activates a valid expression. Invalid edits leave the last
+applied filter active. Bookmark filters are stored in the GUI's QSettings independently
+of the DNS XML configuration. The filter manager edits a working copy; OK validates and
+saves it, while Close discards changes. The manager's Help dialog documents syntax and examples.
+
 ## Dependencies and ABI
 
 Qt is dynamically linked only by the GUI.

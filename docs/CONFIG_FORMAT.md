@@ -137,3 +137,33 @@ Imported runtime-sensitive options that NativeDNS cannot yet enforce should rema
 `zero address` returns `0.0.0.0` for A and `::` for AAAA with TTL 0. For every other query type it returns NOERROR with no answers (NODATA). Synthetic replies preserve the original question, recursion-desired/checking-disabled bits, and an EDNS(0) OPT record (including the DO bit) when present.
 
 The server `dnssec` field is capability metadata only. Local DNSSEC validation and imported rule flags `validate` / `rejectUnsigned` are not implemented. Such rules fail explicitly with `NOT_IMPLEMENTED`, and the Qt rule editor does not expose those controls.
+
+## Log filter configuration
+
+Saved GUI display filters can be imported/exported separately from the DNS configuration.
+The UTF-8 XML root is `NativeDNSLogFilters` with `schemaVersion="1"`, containing one `Filters`
+element. Each `Filter` has a stable unique `id`, a `Name`, and an `Expression`:
+
+```xml
+<NativeDNSLogFilters schemaVersion="1">
+  <Filters>
+    <Filter id="process-errors">
+      <Name>Process errors</Name>
+      <Expression>action="process" &amp;&amp; err="*"</Expression>
+    </Filter>
+  </Filters>
+</NativeDNSLogFilters>
+```
+
+XML escapes such as `&amp;` are decoded before expressions are validated. Missing IDs are
+assigned when importing. Configurations are limited to 1 MiB and 256 filters; names are
+1..256 characters and expressions at most 4096 characters. Unsupported schema versions,
+duplicate IDs, malformed XML, DTDs, and invalid expressions are rejected before changing
+any rows. An empty `Filters` element represents an empty list.
+
+Import replaces the manager's working copy. New and modified rows are bold until OK
+validates and saves the list; Close discards the entire working copy, including imports.
+Export writes the current valid working copy using atomic file replacement, without
+applying it to the saved GUI list. Exported files remain on disk when the dialog is closed.
+See [log-filters.xml](../examples/log-filters.xml) for filters for DNS record types, rule
+actions, Default routing, error conditions, and Microsoft connectivity queries.

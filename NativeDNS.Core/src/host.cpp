@@ -246,15 +246,20 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, operation == IpcOperation::restart ? "RESTARTING" : "SHUTTING_DOWN"};
     }
     if (operation == IpcOperation::logs) {
+        auto log_payload = payload;
+        const bool structured = log_payload.ends_with("\tstructured");
+        if (structured)
+            log_payload.resize(log_payload.size() - 11);
         uint64_t after = 0, wait_ms = 0, requested_level = 0;
         {
             std::lock_guard lock(mutex_);
             requested_level = static_cast<uint64_t>(config_.logging.screen);
         }
-        const auto separator = payload.find('\t');
-        const auto level_separator =
-            separator == std::string::npos ? std::string::npos : payload.find('\t', separator + 1);
-        const auto sequence = payload.substr(0, separator);
+        const auto separator = log_payload.find('\t');
+        const auto level_separator = separator == std::string::npos
+                                         ? std::string::npos
+                                         : log_payload.find('\t', separator + 1);
+        const auto sequence = log_payload.substr(0, separator);
         if (!sequence.empty()) {
             auto [end, error] =
                 std::from_chars(sequence.data(), sequence.data() + sequence.size(), after);
@@ -262,17 +267,17 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
                 throw Error("IPC_PROTOCOL", "logs payload has invalid sequence");
         }
         if (separator != std::string::npos) {
-            const auto wait = payload.substr(separator + 1,
-                                             level_separator == std::string::npos
-                                                 ? std::string::npos
-                                                 : level_separator - separator - 1);
+            const auto wait = log_payload.substr(separator + 1,
+                                                 level_separator == std::string::npos
+                                                     ? std::string::npos
+                                                     : level_separator - separator - 1);
             auto [end, error] = std::from_chars(wait.data(), wait.data() + wait.size(), wait_ms);
             if (wait.empty() || error != std::errc{} || end != wait.data() + wait.size() ||
                 wait_ms > 1000)
                 throw Error("IPC_PROTOCOL", "logs wait must be 0..1000 ms");
         }
         if (level_separator != std::string::npos) {
-            const auto level = payload.substr(level_separator + 1);
+            const auto level = log_payload.substr(level_separator + 1);
             auto [end, error] =
                 std::from_chars(level.data(), level.data() + level.size(), requested_level);
             if (level.empty() || error != std::errc{} || end != level.data() + level.size() ||
@@ -288,10 +293,13 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             const auto timestamp =
                 std::chrono::duration_cast<std::chrono::milliseconds>(event.time.time_since_epoch())
                     .count();
-            const auto line = std::to_string(event.sequence) + '\t' +
-                              std::to_string(static_cast<unsigned>(event.level)) + '\t' +
-                              std::to_string(timestamp) + '\t' + event.code + '\t' + event.message +
-                              '\n';
+            auto line = std::to_string(event.sequence) + '\t' +
+                        std::to_string(static_cast<unsigned>(event.level)) + '\t' +
+                        std::to_string(timestamp) + '\t' + event.code + '\t' + event.message +
+                        (structured ? '\t' + event.context.address + '\t' + event.context.dns_type +
+                                          '\t' + event.context.rule + '\t' + event.context.action
+                                    : std::string{}) +
+                        '\n';
             if (output.tellp() + static_cast<std::streamoff>(line.size()) > 1024 * 1024)
                 break;
             output << line;

@@ -80,6 +80,14 @@ fully stop and start CoreHost for recovery.
 
 Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in milliseconds, code, and message. The GUI formats that timestamp in local time.
 
+Appending `\tstructured` to a logs request (`after_sequence<TAB>wait_ms<TAB>level<TAB>structured`)
+opts into four additional fields: query address, DNS record type, rule name, and rule action
+(`process`, `block`, or `bypass`). DNS routing events carry this context; other events leave
+those fields empty. Fields cannot contain tabs or line breaks. Requests without this suffix
+retain the five-field format. The GUI falls back to the older format when an older CoreHost
+rejects the suffix.
+
+
 ## Lifecycle
 
 CoreHost owns the long-running Router/interception state.

@@ -2,6 +2,6 @@
 
 #include <QIcon>
 
-enum class ActionIcon { dns_servers, rules, clear_display, restart };
+enum class ActionIcon { dns_servers, rules, clear_display, restart, bookmark };
 
 QIcon makeActionIcon(ActionIcon icon, bool dark);

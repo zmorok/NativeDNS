@@ -598,9 +598,32 @@ int main() {
                                                "(DNS over UDP), rule=selected, time=") !=
                       std::string::npos,
               "combined readable route log");
+        check(route_events[0].context.address == "example.com" &&
+                  route_events[0].context.dns_type == "A" &&
+                  route_events[0].context.rule == "selected" &&
+                  route_events[0].context.action == "process",
+              "Process route carries filter context");
         check(nd::dns_type_name(28) == "AAAA" && nd::dns_type_name(65) == "HTTPS" &&
                   nd::dns_type_name(65280) == "TYPE65280",
               "DNS type log names");
+        {
+            Peer failing(false, Mode::servfail);
+            auto failure_config = config;
+            failure_config.servers.front() = failing.server();
+            failure_config.servers.front().id = 1002;
+            failure_config.rules.front().name = "punctuation, time=1 ms, error=none";
+            nd::Logger failure_log;
+            const auto failure =
+                nd::Router(failure_config, failure_log).route(query, original.server());
+            failing.verify();
+            const auto errors = failure_log.snapshot(nd::Level::errors_only);
+            check(failure.error_code == "DNS_RCODE" && errors.size() == 1 &&
+                      errors[0].context.address == "example.com" &&
+                      errors[0].context.dns_type == "A" &&
+                      errors[0].context.rule == failure_config.rules.front().name &&
+                      errors[0].context.action == "process",
+                  "upstream failure preserves exact rule metadata for combined filters");
+        }
         const auto default_query = nd::make_query("iana.org");
         routed = router.route(default_query, original.server());
         original.verify();
@@ -613,6 +636,8 @@ int main() {
         routed = nd::Router(config, route_log).route(query, original.server());
         check(routed.disposition == nd::Disposition::forward_original && routed.packet == query,
               "Bypass leaves original packet intact");
+        check(route_log.snapshot(nd::Level::normal).back().context.action == "bypass",
+              "Bypass route carries filter action");
         config.rules[0].action = nd::Action::block;
         for (auto mode : {nd::BlockMode::zero_address,
                           nd::BlockMode::nxdomain,
@@ -630,6 +655,8 @@ int main() {
                     check(a.rcode == (mode == nd::BlockMode::nxdomain ? 3 : 5), "Block rcode");
             }
         }
+        check(route_log.snapshot(nd::Level::normal).back().context.action == "block",
+              "Block route carries filter action");
         check(selected.requests == 1 && original.requests == 1,
               "Bypass and Block do not query custom servers");
         {

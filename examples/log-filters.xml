@@ -1,0 +1,57 @@
+<?xml version='1.0' encoding='utf-8'?>
+<NativeDNSLogFilters schemaVersion="1">
+  <Filters>
+    <Filter id="all-errors">
+      <Name>Все ошибки</Name>
+      <Expression>err="*"</Expression>
+    </Filter>
+    <Filter id="timeouts">
+      <Name>Тайм-ауты DNS</Name>
+      <Expression>err="TIMEOUT"</Expression>
+    </Filter>
+    <Filter id="process">
+      <Name>Действие Process</Name>
+      <Expression>action="process"</Expression>
+    </Filter>
+    <Filter id="block">
+      <Name>Действие Block</Name>
+      <Expression>action="block"</Expression>
+    </Filter>
+    <Filter id="bypass">
+      <Name>Действие Bypass</Name>
+      <Expression>action="bypass"</Expression>
+    </Filter>
+    <Filter id="a-records">
+      <Name>Записи A</Name>
+      <Expression>dns_type="A"</Expression>
+    </Filter>
+    <Filter id="aaaa-records">
+      <Name>Записи AAAA</Name>
+      <Expression>dns_type="AAAA"</Expression>
+    </Filter>
+    <Filter id="https-records">
+      <Name>Записи HTTPS</Name>
+      <Expression>dns_type="HTTPS"</Expression>
+    </Filter>
+    <Filter id="default-rule">
+      <Name>Правило Default</Name>
+      <Expression>rule="Default"</Expression>
+    </Filter>
+    <Filter id="connectivity">
+      <Name>Проверки подключения Microsoft</Name>
+      <Expression>addr="*.msftconnecttest.com" || addr="*.microsoft.com"</Expression>
+    </Filter>
+    <Filter id="default-addresses">
+      <Name>A и AAAA через Default</Name>
+      <Expression>(dns_type="A" || dns_type="AAAA") &amp;&amp; rule="Default"</Expression>
+    </Filter>
+    <Filter id="process-errors">
+      <Name>Ошибки Process</Name>
+      <Expression>action="process" &amp;&amp; err="*"</Expression>
+    </Filter>
+    <Filter id="successful-bypass">
+      <Name>Bypass без ошибок</Name>
+      <Expression>action="bypass" &amp;&amp; !err="*"</Expression>
+    </Filter>
+  </Filters>
+</NativeDNSLogFilters>

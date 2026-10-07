@@ -108,7 +108,7 @@ void Logger::set_display_level(Level level) {
         throw std::invalid_argument("invalid display logging level");
     display_level_ = level;
 }
-void Logger::write(Level level, std::string code, std::string message) {
+void Logger::write(Level level, std::string code, std::string message, LogContext context) {
     if (!enabled(level))
         return;
     for (char& c : message)
@@ -121,6 +121,13 @@ void Logger::write(Level level, std::string code, std::string message) {
         message.resize(4096);
     if (code.size() > 128)
         code.resize(128);
+    for (auto* field : {&context.address, &context.dns_type, &context.rule, &context.action}) {
+        for (char& c : *field)
+            if (static_cast<unsigned char>(c) < 32)
+                c = ' ';
+        if (field->size() > 4096)
+            field->resize(4096);
+    }
     LogEvent event;
     {
         std::lock_guard lock(mutex_);
@@ -128,7 +135,8 @@ void Logger::write(Level level, std::string code, std::string message) {
                            std::chrono::system_clock::now(),
                            level,
                            std::move(code),
-                           std::move(message)});
+                           std::move(message),
+                           std::move(context)});
         if (events_.size() > capacity_)
             events_.pop_front();
         event = events_.back();
@@ -234,7 +242,8 @@ void Logger::record_file_failure(const std::string& message) {
                        std::chrono::system_clock::now(),
                        Level::errors_only,
                        "FILE_LOG_FAILED",
-                       message});
+                       message,
+                       {}});
     if (events_.size() > capacity_)
         events_.pop_front();
     changed_.notify_all();

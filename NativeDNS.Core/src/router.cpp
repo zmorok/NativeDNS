@@ -284,6 +284,10 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
     const auto& snapshot = *current;
     RouteResult result;
     Question question;
+    LogContext context;
+    const auto log = [this, &context](Level level, std::string code, std::string message) {
+        logger_.write(level, std::move(code), std::move(message), context);
+    };
     bool valid_question = false;
     const Rule* matched_rule = nullptr;
     const Server* selected_server = nullptr;
@@ -293,8 +297,12 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         if (question.flags & 0x8000)
             throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
         valid_question = true;
+        context.address = question.name;
+        context.dns_type = dns_type_name(question.type);
         const auto& rule = match_rule(snapshot.config, question.name);
         matched_rule = &rule;
+        context.rule = rule.name;
+        context.action = action_name(rule.action);
         result.rule_id = rule.id;
         result.server_id = rule.server_id;
         result.action = rule.action;
@@ -303,16 +311,14 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                         "Selected rule requires interface binding or local DNSSEC validation");
         if (rule.action == Action::bypass) {
             if (logger_.enabled(Level::normal))
-                logger_.write(
-                    Level::normal, "DNS_ROUTE", route_log_message(question, rule, &original));
+                log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, &original));
             result.disposition = Disposition::forward_original;
             result.packet = request;
             return result;
         }
         if (rule.action == Action::block) {
             if (logger_.enabled(Level::normal))
-                logger_.write(
-                    Level::normal, "DNS_ROUTE", route_log_message(question, rule, nullptr));
+                log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, nullptr));
             if (rule.block_mode == BlockMode::silent_drop) {
                 result.disposition = Disposition::silent_drop;
                 return result;
@@ -331,11 +337,11 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         }
         selected_server = server;
         if (logger_.enabled(Level::verbose))
-            logger_.write(Level::verbose,
-                          "DNS_UPSTREAM",
-                          "name=" + question.name + " server=" + server->name +
-                              " protocol=" + protocol_name(server->protocol) +
-                              " address=" + server->ip + " port=" + std::to_string(server->port));
+            log(Level::verbose,
+                "DNS_UPSTREAM",
+                "name=" + question.name + " server=" + server->name +
+                    " protocol=" + protocol_name(server->protocol) + " address=" + server->ip +
+                    " port=" + std::to_string(server->port));
         exchange_started = std::chrono::steady_clock::now();
         auto exchanged = exchange_cached(snapshot, request, *server, rule.server_id != 0);
         result.packet = std::move(exchanged.first);
@@ -355,19 +361,17 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         if (parsed.rcode) {
             result.error_code = "DNS_RCODE";
             result.message = "Upstream returned RCODE " + std::to_string(parsed.rcode);
-            logger_.write(Level::errors_only,
-                          result.error_code,
-                          route_log_message(question, rule, server, elapsed) +
-                              ", error=" + result.message);
+            log(Level::errors_only,
+                result.error_code,
+                route_log_message(question, rule, server, elapsed) + ", error=" + result.message);
         } else {
             if (logger_.enabled(Level::normal))
-                logger_.write(
-                    Level::normal, "DNS_ROUTE", route_log_message(question, rule, server, elapsed));
+                log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, server, elapsed));
             if (logger_.enabled(Level::debug))
-                logger_.write(Level::debug,
-                              "DNS_REPLY_DETAIL",
-                              question.name + " bytes=" + std::to_string(result.packet.size()) +
-                                  " addresses=" + std::to_string(parsed.addresses.size()));
+                log(Level::debug,
+                    "DNS_REPLY_DETAIL",
+                    question.name + " bytes=" + std::to_string(result.packet.size()) +
+                        " addresses=" + std::to_string(parsed.addresses.size()));
         }
     } catch (const Error& error) {
         result.error_code = error.code;
@@ -379,12 +383,12 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                     : std::optional<double>{std::chrono::duration<double, std::milli>(
                                                 std::chrono::steady_clock::now() - exchange_started)
                                                 .count()};
-            logger_.write(Level::errors_only,
-                          error.code,
-                          route_log_message(question, *matched_rule, selected_server, elapsed) +
-                              ", error=" + error.what());
+            log(Level::errors_only,
+                error.code,
+                route_log_message(question, *matched_rule, selected_server, elapsed) +
+                    ", error=" + error.what());
         } else
-            logger_.write(Level::errors_only, error.code, question.name + " " + error.what());
+            log(Level::errors_only, error.code, question.name + " " + error.what());
         if (valid_question)
             result.packet = make_error_response(request, 2);
         else
@@ -399,12 +403,12 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                     : std::optional<double>{std::chrono::duration<double, std::milli>(
                                                 std::chrono::steady_clock::now() - exchange_started)
                                                 .count()};
-            logger_.write(Level::errors_only,
-                          result.error_code,
-                          route_log_message(question, *matched_rule, selected_server, elapsed) +
-                              ", error=" + error.what());
+            log(Level::errors_only,
+                result.error_code,
+                route_log_message(question, *matched_rule, selected_server, elapsed) +
+                    ", error=" + error.what());
         } else
-            logger_.write(Level::errors_only, result.error_code, result.message);
+            log(Level::errors_only, result.error_code, result.message);
         if (valid_question)
             result.packet = make_error_response(request, 2);
         else
