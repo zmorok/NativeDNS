@@ -508,6 +508,7 @@ public:
 
         auto* add = new QPushButton(uiText("Add..."));
         auto* edit = new QPushButton(uiText("Edit..."));
+        auto* clone = new QPushButton(uiText("Clone"));
         auto* remove = new QPushButton(uiText("Remove"));
         check_ = new QPushButton(uiText("Check"));
         checkAll_ = new QPushButton(uiText("Check All"));
@@ -516,6 +517,7 @@ public:
         auto* side = new QVBoxLayout;
         side->addWidget(add);
         side->addWidget(edit);
+        side->addWidget(clone);
         side->addWidget(remove);
         side->addSpacing(add->sizeHint().height());
         side->addWidget(check_);
@@ -557,6 +559,26 @@ public:
             try {
                 nd::ConfigEditor editor(working_);
                 editor.update_server(server);
+                working_ = editor.get();
+                reload(server.id);
+            } catch (const std::exception& e) {
+                QMessageBox::critical(this, "NativeDNS", e.what());
+            }
+        });
+        connect(table_, &QTableWidget::itemSelectionChanged, this, [this, clone] {
+            clone->setEnabled(table_->selectionModel()->selectedRows().size() == 1);
+        });
+        clone->setEnabled(false);
+        connect(clone, &QPushButton::clicked, this, [this] {
+            const auto rows = table_->selectionModel()->selectedRows();
+            if (rows.size() != 1)
+                return;
+            auto server = working_.servers[static_cast<size_t>(rows.front().row())];
+            server.id = nextServerId(working_);
+            server.name += " (copy)";
+            try {
+                nd::ConfigEditor editor(working_);
+                editor.add_server(server);
                 working_ = editor.get();
                 reload(server.id);
             } catch (const std::exception& e) {

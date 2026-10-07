@@ -239,6 +239,82 @@ private slots:
         QCOMPARE(config_.rules[0].server_id, 0u);
         QCOMPARE(config_.rules[1].server_id, 0u);
     }
+    void serverClone_data() {
+        QTest::addColumn<bool>("save");
+        QTest::newRow("save") << true;
+        QTest::newRow("discard") << false;
+    }
+    void serverClone() {
+        QFETCH(bool, save);
+        auto& source = config_.servers.front();
+        source.protocol = nd::Protocol::doh;
+        source.enabled = false;
+        source.dnssec_supported = true;
+        source.port = 443;
+        source.hostname = "dns.example.com";
+        source.url = "https://dns.example.com/dns-query";
+        source.timeout_ms = 6200;
+        source.fallback_ids = {20};
+        source.bootstrap = {"127.0.0.1", "::1"};
+        source.hashes = {"certificate-pin"};
+        source.metadata = {{"label", "custom server"}};
+        nd::validate(config_);
+        const auto before = config_;
+        ServerDialog servers(nullptr, config_, [this] {
+            ++commits_;
+            return true;
+        });
+        servers.show();
+        auto* table = servers.findChild<QTableWidget*>();
+        QVERIFY(table);
+        const auto findButton = [&servers](const char* text) -> QPushButton* {
+            for (auto* candidate : servers.findChildren<QPushButton*>())
+                if (candidate->text() == uiText(text))
+                    return candidate;
+            return nullptr;
+        };
+        auto* clone = findButton("Clone");
+        QVERIFY(clone);
+        QVERIFY(!clone->isEnabled());
+        const auto select = [table](int row, Qt::KeyboardModifiers modifiers) {
+            QTest::mouseClick(table->viewport(),
+                              Qt::LeftButton,
+                              modifiers,
+                              table->visualRect(table->model()->index(row, 0)).center());
+        };
+        select(0, Qt::NoModifier);
+        QVERIFY(clone->isEnabled());
+        select(1, Qt::ControlModifier);
+        QVERIFY(!clone->isEnabled());
+        select(1, Qt::ControlModifier); // Current row can differ from the selected row.
+        QVERIFY(clone->isEnabled());
+        QTest::mouseClick(clone, Qt::LeftButton);
+        QCOMPARE(table->rowCount(), 3);
+        QCOMPARE(table->selectionModel()->selectedRows().size(), 1);
+        QCOMPARE(table->selectionModel()->selectedRows().front().row(), 2);
+        QCOMPARE(table->currentRow(), 2); // Edit must operate on the new copy.
+        QCOMPARE(table->item(2, 0)->text(), q(source.name + " (copy)"));
+        QCOMPARE(table->item(2, 3)->text(), uiText("Not tested"));
+        QCOMPARE(table->item(2, 4)->text(), QStringLiteral("—"));
+        QCOMPARE(config_, before);
+        QCoreApplication::processEvents();
+        QVERIFY(findButton("Edit...")->geometry().bottom() < clone->geometry().top());
+        QVERIFY(clone->geometry().bottom() < findButton("Remove")->geometry().top());
+        QTest::mouseClick(findButton(save ? "OK" : "Close"), Qt::LeftButton);
+        QCOMPARE(commits_, save ? 1 : 0);
+        if (save) {
+            QCOMPARE(config_.servers.size(), size_t(3));
+            auto expected = before.servers.front();
+            expected.id = 21;
+            expected.name += " (copy)";
+            QCOMPARE(config_.servers.back(), expected);
+            QCOMPARE(config_.servers[0], before.servers[0]);
+            QCOMPARE(config_.servers[1], before.servers[1]);
+            QCOMPARE(config_.rules, before.rules);
+            nd::validate(config_);
+        } else
+            QCOMPARE(config_, before);
+    }
 };
 
 QTEST_MAIN(RulesGuiTests)
