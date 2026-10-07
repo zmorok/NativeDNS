@@ -7,6 +7,7 @@ NativeDNS targets Windows 10/11 x64 and Linux x64.
 - CMake 3.25+
 - C++20 compiler
 - Qt 6.2+ for `NativeDNS.GUI`
+- Qt Test for the GUI tests when `BUILD_TESTING` is enabled
 
 ## Windows
 

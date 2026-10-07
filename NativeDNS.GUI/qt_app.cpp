@@ -25,10 +25,12 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -66,6 +68,7 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 constexpr auto repositoryUrl = "https://github.com/zmorok/NativeDNS";
@@ -241,6 +244,7 @@ public:
         for (const auto& option : options_())
             editor->addItem(option.text, option.value);
         connect(editor, qOverload<int>(&QComboBox::activated), editor, [this, editor] {
+            editor->setProperty("choiceActivated", true);
             auto* self = const_cast<LazyComboDelegate*>(this);
             emit self->commitData(editor);
             emit self->closeEditor(editor);
@@ -257,6 +261,8 @@ public:
         combo.direction = option.direction;
         combo.fontMetrics = option.fontMetrics;
         combo.palette = option.palette;
+        if (!(index.flags() & Qt::ItemIsEditable))
+            combo.state &= ~QStyle::State_Enabled;
         combo.currentText = index.data(Qt::DisplayRole).toString();
         combo.frame = true;
         auto* style = option.widget ? option.widget->style() : QApplication::style();
@@ -276,9 +282,10 @@ public:
                       const QModelIndex& index) const override {
         (void)model;
         const auto* combo = static_cast<QComboBox*>(editor);
-        const auto value = combo->currentData().toUInt();
-        if (value == index.data(Qt::UserRole).toUInt())
+        // Focus loss or Escape must not apply the clicked row's value to other rows.
+        if (!combo->property("choiceActivated").toBool())
             return;
+        const auto value = combo->currentData().toUInt();
         changed_(index, value);
     }
 
@@ -885,8 +892,6 @@ public:
             const auto& rule = current_.rules[static_cast<size_t>(index.row())];
             if (rule.action == nd::Action::process)
                 result |= Qt::ItemIsEditable;
-            else
-                result &= ~Qt::ItemIsEnabled;
         }
         return result;
     }
@@ -894,6 +899,11 @@ public:
         beginResetModel();
         rebuildIndexes();
         endResetModel();
+    }
+    void refreshRuleData() {
+        // Inline edits do not change row identities; retain selection and the Shift anchor.
+        if (rowCount())
+            emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
     }
 
 private:
@@ -939,6 +949,25 @@ private:
     std::unordered_map<uint32_t, QString> server_names_;
 };
 
+class RulesTableView final : public QTableView {
+public:
+    using QTableView::QTableView;
+
+protected:
+    QItemSelectionModel::SelectionFlags
+    selectionCommand(const QModelIndex& index, const QEvent* event = nullptr) const override {
+        if (event && (event->type() == QEvent::MouseButtonPress ||
+                      event->type() == QEvent::MouseButtonRelease)) {
+            const auto* mouse = static_cast<const QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton &&
+                !(mouse->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)) &&
+                index.column() >= 3 && selectionModel()->isSelected(index))
+                return QItemSelectionModel::NoUpdate;
+        }
+        return QTableView::selectionCommand(index, event);
+    }
+};
+
 class RulesDialog final : public QDialog {
 public:
     RulesDialog(QWidget* parent, nd::Config& config, std::function<bool()> changed)
@@ -946,12 +975,12 @@ public:
         setWindowTitle(uiText("Rules"));
         resize(880, 480);
         model_ = new RulesTableModel(working_, original_, this);
-        table_ = new QTableView(this);
+        table_ = new RulesTableView(this);
         table_->setModel(model_);
         table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
         table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
         table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-        table_->setSelectionMode(QAbstractItemView::SingleSelection);
+        table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         configureFixedTableRows(table_);
 
@@ -994,9 +1023,9 @@ public:
                         {uiText("process"), 0}, {uiText("bypass"), 1}, {uiText("block"), 2}};
                 },
                 [this](const QModelIndex& index, uint32_t value) {
-                    const auto id = index.siblingAtColumn(0).data(ruleIdRole).toUInt();
-                    QTimer::singleShot(0, this, [this, id, value] {
-                        updateRule(id, [value](nd::Rule& rule) {
+                    const auto ids = selectedRuleIds(index);
+                    QTimer::singleShot(0, this, [this, ids, value] {
+                        updateRules(ids, [value](nd::Rule& rule) {
                             rule.action = value == 0   ? nd::Action::process
                                           : value == 1 ? nd::Action::bypass
                                                        : nd::Action::block;
@@ -1017,15 +1046,27 @@ public:
                     return options;
                 },
                 [this](const QModelIndex& index, uint32_t value) {
-                    const auto id = index.siblingAtColumn(0).data(ruleIdRole).toUInt();
-                    QTimer::singleShot(0, this, [this, id, value] {
-                        updateRule(id, [value](nd::Rule& rule) {
+                    const auto ids = selectedRuleIds(index);
+                    QTimer::singleShot(0, this, [this, ids, value] {
+                        updateRules(ids, [value](nd::Rule& rule) {
                             if (rule.action == nd::Action::process)
                                 rule.server_id = value;
                         });
                     });
                 },
                 table_));
+
+        const auto updateSingleRuleControls = [this, up, down, edit, clone, remove] {
+            const bool single = table_->isEnabled() &&
+                                table_->selectionModel()->selectedRows().size() == 1;
+            for (auto* button : {up, down, edit, clone, remove})
+                button->setEnabled(single);
+        };
+        connect(table_->selectionModel(),
+                &QItemSelectionModel::selectionChanged,
+                this,
+                updateSingleRuleControls);
+        updateSingleRuleControls_ = updateSingleRuleControls;
 
         connect(up, &QPushButton::clicked, this, [this] { move(-1); });
         connect(down, &QPushButton::clicked, this, [this] { move(1); });
@@ -1072,7 +1113,9 @@ public:
         connect(ok, &QPushButton::clicked, this, [this] { commit(); });
         connect(close, &QPushButton::clicked, this, &QDialog::reject);
         connect(table_, &QTableView::clicked, this, [this](const QModelIndex& index) {
-            if (index.column() >= 3 && index.column() <= 4 && (index.flags() & Qt::ItemIsEnabled))
+            if (index.column() >= 3 && index.column() <= 4 &&
+                (index.flags() & Qt::ItemIsEditable) &&
+                !(QApplication::keyboardModifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
                 table_->edit(index);
         });
         connect(table_, &QTableView::doubleClicked, this, [edit](const QModelIndex& index) {
@@ -1093,6 +1136,7 @@ protected:
             model_->refresh();
             for (auto* control : initializationControls_)
                 control->setEnabled(true);
+            updateSingleRuleControls_();
         });
     }
 
@@ -1120,24 +1164,31 @@ private:
             QMessageBox::critical(this, "NativeDNS", e.what());
         }
     }
-    void updateRule(uint32_t id, const std::function<void(nd::Rule&)>& update) {
+    std::unordered_set<uint32_t> selectedRuleIds(const QModelIndex& clicked) const {
+        std::unordered_set<uint32_t> ids;
+        if (table_->selectionModel()->isSelected(clicked))
+            for (const auto& index : table_->selectionModel()->selectedRows())
+                ids.insert(index.data(ruleIdRole).toUInt());
+        else
+            ids.insert(clicked.data(ruleIdRole).toUInt());
+        return ids;
+    }
+    void updateRules(const std::unordered_set<uint32_t>& ids,
+                     const std::function<void(nd::Rule&)>& update) {
         try {
-            const auto found = std::find_if(working_.rules.begin(),
-                                            working_.rules.end(),
-                                            [id](const nd::Rule& rule) { return rule.id == id; });
-            if (found == working_.rules.end())
+            auto next = working_;
+            for (auto& rule : next.rules)
+                if (ids.contains(rule.id))
+                    update(rule);
+            if (next == working_)
                 return;
-            auto rule = *found;
-            update(rule);
-            if (rule == *found)
-                return;
-            nd::ConfigEditor editor(working_);
-            editor.update_rule(std::move(rule));
-            working_ = editor.get();
-            reload(id);
+            // Validate and publish the whole batch once, including for large rule lists.
+            nd::validate(next);
+            working_ = std::move(next);
+            model_->refreshRuleData();
         } catch (const std::exception& e) {
             QMessageBox::critical(this, "NativeDNS", e.what());
-            reload(id);
+            model_->refreshRuleData();
         }
     }
     void move(int direction) {
@@ -1166,6 +1217,7 @@ private:
     RulesTableModel* model_ = nullptr;
     QTableView* table_ = nullptr;
     std::vector<QWidget*> initializationControls_;
+    std::function<void()> updateSingleRuleControls_;
     bool initializationScheduled_ = false;
 };
 } // namespace
