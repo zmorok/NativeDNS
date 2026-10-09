@@ -8,6 +8,14 @@ implicitly. A failed bootstrap affects that server/request, not host startup or
 unrelated rules. Later requests retry bootstrap using the current resolver list.
 TLS hostname verification remains tied to the configured secure hostname.
 
+On Windows, automatic bootstrap excludes disconnected and loopback adapters,
+unspecified/loopback/multicast DNS addresses and the obsolete `fec0:0:0:ffff::1/2/3`
+placeholder resolvers. Adapters with a gateway are preferred, followed by their
+address-family interface metric; usable VPN/virtual adapter DNS remains eligible.
+An explicitly selected interface uses only that interface's usable DNS addresses.
+Bootstrap shares the request deadline across resolver attempts and tries A on
+each resolver before AAAA, so an unresponsive first resolver leaves time for fallback.
+
 Bootstrap diagnostics retain the hostname, numeric resolver, query type and root
 failure during the retry cooldown. TLS diagnostics preserve interface binding
 errors and distinguish certificate verification, SPKI pin mismatch and an offline

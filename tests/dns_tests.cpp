@@ -2,6 +2,7 @@
 #include <nativedns/router.hpp>
 #include <nativedns/interception.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/bootstrap.hpp>
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -477,6 +478,46 @@ int main() {
                 check(result.success && !result.addresses.empty() && result.rtt_ms > 0,
                       "real loopback UDP/TCP v4/v6 DNS");
             }
+        {
+            Peer first(false, Mode::timeout, false, 0, 1500);
+            Peer second(false, Mode::timeout, false, 0, 1500);
+            Peer fallback(false, Mode::good);
+            // Only remap resolver ports to isolated local peers. Retry scheduling, DNS
+            // parsing, deadlines and the OS UDP transport all use production code.
+            class LocalResolvers final : public nd::IDnsTransport {
+            public:
+                explicit LocalResolvers(std::array<uint16_t, 3> ports) : ports_(ports) {
+                }
+                nd::Packet exchange(const nd::Packet& query,
+                                    const nd::Server& configured) override {
+                    check(nd::parse_question(query).type == 1,
+                          "All fallback resolvers receive A before AAAA retries");
+                    auto target = configured;
+                    const size_t index = configured.ip == "127.0.0.2"   ? 0
+                                         : configured.ip == "127.0.0.3" ? 1
+                                                                        : 2;
+                    target.ip = "127.0.0.1";
+                    target.port = ports_[index];
+                    return udp_->exchange(query, target);
+                }
+
+            private:
+                std::array<uint16_t, 3> ports_;
+                std::unique_ptr<nd::IDnsTransport> udp_ = nd::make_transport(nd::Protocol::udp);
+            } transport({first.server().port, second.server().port, fallback.server().port});
+            const auto result = nd::detail::resolve_bootstrap(
+                {},
+                "bootstrap-regression.invalid",
+                {"127.0.0.2", "127.0.0.3", "127.0.0.4"},
+                std::chrono::steady_clock::now() + std::chrono::seconds(3),
+                transport);
+            first.verify();
+            second.verify();
+            fallback.verify();
+            check(first.requests == 1 && second.requests == 1 && fallback.requests == 1 &&
+                      result.endpoint == "192.0.2.42" && result.ttl == 30,
+                  "Two unresponsive bootstrap resolvers leave time for a real fallback answer");
+        }
         {
             Peer peer(true, Mode::good, false, 0, 1500, 2);
 #ifdef _WIN32

@@ -98,6 +98,7 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         info.metric6 = adapter->Ipv6Metric;
         info.mtu = adapter->Mtu;
         info.up = adapter->OperStatus == IfOperStatusUp;
+        info.loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
         for (auto* item = adapter->FirstUnicastAddress; item; item = item->Next)
             append(info.addresses, numeric_address(item->Address.lpSockaddr, info.index6));
         for (auto* item = adapter->FirstDnsServerAddress; item; item = item->Next)

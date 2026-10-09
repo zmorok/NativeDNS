@@ -16,18 +16,7 @@
 
 namespace nd::platform {
 std::vector<std::string> system_dns_servers() {
-    std::vector<std::string> servers;
-    for (const auto& adapter : enumerate_interfaces()) {
-        if (!adapter.up)
-            continue;
-        for (const auto& value : adapter.dns_servers) {
-            if (value == "127.0.0.1" || value == "::1" || value == "0.0.0.0" || value == "::")
-                continue;
-            if (std::find(servers.begin(), servers.end(), value) == servers.end())
-                servers.push_back(value);
-        }
-    }
-    return servers;
+    return select_bootstrap_dns_servers(enumerate_interfaces());
 }
 namespace {
 void sodium_ready() {

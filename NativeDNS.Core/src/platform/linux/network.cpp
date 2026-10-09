@@ -43,6 +43,7 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         info.id = info.name = item->ifa_name;
         info.index4 = info.index6 = if_nametoindex(item->ifa_name);
         info.up = (item->ifa_flags & IFF_UP) && (item->ifa_flags & IFF_RUNNING);
+        info.loopback = (item->ifa_flags & IFF_LOOPBACK) != 0;
         if (!item->ifa_addr)
             continue;
         std::string address;

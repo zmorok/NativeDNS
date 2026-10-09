@@ -1,6 +1,7 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/dns_network.hpp>
 #include <nativedns/detail/cancellation.hpp>
+#include <nativedns/detail/bootstrap.hpp>
 #include "pool_limits.hpp"
 #include <nativedns/platform.hpp>
 #include <curl/curl.h>
@@ -326,7 +327,7 @@ private:
                 const auto* info = find_interface(*network, server.route.interface_id);
                 if (!info || !info->up)
                     throw Error("INTERFACE_DOWN", "Bootstrap interface is unavailable");
-                bootstrap_servers = info->dns_servers;
+                bootstrap_servers = select_bootstrap_dns_servers({*info});
             }
         }
         if (endpoint.empty() && !bootstrap_servers.empty()) {
@@ -450,52 +451,18 @@ private:
             }
         }
         try {
-            std::string endpoint, failure;
-            uint32_t ttl = 0;
-            for (const auto& resolver : resolvers) {
-                Server plain;
-                plain.ip = resolver;
-                plain.name = "bootstrap";
-                plain.route = server.route;
-                for (uint16_t type : {uint16_t{1}, uint16_t{28}}) {
-                    try {
-                        plain.timeout_ms = std::min<uint32_t>(remaining(deadline), 1000);
-                        const auto request = make_query(host, type);
-                        const auto response =
-                            make_transport(Protocol::udp)->exchange(request, plain);
-                        const auto answer = parse_response(response, parse_question(request));
-                        if (!answer.rcode && !answer.addresses.empty()) {
-                            endpoint = answer.addresses.front();
-                            ttl = std::min<uint32_t>(answer.cache_ttl, 60);
-                            break;
-                        }
-                        failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
-                                  " RCODE=" + std::to_string(answer.rcode) + " no usable address";
-                    } catch (const Error& error) {
-                        if (error.code == "CANCELLED")
-                            throw;
-                        failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
-                                  " error=" + error.code + ": " + error.what();
-                        if (Clock::now() >= deadline)
-                            break;
-                    }
-                }
-                if (!endpoint.empty() || Clock::now() >= deadline)
-                    break;
-            }
-            if (endpoint.empty())
-                throw Error("BOOTSTRAP",
-                            "host=" + host + " context=" + network_route_key(server.route) +
-                                " upstream bootstrap failed: " + failure);
+            auto transport = make_transport(Protocol::udp);
+            const auto resolved =
+                detail::resolve_bootstrap(server, host, resolvers, deadline, *transport);
             {
                 std::lock_guard lock(bootstrap_mutex_);
-                state->endpoint = endpoint;
+                state->endpoint = resolved.endpoint;
                 state->failure = nullptr;
-                state->expires = Clock::now() + std::chrono::seconds(ttl);
+                state->expires = Clock::now() + std::chrono::seconds(resolved.ttl);
                 state->refreshing = false;
             }
             state->changed.notify_all();
-            return endpoint;
+            return resolved.endpoint;
         } catch (...) {
             {
                 std::lock_guard lock(bootstrap_mutex_);
@@ -576,6 +543,49 @@ private:
     std::map<std::string, std::vector<std::shared_ptr<Entry>>> pool_;
 };
 } // namespace
+detail::BootstrapResult detail::resolve_bootstrap(const Server& server,
+                                                  const std::string& host,
+                                                  const std::vector<std::string>& resolvers,
+                                                  Clock::time_point deadline,
+                                                  IDnsTransport& transport) {
+    std::string failure = "no usable resolver";
+    size_t attempts_left = resolvers.size() * 2;
+    // Try every resolver for A before starting AAAA. A dead first resolver must
+    // not spend the entire request deadline before a working fallback is tried.
+    for (uint16_t type : {uint16_t{1}, uint16_t{28}}) {
+        for (const auto& resolver : resolvers) {
+            Server plain;
+            plain.ip = resolver;
+            plain.name = "bootstrap";
+            plain.route = server.route;
+            try {
+                const auto budget = remaining(deadline);
+                plain.timeout_ms = static_cast<uint32_t>(
+                    std::max<size_t>(1, std::min<size_t>(1000, budget / attempts_left)));
+                --attempts_left;
+                const auto request = make_query(host, type);
+                const auto response = transport.exchange(request, plain);
+                const auto answer = parse_response(response, parse_question(request));
+                if (!answer.rcode && !answer.addresses.empty())
+                    return {answer.addresses.front(), std::min<uint32_t>(answer.cache_ttl, 60)};
+                failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
+                          " RCODE=" + std::to_string(answer.rcode) + " no usable address";
+            } catch (const Error& error) {
+                if (error.code == "CANCELLED")
+                    throw;
+                failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
+                          " error=" + error.code + ": " + error.what();
+                if (Clock::now() >= deadline)
+                    break;
+            }
+        }
+        if (Clock::now() >= deadline)
+            break;
+    }
+    throw Error("BOOTSTRAP",
+                "host=" + host + " context=" + network_route_key(server.route) +
+                    " upstream bootstrap failed: " + failure);
+}
 void prepare_secure_endpoints(Config& config, uint32_t retry_ms) {
     const auto deadline = Clock::now() + std::chrono::milliseconds(retry_ms);
     std::map<std::string, std::string> resolved;

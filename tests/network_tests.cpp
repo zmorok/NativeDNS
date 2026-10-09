@@ -69,6 +69,56 @@ int main() {
         const auto native = nd::platform::enumerate_interfaces();
         for (const auto& info : native)
             check(!info.id.empty(), "Native adapter has stable identifier");
+        {
+            nd::InterfaceInfo wifi;
+            wifi.id = "wifi";
+            wifi.up = true;
+            wifi.metric4 = 25;
+            wifi.gateways = {"192.168.31.1"};
+            wifi.dns_servers = {"192.168.31.1",
+                                "fec0:0:0:ffff::2%26",
+                                "127.0.0.2",
+                                "::1",
+                                "0.0.0.0",
+                                "::",
+                                "ff02::1%26",
+                                "224.0.0.1",
+                                "bad-address"};
+            nd::InterfaceInfo loopback = wifi;
+            loopback.id = "loopback";
+            loopback.loopback = true;
+            loopback.metric4 = 0;
+            loopback.dns_servers = {"192.0.2.99", "fec0:0:0:ffff::1%1"};
+            nd::InterfaceInfo virtual_adapter = wifi;
+            virtual_adapter.id = "virtual";
+            virtual_adapter.gateways.clear();
+            virtual_adapter.metric4 = 1;
+            virtual_adapter.dns_servers = {"192.0.2.53", "fec0:0:0:ffff::3%7"};
+            nd::InterfaceInfo vpn = wifi;
+            vpn.id = "vpn";
+            vpn.metric4 = 5;
+            vpn.dns_servers = {"10.0.0.53", "192.168.31.1"};
+            nd::InterfaceInfo disconnected = wifi;
+            disconnected.id = "disconnected";
+            disconnected.up = false;
+            disconnected.dns_servers = {"192.0.2.100"};
+            const std::vector<nd::InterfaceInfo> adapters = {
+                loopback, virtual_adapter, disconnected, wifi, vpn};
+            check(nd::select_bootstrap_dns_servers(adapters) ==
+                      std::vector<std::string>{"10.0.0.53", "192.168.31.1", "192.0.2.53"},
+                  "Automatic bootstrap filters Windows placeholders/loopback/down and ranks usable "
+                  "DNS");
+            check(nd::select_bootstrap_dns_servers({wifi}) ==
+                      std::vector<std::string>{"192.168.31.1"},
+                  "Bound bootstrap retains only selected interface resolvers");
+            virtual_adapter.dns_servers = {
+                "fe80::1", "fe80::1%7", "2001:db8::53", "fec0:0:0:ffff::4%7"};
+            check(nd::select_bootstrap_dns_servers({virtual_adapter}) ==
+                      std::vector<std::string>{"fe80::1%7", "2001:db8::53", "fec0:0:0:ffff::4%7"},
+                  "Real scoped IPv6 and site-local DNS remain eligible");
+            check(nd::select_bootstrap_dns_servers({loopback, disconnected}).empty(),
+                  "No usable adapters does not invent a public bootstrap resolver");
+        }
         check(nd::parse_numeric_endpoint("fe80::1%7").scope6 == 7, "Numeric IPv6 scope retained");
         for (const auto* bad : {"192.0.2.1%2", "fe80::1%0", "fe80::1%abc", "fe80::1%2%3"}) {
             bool rejected = false;

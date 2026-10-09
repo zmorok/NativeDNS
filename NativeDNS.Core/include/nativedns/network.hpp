@@ -16,6 +16,7 @@ struct InterfaceInfo {
     uint64_t luid = 0;
     uint32_t index4 = 0, index6 = 0, metric4 = 0, metric6 = 0, mtu = 0;
     bool up = false;
+    bool loopback = false;
     bool captive_portal = false;
     std::vector<std::string> addresses, dns_servers, gateways;
     bool operator==(const InterfaceInfo&) const = default;
@@ -37,6 +38,7 @@ const InterfaceInfo* find_interface(const NetworkSnapshot& snapshot,
                                     const std::string& match = "id");
 std::string network_route_key(const NetworkRoute& route);
 Server with_network_context(Server server);
+std::vector<std::string> select_bootstrap_dns_servers(const std::vector<InterfaceInfo>& interfaces);
 class NetworkMonitor final {
 public:
     using Source = std::function<std::vector<InterfaceInfo>()>;

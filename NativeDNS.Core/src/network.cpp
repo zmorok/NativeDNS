@@ -5,6 +5,7 @@
 #include <nativedns/platform.hpp>
 #include <nativedns/config.hpp>
 #include <charconv>
+#include <tuple>
 
 namespace nd {
 NumericEndpoint parse_numeric_endpoint(const std::string& text) {
@@ -65,6 +66,68 @@ Server with_network_context(Server server) {
     if (!server.route.generation)
         server.route.generation = NetworkMonitor::shared().snapshot()->generation;
     return server;
+}
+std::vector<std::string>
+select_bootstrap_dns_servers(const std::vector<InterfaceInfo>& interfaces) {
+    struct Candidate {
+        std::string address, interface_id;
+        bool no_gateway;
+        uint32_t metric;
+        size_t order;
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& info : interfaces) {
+        if (!info.up || info.loopback)
+            continue;
+        for (size_t order = 0; order < info.dns_servers.size(); ++order) {
+            const auto& address = info.dns_servers[order];
+            try {
+                const auto endpoint = parse_numeric_endpoint(address);
+                std::array<uint8_t, 16> bytes{};
+                bool ipv6 = false;
+                if (!platform::parse_ip(endpoint.address, bytes, ipv6))
+                    continue;
+                if (!ipv6) {
+                    if (!bytes[12] || bytes[12] == 127 || bytes[12] >= 224)
+                        continue;
+                } else {
+                    const bool zero_prefix = std::all_of(
+                        bytes.begin(), bytes.begin() + 15, [](auto b) { return b == 0; });
+                    if ((zero_prefix && bytes[15] <= 1) || bytes[0] == 0xff)
+                        continue;
+                    // Windows advertises these obsolete placeholder resolvers on adapters
+                    // without configured IPv6 DNS, including loopback and virtual adapters.
+                    const bool placeholder =
+                        bytes[0] == 0xfe && bytes[1] == 0xc0 &&
+                        std::all_of(
+                            bytes.begin() + 2, bytes.begin() + 6, [](auto b) { return b == 0; }) &&
+                        bytes[6] == 0xff && bytes[7] == 0xff &&
+                        std::all_of(
+                            bytes.begin() + 8, bytes.begin() + 15, [](auto b) { return b == 0; }) &&
+                        bytes[15] >= 1 && bytes[15] <= 3;
+                    if (placeholder ||
+                        (bytes[0] == 0xfe && (bytes[1] & 0xc0) == 0x80 && !endpoint.scope6))
+                        continue;
+                }
+                candidates.push_back({address,
+                                      info.id,
+                                      info.gateways.empty(),
+                                      ipv6 ? info.metric6 : info.metric4,
+                                      order});
+            } catch (const Error&) {
+                // OS adapter data is not a user-specified endpoint: ignore invalid entries.
+            }
+        }
+    }
+    std::stable_sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.no_gateway, a.metric, a.interface_id, a.order) <
+               std::tie(b.no_gateway, b.metric, b.interface_id, b.order);
+    });
+    std::vector<std::string> result;
+    for (const auto& candidate : candidates)
+        if (std::find(result.begin(), result.end(), candidate.address) == result.end())
+            result.push_back(candidate.address);
+    return result;
 }
 NetworkMonitor::NetworkMonitor(Source source, bool watch)
     : source_(source ? std::move(source) : platform::enumerate_interfaces) {

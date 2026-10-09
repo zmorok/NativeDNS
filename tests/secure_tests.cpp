@@ -1,13 +1,15 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/host.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/network.hpp>
 #include <curl/curl.h>
 #include <iostream>
+#include <future>
 void check(bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
 }
-int main(int argc, char**) {
+int main(int argc, char** argv) {
     try {
         const auto prepare = [](nd::Server value) {
             auto config = nd::default_config();
@@ -81,7 +83,55 @@ int main(int argc, char**) {
             check(nd::serialize_config(offline) == serialized,
                   "Runtime system bootstrap policy is not persisted");
         }
-        if (argc > 1) {
+        if (argc > 1 && std::string(argv[1]) == "--system-bootstrap") {
+            const auto resolvers = nd::platform::system_dns_servers();
+            check(!resolvers.empty(), "Current network has no usable automatic bootstrap resolver");
+            for (const auto& resolver : resolvers)
+                std::cout << "system bootstrap resolver: " << resolver << '\n';
+            bool failed = false;
+            auto shared_transport = nd::make_transport(nd::Protocol::doh);
+            for (unsigned generation = 0; generation < 3; ++generation) {
+                nd::NetworkMonitor::shared().refresh(true);
+                for (const auto* url : {"https://cloudflare-dns.com/dns-query",
+                                        "https://dns.bezmezhau.com/dns-query"}) {
+                    nd::Server automatic;
+                    automatic.protocol = nd::Protocol::doh;
+                    automatic.url = url;
+                    automatic.timeout_ms = 3000;
+                    automatic.use_system_bootstrap = true;
+                    const auto result = nd::test_server(nd::with_network_context(automatic));
+                    std::cout << "automatic bootstrap generation="
+                              << nd::NetworkMonitor::shared().snapshot()->generation << " " << url
+                              << " success=" << result.success << " " << result.rtt_ms << " ms "
+                              << result.error_code << " " << result.message << '\n';
+                    failed = failed || !result.success;
+                    std::vector<std::future<void>> concurrent;
+                    for (unsigned request = 0; request < 4; ++request)
+                        concurrent.push_back(std::async(std::launch::async, [&, automatic] {
+                            const auto query = nd::make_query("example.com");
+                            const auto answer =
+                                nd::parse_response(shared_transport->exchange(query, automatic),
+                                                   nd::parse_question(query));
+                            check(!answer.rcode && !answer.addresses.empty(),
+                                  "Concurrent automatic bootstrap returns a real DNS answer");
+                        }));
+                    for (auto& request : concurrent)
+                        request.get();
+                    std::cout << "PASS concurrent bootstrap after network invalidation\n";
+                }
+            }
+            nd::Server fallback;
+            fallback.protocol = nd::Protocol::doh;
+            fallback.url = "https://cloudflare-dns.com/dns-query";
+            fallback.timeout_ms = 3000;
+            fallback.bootstrap = {"192.0.2.1"};
+            fallback.bootstrap.insert(fallback.bootstrap.end(), resolvers.begin(), resolvers.end());
+            const auto result = nd::test_server(fallback);
+            std::cout << "explicit bootstrap list with fallback: success=" << result.success << " "
+                      << result.rtt_ms << " ms " << result.error_code << " " << result.message
+                      << '\n';
+            check(!failed && result.success, "Live automatic bootstrap/fallback failed");
+        } else if (argc > 1) {
 #ifdef _WIN32
             nd::platform::flush_dns_cache();
 #endif
