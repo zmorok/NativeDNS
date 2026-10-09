@@ -253,9 +253,14 @@ private:
             pins += pin;
         }
         std::string endpoint = server.ip;
-        if (endpoint.empty() && !server.bootstrap.empty()) {
+        if (endpoint.empty() && platform::is_numeric_ip(host))
+            endpoint = host;
+        auto bootstrap_servers = server.bootstrap;
+        if (endpoint.empty() && bootstrap_servers.empty() && server.use_system_bootstrap)
+            bootstrap_servers = platform::system_dns_servers();
+        if (endpoint.empty() && !bootstrap_servers.empty()) {
             std::string failure;
-            for (const auto& bootstrap : server.bootstrap) {
+            for (const auto& bootstrap : bootstrap_servers) {
                 Server plain;
                 plain.ip = bootstrap;
                 plain.name = "bootstrap";
@@ -273,7 +278,7 @@ private:
                     break;
             }
             if (endpoint.empty())
-                throw Error("BOOTSTRAP", "Explicit bootstrap failed: " + failure);
+                throw Error("BOOTSTRAP", "Upstream bootstrap failed: " + failure);
         }
         if (endpoint.empty())
             throw Error("BOOTSTRAP",

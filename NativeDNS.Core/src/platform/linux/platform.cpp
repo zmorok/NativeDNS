@@ -16,8 +16,32 @@
 #include <cctype>
 #include <sstream>
 #include <set>
+#include <fstream>
+#include <algorithm>
 
 namespace nd::platform {
+std::vector<std::string> system_dns_servers() {
+    std::vector<std::string> servers;
+    for (const char* path : {"/run/systemd/resolve/resolv.conf",
+                             "/run/NetworkManager/no-stub-resolv.conf",
+                             "/etc/resolv.conf"}) {
+        std::ifstream input(path);
+        std::string line;
+        while (std::getline(input, line)) {
+            std::istringstream row(line);
+            std::string key, address;
+            row >> key >> address;
+            if (key != "nameserver" || !is_numeric_ip(address) || address == "127.0.0.1" ||
+                address == "127.0.0.53" || address == "::1")
+                continue;
+            if (std::find(servers.begin(), servers.end(), address) == servers.end())
+                servers.push_back(address);
+        }
+        if (!servers.empty())
+            break;
+    }
+    return servers;
+}
 namespace {
 void sodium_ready() {
     static const bool ready = [] {

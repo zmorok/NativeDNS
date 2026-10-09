@@ -1,4 +1,5 @@
 #include <nativedns/dns.hpp>
+#include <nativedns/host.hpp>
 #include <curl/curl.h>
 #include <iostream>
 void check(bool value, const char* message) {
@@ -47,6 +48,29 @@ int main(int argc, char**) {
         nd::prepare_secure_endpoints(bootstrap_config);
         check(!bootstrap_config.servers.front().ip.empty(),
               "Secure endpoint was not resolved before interception");
+        {
+            auto offline = nd::default_config();
+            offline.logging.file_enabled = false;
+            auto unavailable = server;
+            unavailable.url = "https://unreachable-upstream.invalid/dns-query";
+            unavailable.ip.clear();
+            unavailable.bootstrap.clear();
+            offline.servers.push_back(unavailable);
+            offline.rules.back().action = nd::Action::block;
+            const auto started = std::chrono::steady_clock::now();
+            nd::CoreHost host(
+                offline, {}, 0, "NativeDNS.Test.OfflineStartup", nd::InterceptionMode::transparent);
+            check(std::chrono::steady_clock::now() - started < std::chrono::seconds(1),
+                  "CoreHost construction does not wait for unavailable DNS upstream");
+            nd::Logger log;
+            nd::Router router(offline, log);
+            check(!router.route(nd::make_query("example.com"), {}).packet.empty(),
+                  "Unavailable secure server does not prevent independent Block rule");
+            auto serialized = nd::serialize_config(offline);
+            offline.servers.front().use_system_bootstrap = true;
+            check(nd::serialize_config(offline) == serialized,
+                  "Runtime system bootstrap policy is not persisted");
+        }
         if (argc > 1) {
             auto config = nd::import_yoga(FIXTURE_PATH).config;
             nd::prepare_secure_endpoints(config);

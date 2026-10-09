@@ -25,8 +25,8 @@ CoreHost::CoreHost(Config config,
       logger_(4096) {
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
-    if (mode == InterceptionMode::transparent)
-        prepare_secure_endpoints(config_);
+    for (auto& server : config_.servers)
+        server.use_system_bootstrap = mode == InterceptionMode::transparent;
     try {
         if (config_.logging.file_enabled)
             file_log_path_ = timestamped_log_path(file_log_directory());
@@ -160,25 +160,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         if (config_path_.empty())
             throw Error("CONFIG_IO", "CoreHost has no configuration path to reload");
         auto next = load_config(config_path_);
-        if (mode_ == InterceptionMode::transparent) {
-            std::lock_guard lock(mutex_);
-            for (auto& server : next.servers) {
-                if (!server.ip.empty())
-                    continue;
-                const auto previous =
-                    std::find_if(config_.servers.begin(),
-                                 config_.servers.end(),
-                                 [&](const Server& value) { return value.id == server.id; });
-                if (previous == config_.servers.end() || previous->ip.empty())
-                    continue;
-                auto resolved = server;
-                resolved.ip = previous->ip;
-                if (resolved == *previous)
-                    server.ip = previous->ip;
-            }
-        }
-        if (mode_ == InterceptionMode::transparent)
-            prepare_secure_endpoints(next);
+        for (auto& server : next.servers)
+            server.use_system_bootstrap = mode_ == InterceptionMode::transparent;
         {
             std::lock_guard lock(mutex_);
             interception_->reload(next);

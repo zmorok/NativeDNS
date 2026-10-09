@@ -21,6 +21,9 @@ struct Server {
     bool allow_direct_certificate_fallback = false;
     std::vector<uint32_t> fallback_ids;
     std::vector<std::string> bootstrap, hashes;
+    // Runtime-only: CoreHost may bootstrap using the current OS resolver list.
+    // Never serialized; explicit bootstrap always takes precedence.
+    bool use_system_bootstrap = false;
     std::string public_key, provider_name, relay;
     std::map<std::string, std::string> metadata;
     bool operator==(const Server&) const = default;

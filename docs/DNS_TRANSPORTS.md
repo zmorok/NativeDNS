@@ -1,5 +1,13 @@
 # DNS transports
 
+Transparent CoreHost startup and configuration reload do not resolve every secure
+upstream hostname. Each DoH/DoT request uses its numeric endpoint or explicit
+bootstrap list; when neither is configured, CoreHost permits guarded queries to
+the current numeric OS-configured DNS resolvers. No public resolver is added
+implicitly. A failed bootstrap affects that server/request, not host startup or
+unrelated rules. Later requests retry bootstrap using the current resolver list.
+TLS hostname verification remains tied to the configured secure hostname.
+
 NativeDNS transports exchange DNS wire messages through a common Core interface.
 
 ## Plain DNS
