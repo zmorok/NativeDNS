@@ -162,8 +162,17 @@ LogDisplay::LogDisplay(QWidget* parent)
     detailsButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     detailsButton_->setArrowType(Qt::RightArrow);
     connect(detailsButton_, &QToolButton::toggled, this, [this](bool checked) {
+        const auto* scroll = verticalScrollBar();
+        const int previousPosition = scroll->value();
+        const bool followBottom = previousPosition == scroll->maximum();
+        const bool paintingEnabled = updatesEnabled();
+        setUpdatesEnabled(false);
         inspector_->setVisible(checked);
         detailsButton_->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
+        // Restore the position against the resized viewport before it is painted.
+        layout()->activate();
+        finishUpdate(followBottom, previousPosition);
+        setUpdatesEnabled(paintingEnabled);
     });
     stack_->addWidget(text_);
     stack_->addWidget(table_);

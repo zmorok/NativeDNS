@@ -764,6 +764,85 @@ private slots:
         QCoreApplication::processEvents();
         QCOMPARE(scroll->value(), scroll->maximum());
     }
+    void inspectorScrollPosition_data() {
+        logViews_data();
+    }
+    void inspectorScrollPosition() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);
+        LogPanel panel(nullptr, &settings);
+        panel.resize(700, 420);
+        panel.show();
+        QVERIFY(panel.setLogView(static_cast<LogView>(mode)));
+        QCoreApplication::processEvents();
+        auto* display = panel.findChild<LogDisplay*>();
+        auto* toggle = panel.findChild<QToolButton*>("logDetailsToggle");
+        auto* inspector = panel.findChild<QPlainTextEdit*>("logRecordDetails");
+        auto* scroll = display->verticalScrollBar();
+        auto* text = panel.findChild<QPlainTextEdit*>("logDisplay");
+        auto* table = panel.findChild<QTableWidget*>("logTable");
+        auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+        auto* viewport = mode == int(LogView::table)     ? table->viewport()
+                         : mode == int(LogView::details) ? tree->viewport()
+                                                         : text->viewport();
+        QList<LogRecord> rows;
+        for (int i = 0; i < 100; ++i)
+            rows << record(QString("row %1").arg(i));
+        panel.appendRecords(rows);
+        if (mode == int(LogView::table))
+            table->setCurrentCell(70, 0);
+        else if (mode == int(LogView::details))
+            tree->setCurrentItem(tree->topLevelItem(70));
+        else
+            text->setTextCursor(QTextCursor(text->document()->findBlockByNumber(70)));
+        const auto selectedDetails = inspector->toPlainText();
+        QVERIFY(selectedDetails.contains("row 70"));
+        scroll->setValue(scroll->maximum());
+        const int fullHeight = viewport->height();
+        const auto checkBottom = [&] {
+            QCOMPARE(scroll->value(), scroll->maximum());
+            const QRect lastRow =
+                mode == int(LogView::table)
+                    ? table->visualItemRect(table->item(table->rowCount() - 1, 0))
+                : mode == int(LogView::details)
+                    ? tree->visualItemRect(tree->topLevelItem(tree->topLevelItemCount() - 1))
+                    : text->cursorRect(QTextCursor(text->document()->lastBlock().previous()));
+            QVERIFY(lastRow.top() >= 0);
+            QVERIFY(lastRow.bottom() <= viewport->height());
+            QCOMPARE(inspector->toPlainText(), selectedDetails);
+        };
+        toggle->click();
+        QVERIFY(inspector->isVisible());
+        QVERIFY(viewport->height() < fullHeight);
+        // Geometry and scroll must be correct before the next event/paint cycle.
+        checkBottom();
+        QCoreApplication::processEvents();
+        checkBottom();
+        panel.appendRecords({record("new while open")});
+        checkBottom();
+        toggle->click();
+        QVERIFY(!inspector->isVisible());
+        QCOMPARE(viewport->height(), fullHeight);
+        checkBottom();
+        QCoreApplication::processEvents();
+        checkBottom();
+        scroll->setValue(scroll->maximum() / 3);
+        const int readingPosition = scroll->value();
+        toggle->click();
+        QCOMPARE(scroll->value(), readingPosition);
+        QCoreApplication::processEvents();
+        QCOMPARE(scroll->value(), readingPosition);
+        panel.appendRecords({record("do not jump while open")});
+        QCOMPARE(scroll->value(), readingPosition);
+        scroll->setValue(scroll->value() + 2);
+        const int movedPosition = scroll->value();
+        toggle->click();
+        QCOMPARE(scroll->value(), movedPosition);
+        QCoreApplication::processEvents();
+        QCOMPARE(scroll->value(), movedPosition);
+        QCOMPARE(inspector->toPlainText(), selectedDetails);
+    }
     void bookmarkPersistence() {
         QTemporaryDir directory;
         QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);
