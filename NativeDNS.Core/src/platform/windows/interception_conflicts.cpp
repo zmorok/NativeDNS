@@ -28,7 +28,6 @@ std::wstring normalized(std::wstring value) {
 } // namespace
 std::vector<InterceptionConflict> interception_conflicts() {
     std::vector<InterceptionConflict> result;
-    bool yoga_process = false;
     const HANDLE processes = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (processes != INVALID_HANDLE_VALUE) {
         PROCESSENTRY32W entry{};
@@ -36,8 +35,6 @@ std::vector<InterceptionConflict> interception_conflicts() {
         if (Process32FirstW(processes, &entry))
             do {
                 const auto name = normalized(entry.szExeFile);
-                if (name == L"yogadns.exe")
-                    yoga_process = true;
                 if (name == L"nativednscorehost.exe" &&
                     entry.th32ProcessID != GetCurrentProcessId())
                     result.push_back({"INTERCEPT_CONFLICT",
@@ -52,7 +49,7 @@ std::vector<InterceptionConflict> interception_conflicts() {
             {"CONFLICT_DETECTION_UNAVAILABLE", "Cannot inspect driver services", false});
         return result;
     }
-    for (const auto* name : {L"DnsFltEngineDrv", L"WinDivert", L"WinDivert1.4", L"WinDivert2.2"}) {
+    for (const auto* name : {L"WinDivert", L"WinDivert1.4", L"WinDivert2.2"}) {
         ServiceHandle service{
             OpenServiceW(manager.value, name, SERVICE_QUERY_STATUS | SERVICE_QUERY_CONFIG)};
         if (!service.value)
@@ -66,16 +63,6 @@ std::vector<InterceptionConflict> interception_conflicts() {
                                   &size) ||
             status.dwCurrentState != SERVICE_RUNNING)
             continue;
-        if (std::wstring(name) == L"DnsFltEngineDrv") {
-            result.push_back(
-                {yoga_process ? "INTERCEPT_CONFLICT" : "INTERCEPT_DRIVER_PRESENT",
-                 yoga_process
-                     ? "YogaDNS process and filter driver are present; concurrent DNS interception "
-                       "may conflict"
-                     : "YogaDNS filter driver is loaded; active interception is not established",
-                 yoga_process});
-            continue;
-        }
         DWORD required = 0;
         (void)QueryServiceConfigW(service.value, nullptr, 0, &required);
         std::vector<BYTE> storage(required);
