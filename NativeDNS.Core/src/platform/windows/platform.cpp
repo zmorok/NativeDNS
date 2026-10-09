@@ -341,9 +341,10 @@ struct ProcessInstanceLock::Impl {
     bool owns = false;
 };
 
-ProcessInstanceLock::ProcessInstanceLock(const std::string& name)
+ProcessInstanceLock::ProcessInstanceLock(const std::string& name, InstanceScope scope)
     : impl_(std::make_unique<Impl>()) {
-    const std::wstring mutexName = L"Local\\" + nd::widen(name);
+    const std::wstring mutexName =
+        (scope == InstanceScope::machine ? L"Global\\" : L"Local\\") + nd::widen(name);
     impl_->handle = CreateMutexW(nullptr, FALSE, mutexName.c_str());
     if (!impl_->handle) {
         const DWORD error = GetLastError();

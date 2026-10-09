@@ -42,7 +42,7 @@ public:
     explicit NetworkMonitor(Source source = {}, bool watch = true);
     ~NetworkMonitor();
     NetworkSnapshotPtr snapshot() const;
-    void refresh();
+    void refresh(bool invalidate = false);
     static NetworkMonitor& shared();
 
 private:

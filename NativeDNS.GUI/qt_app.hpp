@@ -72,6 +72,7 @@ private:
     bool reloadRejected_ = false;
     bool networkErrorLogged_ = false;
     bool coreShutdownAttempted_ = false;
+    unsigned failedCorePolls_ = 0, automaticRestarts_ = 0;
     std::atomic_bool coreStartOperationPending_ = false;
     std::atomic_bool restartOperationPending_ = false;
     std::shared_ptr<std::atomic_bool> coreStartCancelled_ =

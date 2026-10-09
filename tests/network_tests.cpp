@@ -26,14 +26,18 @@ int main() {
         check(first->generation == 1 && first->interfaces.front().id == "vpn", "Stable ordering");
         monitor.refresh();
         check(monitor.snapshot() == first, "Unchanged network preserves immutable snapshot");
+        monitor.refresh(true);
+        check(monitor.snapshot()->generation == 2 &&
+                  monitor.snapshot()->interfaces == first->interfaces,
+              "Resume invalidates stale context even if adapters are unchanged");
         state[0].dns_servers = {"192.0.2.2"};
         monitor.refresh();
-        check(monitor.snapshot()->generation == 2, "DHCP DNS change advances generation");
+        check(monitor.snapshot()->generation == 3, "DHCP DNS change advances generation");
         check(first->interfaces.back().dns_servers.front() == "192.0.2.1",
               "Old snapshot immutable");
         state[0].up = false;
         monitor.refresh();
-        check(monitor.snapshot()->generation == 3, "Disconnect advances generation");
+        check(monitor.snapshot()->generation == 4, "Disconnect advances generation");
         fail = true;
         monitor.refresh();
         check(!monitor.snapshot()->error.empty(), "Enumeration failure is visible");

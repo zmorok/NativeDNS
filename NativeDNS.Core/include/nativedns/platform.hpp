@@ -27,9 +27,11 @@ std::filesystem::path user_config_directory();
 bool is_elevated();
 std::string system_summary();
 
+enum class InstanceScope { session, machine };
 class ProcessInstanceLock {
 public:
-    explicit ProcessInstanceLock(const std::string& name);
+    explicit ProcessInstanceLock(const std::string& name,
+                                 InstanceScope scope = InstanceScope::session);
     ~ProcessInstanceLock();
     ProcessInstanceLock(const ProcessInstanceLock&) = delete;
     ProcessInstanceLock& operator=(const ProcessInstanceLock&) = delete;

@@ -139,7 +139,7 @@ Expected behavior:
 - `Hide to tray` is persisted as a boolean UI setting;
 - CoreHost starts automatically with every GUI instance and remains active while the GUI is visible or in the tray;
 - the toolbar and tray offer Restart, which reloads routing state without stopping DNS interception; if CoreHost is absent, the GUI launches it;
-- when a secure upstream hostname cannot be resolved at startup, the GUI records a red live-log error, keeps CoreHost stopped, and probes DNS readiness in the background; it launches CoreHost once resolution succeeds, including after an interface is enabled; configurations that need no hostname bootstrap can start offline;
+- GUI startup does not wait for secure hostname resolution. CoreHost starts offline, and bootstrap failures affect only the selected upstream; after three failed status polls the GUI makes up to three relaunch attempts, at least five seconds apart;
 - the Restart action performs IPC reload in a worker so the GUI and tray remain responsive during endpoint preparation;
 - only a full application exit shuts CoreHost down permanently;
 - close hides the window only when tray mode is enabled and a tray is available;
@@ -147,6 +147,11 @@ Expected behavior:
 - explicit Exit always performs full shutdown.
 
 The tray icon is an application resource, not an empty platform-provided icon.
+
+CoreHost uses a machine-wide process lock (Global Windows mutex), while the GUI
+remains unique per user/session. The OS releases the process lock after a crash.
+Network monitoring advances its context generation after a polling gap longer
+than five seconds, including suspend/resume, even when adapter data is unchanged.
 
 On Windows, autostart starts `NativeDNS.exe --background` without a visible window or console. The tray application then launches the registered elevated CoreHost on demand. This keeps interception privileged without elevating the Qt GUI, and avoids starting CoreHost without its tray owner.
 

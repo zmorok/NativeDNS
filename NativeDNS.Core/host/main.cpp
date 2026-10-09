@@ -89,7 +89,8 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        nd::platform::ProcessInstanceLock instanceLock("NativeDNS.CoreHost.Instance.v1");
+        nd::platform::ProcessInstanceLock instanceLock("NativeDNS.CoreHost.Instance.v1",
+                                                       nd::platform::InstanceScope::machine);
         if (!instanceLock.acquired()) {
             std::cerr << "NativeDNSCoreHost is already running\n";
             return 0;

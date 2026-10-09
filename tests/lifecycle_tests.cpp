@@ -1,4 +1,5 @@
 #include <nativedns/platform.hpp>
+#include <nativedns/config.hpp>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -17,11 +18,11 @@ void check(bool value, const char* message) {
         throw std::runtime_error(message);
 }
 
-bool wait_until_locked(const std::string& name) {
+bool wait_until_locked(const std::string& name, nd::platform::InstanceScope scope) {
     for (unsigned attempt = 0; attempt < 100; ++attempt) {
         bool available = false;
         {
-            nd::platform::ProcessInstanceLock probe(name);
+            nd::platform::ProcessInstanceLock probe(name, scope);
             available = probe.acquired();
         }
         if (!available)
@@ -31,10 +32,12 @@ bool wait_until_locked(const std::string& name) {
     return false;
 }
 
-void verify_abnormal_process_release(const std::string& name) {
+void verify_abnormal_process_release(const std::string& name, nd::platform::InstanceScope scope) {
+    const std::string option =
+        scope == nd::platform::InstanceScope::machine ? "--hold-machine-lock" : "--hold-lock";
 #ifdef _WIN32
-    auto command = L"\"" + nd::platform::executable_path().wstring() + L"\" --hold-lock " +
-                   std::wstring(name.begin(), name.end());
+    auto command = L"\"" + nd::platform::executable_path().wstring() + L"\" " + nd::widen(option) +
+                   L" " + std::wstring(name.begin(), name.end());
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process{};
@@ -50,7 +53,7 @@ void verify_abnormal_process_release(const std::string& name) {
                          &process) != FALSE,
           "cannot launch lifecycle crash child");
     CloseHandle(process.hThread);
-    check(wait_until_locked(name), "crash child did not acquire process-instance lock");
+    check(wait_until_locked(name, scope), "crash child did not acquire process-instance lock");
     check(TerminateProcess(process.hProcess, 99) != FALSE,
           "cannot terminate lifecycle crash child");
     check(WaitForSingleObject(process.hProcess, 5000) == WAIT_OBJECT_0,
@@ -62,17 +65,17 @@ void verify_abnormal_process_release(const std::string& name) {
     if (child == 0) {
         execl(nd::platform::executable_path().c_str(),
               nd::platform::executable_path().c_str(),
-              "--hold-lock",
+              option.c_str(),
               name.c_str(),
               nullptr);
         _exit(127);
     }
-    check(wait_until_locked(name), "crash child did not acquire process-instance lock");
+    check(wait_until_locked(name, scope), "crash child did not acquire process-instance lock");
     check(kill(child, SIGKILL) == 0, "cannot terminate lifecycle crash child");
     int status = 0;
     check(waitpid(child, &status, 0) == child, "cannot reap lifecycle crash child");
 #endif
-    nd::platform::ProcessInstanceLock recovered(name);
+    nd::platform::ProcessInstanceLock recovered(name, scope);
     check(recovered.acquired(),
           "process-instance lock must recover after forced process termination");
 }
@@ -80,8 +83,12 @@ void verify_abnormal_process_release(const std::string& name) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc == 3 && std::string(argv[1]) == "--hold-lock") {
-            nd::platform::ProcessInstanceLock held(argv[2]);
+        if (argc == 3 && (std::string(argv[1]) == "--hold-lock" ||
+                          std::string(argv[1]) == "--hold-machine-lock")) {
+            nd::platform::ProcessInstanceLock held(argv[2],
+                                                   std::string(argv[1]) == "--hold-machine-lock"
+                                                       ? nd::platform::InstanceScope::machine
+                                                       : nd::platform::InstanceScope::session);
             if (!held.acquired())
                 return 2;
             std::this_thread::sleep_for(std::chrono::seconds(30));
@@ -101,7 +108,9 @@ int main(int argc, char** argv) {
         nd::platform::ProcessInstanceLock afterRelease(name);
         check(afterRelease.acquired(), "process-instance lock must be reusable after owner exits");
         const std::string crash_name = name + ".Crash";
-        verify_abnormal_process_release(crash_name);
+        verify_abnormal_process_release(crash_name, nd::platform::InstanceScope::session);
+        verify_abnormal_process_release(crash_name + ".Machine",
+                                        nd::platform::InstanceScope::machine);
         std::cout << "Lifecycle instance-lock and crash-recovery tests passed\n";
         return 0;
     } catch (const std::exception& error) {

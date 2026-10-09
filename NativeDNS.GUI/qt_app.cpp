@@ -319,7 +319,6 @@ void configureFixedTableRows(QTableView* table) {
     table->verticalHeader()->setDefaultSectionSize(height);
 }
 
-
 void setFormFieldEnabled(QFormLayout* form, QWidget* field, bool enabled) {
     field->setEnabled(enabled);
     if (auto* label = form->labelForField(field))
@@ -1059,30 +1058,30 @@ public:
                     });
                 },
                 table_));
-        table_->setItemDelegateForColumn(
-            4,
-            new LazyComboDelegate(
-                [this] {
-                    std::vector<ComboOption> options{{uiText("Original/System"), 0}};
-                    options.reserve(working_.servers.size() + 1);
-                    for (const auto& server : working_.servers)
-                        options.push_back({q(server.name), server.id});
-                    return options;
-                },
-                [this](const QModelIndex& index, uint32_t value) {
-                    const auto ids = selectedRuleIds(index);
-                    QTimer::singleShot(0, this, [this, ids, value] {
-                        updateRules(ids, [value](nd::Rule& rule) {
-                            if (rule.action == nd::Action::process)
-                                rule.server_id = value;
-                        });
-                    });
-                },
-                table_));
+        table_->setItemDelegateForColumn(4,
+                                         new LazyComboDelegate(
+                                             [this] {
+                                                 std::vector<ComboOption> options{
+                                                     {uiText("Original/System"), 0}};
+                                                 options.reserve(working_.servers.size() + 1);
+                                                 for (const auto& server : working_.servers)
+                                                     options.push_back({q(server.name), server.id});
+                                                 return options;
+                                             },
+                                             [this](const QModelIndex& index, uint32_t value) {
+                                                 const auto ids = selectedRuleIds(index);
+                                                 QTimer::singleShot(0, this, [this, ids, value] {
+                                                     updateRules(ids, [value](nd::Rule& rule) {
+                                                         if (rule.action == nd::Action::process)
+                                                             rule.server_id = value;
+                                                     });
+                                                 });
+                                             },
+                                             table_));
 
         const auto updateSingleRuleControls = [this, up, down, edit, clone, remove] {
-            const bool single = table_->isEnabled() &&
-                                table_->selectionModel()->selectedRows().size() == 1;
+            const bool single =
+                table_->isEnabled() && table_->selectionModel()->selectedRows().size() == 1;
             for (auto* button : {up, down, edit, clone, remove})
                 button->setEnabled(single);
         };
@@ -1815,6 +1814,8 @@ void NativeDnsWindow::exportConfiguration() {
 }
 
 void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
+    if (reportFailure)
+        automaticRestarts_ = 0;
     if (coreLaunchPending_ && coreLaunchTimer_.isValid() && coreLaunchTimer_.elapsed() < 15000)
         return;
     if (restartWhenNetworkReturns_ && !reportFailure && networkProbeTimer_.isValid() &&
@@ -1833,15 +1834,14 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
     if (transparent)
         args << "--transparent";
     const auto configuration = configPath();
-    const auto probeConfig = config_;
     const auto cancellation = coreStartCancelled_;
     cancellation->store(false);
     if (!restartWhenNetworkReturns_)
-        setStatusText(uiText("Core: checking network..."));
+        setStatusText(uiText("Core: starting..."));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start(
-        [self, helper, args, configuration, probeConfig, transparent, reportFailure, cancellation] {
-            bool success = false, running = false, waitingForNetwork = false;
+        [self, helper, args, configuration, transparent, reportFailure, cancellation] {
+            bool success = false, running = false;
             QString failure;
             try {
                 const auto response =
@@ -1867,19 +1867,6 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                 failure = q(error.what());
             }
             if (!success && failure.isEmpty() && !cancellation->load()) {
-                try {
-                    if (transparent) {
-                        auto prepared = probeConfig;
-                        nd::prepare_secure_endpoints(prepared);
-                    }
-                } catch (const nd::Error& error) {
-                    waitingForNetwork = error.code == "BOOTSTRAP";
-                    failure = q(error.what());
-                } catch (const std::exception& error) {
-                    failure = q(error.what());
-                }
-            }
-            if (!success && failure.isEmpty() && !cancellation->load()) {
                 bool launched = false;
 #ifdef _WIN32
                 if (transparent) {
@@ -1898,22 +1885,12 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             }
             QMetaObject::invokeMethod(
                 qApp,
-                [self, success, running, waitingForNetwork, failure, reportFailure, cancellation] {
+                [self, success, running, failure, reportFailure, cancellation] {
                     if (!self)
                         return;
                     self->coreStartOperationPending_ = false;
                     if (cancellation->load())
                         return;
-                    if (waitingForNetwork) {
-                        self->coreLaunchPending_ = false;
-                        const bool firstFailure = !self->restartWhenNetworkReturns_;
-                        self->restartWhenNetworkReturns_ = true;
-                        self->setStatusText(uiText("Core: waiting for network"), true);
-                        if (firstFailure)
-                            self->appendLocalLog(
-                                uiText("Cannot resolve secure DNS upstream: ") + failure, true);
-                        return;
-                    }
                     self->restartWhenNetworkReturns_ = false;
                     if (!success) {
                         self->coreLaunchPending_ = false;
@@ -2039,7 +2016,7 @@ void NativeDnsWindow::refreshStatus() {
                 if (!available && !self->networkErrorLogged_) {
                     self->appendLocalLog(
                         uiText("Internet connection lost. DNS resolution may fail; core "
-                               "startup will wait for the network."),
+                               "continues running offline."),
                         true);
                     self->networkErrorLogged_ = true;
                 } else if (networkReturned) {
@@ -2047,6 +2024,9 @@ void NativeDnsWindow::refreshStatus() {
                     self->appendLocalLog(uiText("Internet connection restored."));
                 }
                 if (!failed) {
+                    self->failedCorePolls_ = 0;
+                    if (status.startsWith("RUNNING"))
+                        self->automaticRestarts_ = 0;
                     self->coreLaunchPending_ = false;
                     self->restartWhenNetworkReturns_ = false;
                     self->setStatusText(friendlyCoreStatus(status) +
@@ -2068,8 +2048,15 @@ void NativeDnsWindow::refreshStatus() {
                                             ? uiText("Core: waiting for network")
                                             : uiText("Core: stopped"),
                                         true);
-                    if (!self->exiting_ && (self->restartWhenNetworkReturns_ || networkChanged))
+                    ++self->failedCorePolls_;
+                    const bool retryDue =
+                        self->failedCorePolls_ >= 3 && (!self->networkProbeTimer_.isValid() ||
+                                                        self->networkProbeTimer_.elapsed() >= 5000);
+                    if (!self->exiting_ && self->automaticRestarts_ < 3 &&
+                        (retryDue || networkChanged)) {
+                        ++self->automaticRestarts_;
                         self->startCore(true, false);
+                    }
                 }
             },
             Qt::QueuedConnection);

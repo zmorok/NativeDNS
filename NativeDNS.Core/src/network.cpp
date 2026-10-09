@@ -72,12 +72,16 @@ NetworkMonitor::NetworkMonitor(Source source, bool watch)
     refresh();
     if (watch)
         watcher_ = std::jthread([this](std::stop_token stop) {
+            auto last = platform::monotonic_millis();
             while (!stop.stop_requested()) {
                 std::unique_lock lock(wait_mutex_);
                 changed_.wait_for(lock, stop, std::chrono::seconds(1), [] { return false; });
                 lock.unlock();
-                if (!stop.stop_requested())
-                    refresh();
+                if (!stop.stop_requested()) {
+                    const auto now = platform::monotonic_millis();
+                    refresh(now - last > 5000);
+                    last = now;
+                }
             }
         });
 }
@@ -90,7 +94,7 @@ NetworkMonitor::~NetworkMonitor() {
 NetworkSnapshotPtr NetworkMonitor::snapshot() const {
     return snapshot_.load();
 }
-void NetworkMonitor::refresh() {
+void NetworkMonitor::refresh(bool invalidate) {
     std::lock_guard lock(refresh_mutex_);
     const auto previous = snapshot();
     auto next = std::make_shared<NetworkSnapshot>();
@@ -103,7 +107,7 @@ void NetworkMonitor::refresh() {
         next->interfaces = previous->interfaces;
         next->error = error.what();
     }
-    if (next->interfaces == previous->interfaces && next->error == previous->error)
+    if (!invalidate && next->interfaces == previous->interfaces && next->error == previous->error)
         return;
     next->generation = previous->generation + 1;
     snapshot_.store(std::move(next));

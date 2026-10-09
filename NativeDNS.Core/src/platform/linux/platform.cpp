@@ -6,6 +6,8 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/file.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <sys/utsname.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -94,6 +96,10 @@ uint32_t secure_random_u32() {
     return value;
 }
 uint64_t monotonic_millis() {
+    timespec boot{};
+    if (clock_gettime(CLOCK_BOOTTIME, &boot) == 0)
+        return static_cast<uint64_t>(boot.tv_sec) * 1000 +
+               static_cast<uint64_t>(boot.tv_nsec) / 1000000;
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                      std::chrono::steady_clock::now().time_since_epoch())
                                      .count());
@@ -234,7 +240,7 @@ struct ProcessInstanceLock::Impl {
     bool owns = false;
 };
 
-ProcessInstanceLock::ProcessInstanceLock(const std::string& name)
+ProcessInstanceLock::ProcessInstanceLock(const std::string& name, InstanceScope scope)
     : impl_(std::make_unique<Impl>()) {
     std::string safe = name;
     for (char& character : safe)
@@ -248,11 +254,23 @@ ProcessInstanceLock::ProcessInstanceLock(const std::string& name)
     else
         directory = "/tmp";
     const auto path =
-        directory / (safe + "." + std::to_string(static_cast<unsigned long>(::getuid())) + ".lock");
-    impl_->fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
+        scope == InstanceScope::machine
+            ? std::filesystem::path("/tmp") / (safe + ".machine.lock")
+            : directory /
+                  (safe + "." + std::to_string(static_cast<unsigned long>(::getuid())) + ".lock");
+    impl_->fd = ::open(path.c_str(),
+                       O_CREAT | O_CLOEXEC | O_NOFOLLOW |
+                           (scope == InstanceScope::machine ? O_RDONLY : O_RDWR),
+                       scope == InstanceScope::machine ? 0644 : 0600);
     if (impl_->fd < 0)
         throw Error("INSTANCE_LOCK",
                     "Cannot create process lock: " + std::string(std::strerror(errno)));
+    struct stat info{};
+    if (fstat(impl_->fd, &info) < 0 || !S_ISREG(info.st_mode)) {
+        ::close(impl_->fd);
+        impl_->fd = -1;
+        throw Error("INSTANCE_LOCK", "Process lock is not a regular file");
+    }
     if (::flock(impl_->fd, LOCK_EX | LOCK_NB) == 0)
         impl_->owns = true;
     else if (errno != EWOULDBLOCK && errno != EAGAIN) {
