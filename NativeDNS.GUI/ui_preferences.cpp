@@ -72,6 +72,10 @@ struct Translation {
     const char* russian;
 };
 constexpr std::array translations{
+    Translation{"Show...", "Показывать..."},
+    Translation{"Filters", "Фильтры"},
+    Translation{"Selected record", "Выбранная запись"},
+    Translation{"Cannot save display preferences.", "Не удалось сохранить настройки отображения."},
     Translation{"Details", "Подробность"},
     Translation{"View", "Вид"},
     Translation{"Short line", "Короткая строка"},
@@ -261,7 +265,7 @@ constexpr std::array translations{
     Translation{"Open Log Folder", "Открыть папку журнала"},
     Translation{"&Window", "&Окно"},
     Translation{"Hide to tray", "Сворачивать в трей"},
-    Translation{"&Other", "&Другое"},
+    Translation{"&View", "&Вид"},
     Translation{"Language", "Язык"},
     Translation{"English", "English"},
     Translation{"Русский", "Русский"},

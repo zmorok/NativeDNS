@@ -6,6 +6,7 @@
 #include <QPlainTextEdit>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTableWidget>
 #include <QTextBlock>
@@ -205,8 +206,41 @@ LogDisplay::LogDisplay(QWidget* parent)
     retranslateUi();
 }
 void LogDisplay::inspect(const LogRecord& record) {
+    if (!selectedRecordVisible_)
+        return;
     inspected_ = record;
     inspector_->setPlainText(detailsText(record, present(record)));
+}
+void LogDisplay::setSelectedRecordVisible(bool visible) {
+    if (selectedRecordVisible_ == visible)
+        return;
+    const auto* scroll = verticalScrollBar();
+    const int previousPosition = scroll->value();
+    const bool followBottom = previousPosition == scroll->maximum();
+    const bool paintingEnabled = updatesEnabled();
+    setUpdatesEnabled(false);
+    selectedRecordVisible_ = visible;
+    // After hiding, only a new user selection may populate the inspector.
+    automaticInspection_ = false;
+    inspector_->clear();
+    inspected_.reset();
+    rendering_ = true;
+    auto cursor = text_->textCursor();
+    cursor.clearSelection();
+    text_->setTextCursor(cursor);
+    table_->clearSelection();
+    table_->setCurrentCell(-1, -1);
+    tree_->clearSelection();
+    tree_->setCurrentItem(nullptr);
+    rendering_ = false;
+    const QSignalBlocker blockToggle(detailsButton_);
+    detailsButton_->setChecked(false);
+    detailsButton_->setArrowType(Qt::RightArrow);
+    detailsButton_->setVisible(visible);
+    inspector_->hide();
+    layout()->activate();
+    finishUpdate(followBottom, previousPosition);
+    setUpdatesEnabled(paintingEnabled);
 }
 void LogDisplay::retranslateUi() {
     table_->setHorizontalHeaderLabels({uiText("Time"),
@@ -286,7 +320,7 @@ void LogDisplay::appendRecord(const LogRecord& record) {
     rendering_ = true;
     renderRecord(record);
     rendering_ = false;
-    if (records_.size() == 1)
+    if (records_.size() == 1 && automaticInspection_)
         inspect(record);
 }
 void LogDisplay::renderRecord(const LogRecord& record) {

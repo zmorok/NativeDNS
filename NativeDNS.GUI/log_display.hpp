@@ -30,6 +30,10 @@ public:
     void retranslateUi();
     QScrollBar* verticalScrollBar() const;
     void finishUpdate(bool followBottom, int previousPosition = 0);
+    bool selectedRecordVisible() const {
+        return selectedRecordVisible_;
+    }
+    void setSelectedRecordVisible(bool visible);
     int recordCount() const {
         return static_cast<int>(records_.size());
     }
@@ -51,4 +55,6 @@ private:
     std::deque<LogRecord> records_;
     std::optional<LogRecord> inspected_;
     bool rendering_ = false;
+    bool selectedRecordVisible_ = true;
+    bool automaticInspection_ = true;
 };

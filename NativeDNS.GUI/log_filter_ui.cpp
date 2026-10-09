@@ -334,7 +334,8 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     : QWidget(parent), ownedSettings_(settings ? nullptr : std::make_unique<QSettings>()),
       settings_(settings ? settings : ownedSettings_.get()), input_(new QLineEdit(this)),
       bookmark_(new QToolButton(this)), apply_(new QToolButton(this)), menu_(new QMenu(this)),
-      error_(new QLabel(this)), count_(new QLabel(this)), view_(new LogDisplay(this)) {
+      error_(new QLabel(this)), count_(new QLabel(this)), view_(new LogDisplay(this)),
+      filterControls_(new QWidget(this)) {
     input_->setObjectName("logFilterInput");
     input_->setMaxLength(4096);
     input_->setClearButtonEnabled(true);
@@ -348,6 +349,8 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     error_->setWordWrap(true);
     error_->hide();
     view_->setView(logViewFromKey(settings_->value("ui/logView", "compact").toString()));
+    filtersShown_ = settings_->value("ui/showFilters", true).toBool();
+    view_->setSelectedRecordVisible(settings_->value("ui/showSelectedRecord", true).toBool());
     for (const auto& action : settings_->value("ui/logActions").toStringList())
         if (action == "process" || action == "block" || action == "bypass")
             shownActions_.insert(action);
@@ -360,11 +363,17 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     bar->addWidget(bookmark_);
     bar->addWidget(input_, 1);
     bar->addWidget(apply_);
+    filterControls_->setObjectName("logFilterControls");
+    auto* filterLayout = new QVBoxLayout(filterControls_);
+    filterLayout->setContentsMargins(0, 0, 0, 0);
+    filterLayout->setSpacing(3);
+    filterLayout->addLayout(bar);
+    filterLayout->addWidget(error_);
+    filterControls_->setVisible(filtersShown_);
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(3);
-    root->addLayout(bar);
-    root->addWidget(error_);
+    root->addWidget(filterControls_);
     root->addWidget(view_, 1);
     count_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     root->addWidget(count_);
@@ -376,6 +385,8 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     connect(menu_, &QMenu::aboutToShow, this, [this] { populateMenu(); });
     auto* focus = new QShortcut(QKeySequence("Ctrl+/"), this);
     connect(focus, &QShortcut::activated, this, [this] {
+        if (!filtersShown_)
+            return;
         input_->setFocus();
         input_->selectAll();
     });
@@ -416,6 +427,8 @@ void LogPanel::validateDraft() {
     apply_->setEnabled(valid);
 }
 bool LogPanel::applyFilter() {
+    if (!filtersShown_)
+        return false;
     QString error;
     auto filter = LogFilter::compile(input_->text(), error);
     if (!filter) {
@@ -443,12 +456,65 @@ void LogPanel::renderRecord(const LogRecord& record) {
     ++visible_;
 }
 bool LogPanel::matches(const LogRecord& record) const {
-    if (!filter_.matches(record))
+    if (filtersShown_ && !filter_.matches(record))
         return false;
     if (isTechnicalLogRecord(record))
         return commandsView_ != LogCommandsView::without_commands;
     return commandsView_ != LogCommandsView::only &&
            (shownActions_.isEmpty() || shownActions_.contains(record.action));
+}
+bool LogPanel::persistVisibility(const char* key, bool shown) {
+    settings_->setValue(QString::fromLatin1(key), shown);
+    settings_->sync();
+    if (settings_->status() != QSettings::NoError) {
+        QMessageBox::warning(this, "NativeDNS", uiText("Cannot save display preferences."));
+        return false;
+    }
+    return true;
+}
+bool LogPanel::setFiltersShown(bool shown) {
+    if (filtersShown_ == shown)
+        return true;
+    if (!persistVisibility("ui/showFilters", shown))
+        return false;
+    filtersShown_ = shown;
+    filterControls_->setVisible(shown);
+    layout()->activate();
+    if (!shown || !applyFilter())
+        rebuild();
+    return true;
+}
+bool LogPanel::setSelectedRecordShown(bool shown) {
+    if (selectedRecordShown() == shown)
+        return true;
+    if (!persistVisibility("ui/showSelectedRecord", shown))
+        return false;
+    view_->setSelectedRecordVisible(shown);
+    return true;
+}
+void addLogVisibilityActions(QMenu* menu, LogPanel& panel) {
+    for (const auto* key : {"Filters", "Selected record"}) {
+        auto* action = menu->addAction(uiText(key));
+        action->setProperty("uiTextKey", QString::fromUtf8(key));
+        action->setData(QString::fromUtf8(key));
+        action->setCheckable(true);
+        QObject::connect(action, &QAction::triggered, &panel, [&panel, action](bool checked) {
+            const bool filters = action->data().toString() == "Filters";
+            if (filters)
+                panel.setFiltersShown(checked);
+            else
+                panel.setSelectedRecordShown(checked);
+            action->setChecked(filters ? panel.filtersShown() : panel.selectedRecordShown());
+        });
+    }
+    const auto refresh = [menu, &panel] {
+        for (auto* action : menu->actions())
+            action->setChecked(action->data().toString() == "Filters"
+                                   ? panel.filtersShown()
+                                   : panel.selectedRecordShown());
+    };
+    refresh();
+    QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
 }
 void LogPanel::appendRecords(const QList<LogRecord>& records) {
     if (records.isEmpty())

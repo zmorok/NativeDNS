@@ -1,6 +1,7 @@
 #include "../NativeDNS.GUI/log_filter_ui.hpp"
 #include "../NativeDNS.GUI/ui_preferences.hpp"
 #include <QAction>
+#include <QClipboard>
 #include <QDir>
 #include <QFileDialog>
 #include <QFontDatabase>
@@ -741,6 +742,179 @@ private slots:
         QCOMPARE(display->recordCount(), 1000);
         with->trigger();
         QCOMPARE(display->recordCount(), 2000);
+    }
+    void filterVisibility_data() {
+        logViews_data();
+    }
+    void filterVisibility() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);
+        LogPanel panel(nullptr, &settings);
+        panel.resize(700, 420);
+        panel.show();
+        QVERIFY(panel.setLogView(static_cast<LogView>(mode)));
+        QMenu show;
+        addLogVisibilityActions(&show, panel);
+        QCOMPARE(show.actions().size(), 2);
+        auto* filters = show.actions()[0];
+        QVERIFY(filters->isChecked() && show.actions()[1]->isChecked());
+        QCOMPARE(filters->text(), uiText("Filters"));
+        QCOMPARE(show.actions()[1]->text(), uiText("Selected record"));
+        auto* controls = panel.findChild<QWidget*>("logFilterControls");
+        auto* input = panel.findChild<QLineEdit*>("logFilterInput");
+        auto* display = panel.findChild<LogDisplay*>();
+        auto bypass = record("bypassed");
+        bypass.action = "bypass";
+        panel.appendRecords({record("processed"), record("failed", true), bypass});
+        input->setText("err=\"*\"");
+        QVERIFY(panel.applyFilter());
+        QCOMPARE(display->recordCount(), 1);
+        filters->trigger();
+        QVERIFY(!filters->isChecked() && controls->isHidden());
+        QCOMPARE(display->recordCount(), 3);
+        QCOMPARE(input->text(), "err=\"*\"");
+        panel.appendRecords({record("success while hidden"), record("failure while hidden", true)});
+        QCOMPARE(display->recordCount(), 5);
+        QVERIFY(panel.setShownActions({"process"}));
+        QCOMPARE(display->recordCount(), 4); // The menu's action filter remains independent.
+        LogPanel reopened(nullptr, &settings);
+        QVERIFY(!reopened.filtersShown());
+        QVERIFY(reopened.selectedRecordShown());
+        QMenu restored;
+        addLogVisibilityActions(&restored, reopened);
+        QVERIFY(!restored.actions()[0]->isChecked() && restored.actions()[1]->isChecked());
+        filters->trigger();
+        QVERIFY(filters->isChecked() && controls->isVisible());
+        QCOMPARE(display->recordCount(), 2);
+        QCOMPARE(input->text(), "err=\"*\"");
+        // Showing also applies a valid draft that had not been applied before hiding.
+        input->setText("!err=\"*\"");
+        filters->trigger();
+        QCOMPARE(display->recordCount(), 4);
+        filters->trigger();
+        QCOMPARE(display->recordCount(), 2);
+        panel.appendRecords({record("another success")});
+        QCOMPARE(display->recordCount(), 3);
+        // Invalid drafts stay editable; the last valid filter is restored safely.
+        input->setText("invalid");
+        filters->trigger();
+        QVERIFY(!panel.findChild<QLabel*>("logFilterError")->isVisible());
+        QCOMPARE(display->recordCount(), 5);
+        filters->trigger();
+        QCOMPARE(display->recordCount(), 3);
+        QVERIFY(panel.findChild<QLabel*>("logFilterError")->isVisible());
+        input->clear();
+        QVERIFY(panel.applyFilter());
+        QCOMPARE(display->recordCount(), 5);
+        LogPanel shownReopened(nullptr, &settings);
+        QVERIFY(shownReopened.filtersShown());
+    }
+    void selectedRecordVisibility_data() {
+        logViews_data();
+    }
+    void selectedRecordVisibility() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);
+        LogPanel panel(nullptr, &settings);
+        panel.resize(700, 420);
+        panel.show();
+        QVERIFY(panel.setLogView(static_cast<LogView>(mode)));
+        QCoreApplication::processEvents();
+        QMenu show;
+        addLogVisibilityActions(&show, panel);
+        auto* selected = show.actions()[1];
+        auto* display = panel.findChild<LogDisplay*>();
+        auto* inspector = panel.findChild<QPlainTextEdit*>("logRecordDetails");
+        auto* toggle = panel.findChild<QToolButton*>("logDetailsToggle");
+        auto* table = panel.findChild<QTableWidget*>("logTable");
+        auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+        auto* text = panel.findChild<QPlainTextEdit*>("logDisplay");
+        const auto selectRow = [&](int row) {
+            if (mode == int(LogView::table))
+                table->setCurrentCell(row, 1);
+            else if (mode == int(LogView::details))
+                tree->setCurrentItem(tree->topLevelItem(row));
+            else
+                text->setTextCursor(QTextCursor(text->document()->findBlockByNumber(row)));
+        };
+        QList<LogRecord> rows;
+        for (int i = 0; i < 100; ++i) {
+            auto event = record(QString("row %1").arg(i));
+            event.address = QString("row%1.example").arg(i);
+            rows << event;
+        }
+        panel.appendRecords(rows);
+        selectRow(20);
+        QVERIFY(inspector->toPlainText().contains("row 20"));
+        toggle->click();
+        QVERIFY(inspector->isVisible());
+        auto* scroll = display->verticalScrollBar();
+        scroll->setValue(scroll->maximum());
+        selected->trigger();
+        QVERIFY(!selected->isChecked());
+        QVERIFY(toggle->isHidden() && inspector->isHidden());
+        QVERIFY(inspector->toPlainText().isEmpty());
+        QVERIFY(table->selectedItems().isEmpty());
+        QVERIFY(tree->selectedItems().isEmpty());
+        QCOMPARE(scroll->value(), scroll->maximum());
+        selectRow(70);
+        QVERIFY(inspector->toPlainText().isEmpty());
+        if (mode == int(LogView::table)) {
+            QVERIFY(!table->selectedItems().isEmpty());
+            QTest::keyClick(table, Qt::Key_C, Qt::ControlModifier);
+            QVERIFY(QApplication::clipboard()->text().contains("row70.example"));
+        } else if (mode == int(LogView::details)) {
+            QVERIFY(!tree->selectedItems().isEmpty());
+            QTest::keyClick(tree, Qt::Key_C, Qt::ControlModifier);
+            QVERIFY(QApplication::clipboard()->text().contains("row 70"));
+        } else {
+            auto cursor = text->textCursor();
+            cursor.select(QTextCursor::BlockUnderCursor);
+            text->setTextCursor(cursor);
+            text->copy();
+            QVERIFY(QApplication::clipboard()->text().contains("row 70"));
+        }
+        // Reset modifier state retained by simulated shortcuts in the offscreen platform.
+        QTest::keyClick(&panel, Qt::Key_Escape, Qt::NoModifier);
+        QCOMPARE(QApplication::keyboardModifiers(), Qt::NoModifier);
+        LogPanel reopened(nullptr, &settings);
+        QVERIFY(!reopened.selectedRecordShown());
+        QVERIFY(reopened.filtersShown());
+        reopened.appendRecords({record("new startup row")});
+        QVERIFY(reopened.findChild<QPlainTextEdit*>("logRecordDetails")->toPlainText().isEmpty());
+        QVERIFY(reopened.setSelectedRecordShown(true));
+        QVERIFY(reopened.findChild<QPlainTextEdit*>("logRecordDetails")->toPlainText().isEmpty());
+        scroll->setValue(scroll->maximum());
+        selected->trigger();
+        QVERIFY(selected->isChecked());
+        QVERIFY(toggle->isVisible() && inspector->isHidden());
+        QVERIFY(!toggle->isChecked());
+        QCOMPARE(toggle->arrowType(), Qt::RightArrow);
+        QVERIFY(inspector->toPlainText().isEmpty());
+        QCOMPARE(scroll->value(), scroll->maximum());
+        panel.retranslateUi();
+        QVERIFY(inspector->toPlainText().isEmpty());
+        toggle->click();
+        QVERIFY(inspector->isVisible());
+        QVERIFY(inspector->toPlainText().isEmpty());
+        selectRow(71);
+        QVERIFY(inspector->toPlainText().contains("row 71"));
+        scroll->setValue(scroll->maximum() / 3);
+        const int position = scroll->value();
+        selected->trigger();
+        QCOMPARE(scroll->value(), position);
+        QCoreApplication::processEvents();
+        QCOMPARE(scroll->value(), position);
+        selected->trigger();
+        QCOMPARE(scroll->value(), position);
+        QVERIFY(!toggle->isChecked() && inspector->isHidden());
+        QVERIFY(inspector->toPlainText().isEmpty());
+        QCoreApplication::processEvents();
+        QCOMPARE(scroll->value(), position);
+        LogPanel shownReopened(nullptr, &settings);
+        QVERIFY(shownReopened.selectedRecordShown());
     }
     void immediateAutoScroll_data() {
         logViews_data();

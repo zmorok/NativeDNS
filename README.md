@@ -45,7 +45,13 @@ Platform integration:
 - **Linux:** POSIX sockets, Unix Domain Sockets, nftables redirect backend, XDG autostart, `pkexec` for privileged CoreHost startup.
 
 The production desktop UI uses **Qt 6 Widgets** on both platforms.
-The GUI provides persistent light/dark themes and English/Russian interface languages under `Other`.
+The GUI provides persistent light/dark themes and English/Russian interface languages under `View`,
+located between `File` and `Configuration`. `View > Show...` toggles Filters and Selected record;
+both are shown by default and their visibility is remembered. Hiding Filters temporarily disables
+the text filter, and showing it restores the entered expression and applies it again.
+The action and command filters in `Log` remain independent. Hiding Selected record clears its
+details and selection; log records can still be selected and copied. Showing it starts collapsed
+with empty details until a new record is selected.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
 The live log supports compound display filters and saved filter management with import/export.
 `Log > View` selects a persistent log view: short line, a line with expandable details, or table.

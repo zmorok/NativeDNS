@@ -1326,6 +1326,13 @@ void NativeDnsWindow::buildUi() {
     file->addSeparator();
     auto* exit = addAction(file, "Exit");
 
+    auto* viewMenu = addMenu("&View");
+    viewMenu->setObjectName("viewMenu");
+    auto* show = addSubMenu(viewMenu, "Show...");
+    show->setObjectName("logVisibilityMenu");
+    addLogVisibilityActions(show, *log_);
+    viewMenu->addSeparator();
+
     auto* config = addMenu("&Configuration");
     auto* servers = addAction(config, "DNS Servers");
     auto* rules = addAction(config, "Rules");
@@ -1420,8 +1427,7 @@ void NativeDnsWindow::buildUi() {
     darkTheme_ = uiSettings.value("ui/darkTheme", false).toBool();
     hideToTrayAction_->setChecked(hideToTray_);
 
-    auto* other = addMenu("&Other");
-    auto* language = addSubMenu(other, "Language");
+    auto* language = addSubMenu(viewMenu, "Language");
     auto* english = addAction(language, "English");
     english->setCheckable(true);
     auto* russian = addAction(language, "Русский");
@@ -1432,7 +1438,7 @@ void NativeDnsWindow::buildUi() {
     languageGroup->addAction(russian);
     english->setChecked(uiLanguage() == UiLanguage::english);
     russian->setChecked(uiLanguage() == UiLanguage::russian);
-    auto* theme = addSubMenu(other, "Theme");
+    auto* theme = addSubMenu(viewMenu, "Theme");
     auto* light = addAction(theme, "Light");
     light->setCheckable(true);
     light->setChecked(!darkTheme_);

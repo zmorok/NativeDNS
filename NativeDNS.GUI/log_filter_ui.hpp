@@ -42,6 +42,14 @@ public:
     void clear();
     void retranslateUi();
     bool applyFilter();
+    bool filtersShown() const {
+        return filtersShown_;
+    }
+    bool setFiltersShown(bool shown);
+    bool selectedRecordShown() const {
+        return view_->selectedRecordVisible();
+    }
+    bool setSelectedRecordShown(bool shown);
     LogView logView() const {
         return view_->view();
     }
@@ -64,6 +72,7 @@ protected:
 private:
     void validateDraft();
     bool matches(const LogRecord& record) const;
+    bool persistVisibility(const char* key, bool shown);
     void rebuild();
     void renderRecord(const LogRecord& record);
     void updateCount();
@@ -81,6 +90,7 @@ private:
     QLabel* error_;
     QLabel* count_;
     LogDisplay* view_;
+    QWidget* filterControls_;
     QList<SavedLogFilter> saved_;
     QString selectedId_, appliedExpression_;
     LogFilter filter_;
@@ -88,9 +98,11 @@ private:
     LogCommandsView commandsView_ = LogCommandsView::with_records;
     std::deque<LogRecord> records_;
     int visible_ = 0;
+    bool filtersShown_ = true;
 };
 
 void showLogFilterHelp(QWidget* parent);
 void addLogViewActions(QMenu* menu, LogPanel& panel);
 void addLogActionFilterActions(QMenu* menu, LogPanel& panel);
 void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu = nullptr);
+void addLogVisibilityActions(QMenu* menu, LogPanel& panel);
