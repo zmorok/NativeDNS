@@ -30,7 +30,7 @@ private:
     QList<SavedLogFilter> filters_;
 };
 
-enum class LogCommandsView { with_records, only };
+enum class LogCommandsView { with_records, only, without_commands };
 
 class LogPanel final : public QWidget {
 public:

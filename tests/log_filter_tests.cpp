@@ -658,6 +658,41 @@ private slots:
         QCOMPARE(display->recordCount(), 11);
         actionsMenu.actions()[2]->trigger(); // Process + technical events.
         QCOMPARE(display->recordCount(), 7);
+        with->trigger(); // Clicking the active item hides technical events.
+        QVERIFY(!only->isChecked() && !with->isChecked());
+        QCOMPARE(panel.commandsView(), LogCommandsView::without_commands);
+        QVERIFY(actionsMenu.menuAction()->isEnabled());
+        QCOMPARE(display->recordCount(), 2);
+        LogPanel hiddenReopened(nullptr, &settings);
+        QCOMPARE(hiddenReopened.commandsView(), LogCommandsView::without_commands);
+        QCOMPARE(hiddenReopened.shownActions(), QSet<QString>{"process"});
+        QMenu hiddenActions, hiddenCommands;
+        addLogActionFilterActions(&hiddenActions, hiddenReopened);
+        addLogCommandFilterActions(&hiddenCommands, hiddenReopened, &hiddenActions);
+        QVERIFY(!hiddenCommands.actions()[0]->isChecked());
+        QVERIFY(!hiddenCommands.actions()[1]->isChecked());
+        QVERIFY(hiddenActions.menuAction()->isEnabled());
+        hiddenReopened.appendRecords({record("processed"), blocked, technical});
+        QCOMPARE(hiddenReopened.findChild<LogDisplay*>()->recordCount(), 1);
+        auto* input = panel.findChild<QLineEdit*>("logFilterInput");
+        input->setText("err=\"*\"");
+        QVERIFY(panel.applyFilter());
+        QCOMPARE(display->recordCount(), 1); // Query failure, without CoreHost failure.
+        input->clear();
+        QVERIFY(panel.applyFilter());
+        only->trigger();
+        QVERIFY(only->isChecked() && !with->isChecked());
+        QCOMPARE(display->recordCount(), 5);
+        only->trigger(); // Only can also be unchecked without selecting With.
+        QVERIFY(!only->isChecked() && !with->isChecked());
+        QVERIFY(actionsMenu.menuAction()->isEnabled());
+        QCOMPARE(display->recordCount(), 2);
+        actionsMenu.actions()[0]->trigger(); // All actions still excludes technical events.
+        QCOMPARE(display->recordCount(), 6);
+        actionsMenu.actions()[2]->trigger();
+        with->trigger();
+        QVERIFY(with->isChecked() && !only->isChecked());
+        QCOMPARE(display->recordCount(), 7);
         only->trigger();
         QVERIFY(only->isChecked() && !with->isChecked());
         QVERIFY(!actionsMenu.menuAction()->isEnabled());
@@ -671,7 +706,6 @@ private slots:
         addLogCommandFilterActions(&restoredCommands, reopened, &restoredActions);
         QVERIFY(restoredCommands.actions()[0]->isChecked());
         QVERIFY(!restoredActions.menuAction()->isEnabled());
-        auto* input = panel.findChild<QLineEdit*>("logFilterInput");
         input->setText("err=\"*\"");
         QVERIFY(panel.applyFilter());
         QCOMPARE(display->recordCount(), 1);
@@ -699,6 +733,12 @@ private slots:
         QCOMPARE(display->recordCount(), 1000);
         panel.appendRecords({record("new query")});
         QCOMPARE(display->recordCount(), 999);
+        with->trigger();
+        QCOMPARE(display->recordCount(), 2000);
+        with->trigger();
+        QCOMPARE(display->recordCount(), 1001);
+        panel.appendRecords({technical}); // Retained, but hidden until With is selected.
+        QCOMPARE(display->recordCount(), 1000);
         with->trigger();
         QCOMPARE(display->recordCount(), 2000);
     }

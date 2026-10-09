@@ -58,7 +58,10 @@ immediately when the log is already scrolled to the end; scrolling up pauses thi
 `Log > Show only commands...` selects Only (technical events such as initialization, reload and
 network changes) or With (technical events alongside the selected DNS actions, the default).
 Only temporarily disables action selection without losing it; With restores its effect.
-The mode is remembered. The text filter and verbosity level continue to apply in both modes.
+Only and With are mutually exclusive. Clicking the active item clears its check mark and hides
+technical events while keeping DNS records subject to the action filter.
+The mode is remembered, including the state with neither item selected. The text filter and
+verbosity level continue to apply in every mode.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
 
 ## Application lifecycle

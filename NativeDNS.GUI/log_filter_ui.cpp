@@ -351,9 +351,10 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     for (const auto& action : settings_->value("ui/logActions").toStringList())
         if (action == "process" || action == "block" || action == "bypass")
             shownActions_.insert(action);
-    commandsView_ = settings_->value("ui/logCommands", "with").toString() == "only"
-                        ? LogCommandsView::only
-                        : LogCommandsView::with_records;
+    const auto commands = settings_->value("ui/logCommands", "with").toString();
+    commandsView_ = commands == "only"   ? LogCommandsView::only
+                    : commands == "none" ? LogCommandsView::without_commands
+                                         : LogCommandsView::with_records;
     auto* bar = new QHBoxLayout;
     bar->setSpacing(3);
     bar->addWidget(bookmark_);
@@ -445,8 +446,8 @@ bool LogPanel::matches(const LogRecord& record) const {
     if (!filter_.matches(record))
         return false;
     if (isTechnicalLogRecord(record))
-        return true;
-    return commandsView_ == LogCommandsView::with_records &&
+        return commandsView_ != LogCommandsView::without_commands;
+    return commandsView_ != LogCommandsView::only &&
            (shownActions_.isEmpty() || shownActions_.contains(record.action));
 }
 void LogPanel::appendRecords(const QList<LogRecord>& records) {
@@ -535,7 +536,7 @@ void addLogActionFilterActions(QMenu* menu, LogPanel& panel) {
 }
 void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu) {
     auto* group = new QActionGroup(menu);
-    group->setExclusive(true);
+    group->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
     for (const auto* key : {"Only", "With"}) {
         auto* action = menu->addAction(uiText(key));
         action->setProperty("uiTextKey", QString::fromUtf8(key));
@@ -549,19 +550,23 @@ void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu)
         for (auto* action : group->actions())
             action->setChecked(action->data().toInt() == static_cast<int>(panel.commandsView()));
         if (actionMenu)
-            actionMenu->menuAction()->setEnabled(panel.commandsView() ==
-                                                 LogCommandsView::with_records);
+            actionMenu->menuAction()->setEnabled(panel.commandsView() != LogCommandsView::only);
     };
     refresh();
     QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
     for (auto* action : group->actions())
-        QObject::connect(action, &QAction::triggered, &panel, [&panel, action, refresh] {
-            panel.setCommandsView(static_cast<LogCommandsView>(action->data().toInt()));
-            refresh();
-        });
+        QObject::connect(
+            action, &QAction::triggered, &panel, [&panel, action, refresh](bool checked) {
+                panel.setCommandsView(checked ? static_cast<LogCommandsView>(action->data().toInt())
+                                              : LogCommandsView::without_commands);
+                refresh();
+            });
 }
 bool LogPanel::setCommandsView(LogCommandsView view) {
-    settings_->setValue("ui/logCommands", view == LogCommandsView::only ? "only" : "with");
+    settings_->setValue("ui/logCommands",
+                        view == LogCommandsView::only               ? "only"
+                        : view == LogCommandsView::without_commands ? "none"
+                                                                    : "with");
     settings_->sync();
     if (settings_->status() != QSettings::NoError) {
         QMessageBox::warning(this, "NativeDNS", uiText("Cannot save log commands view."));
