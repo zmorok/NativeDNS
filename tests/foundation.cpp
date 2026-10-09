@@ -1,6 +1,8 @@
 #include <nativedns/logger.hpp>
 #include <nativedns/core_api.h>
 #include <nativedns/platform.hpp>
+#include "../NativeDNS.Core/src/bounded_executor.hpp"
+#include <future>
 #include <iostream>
 #include <thread>
 #include <stdexcept>
@@ -15,6 +17,39 @@ void check(bool value, const char* message = "foundation assertion failed") {
 int main() {
     try {
         check(NativeDns_GetApiVersion() == 1);
+        {
+            nd::detail::BoundedExecutor executor;
+            std::promise<void> began, release;
+            auto released = release.get_future().share();
+            auto started = began.get_future();
+            std::atomic_uint ran = 0;
+            executor.start(1, 2);
+            check(executor.submit([&] {
+                began.set_value();
+                released.get();
+                ++ran;
+            }),
+                  "accept active executor job");
+            check(started.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+                  "executor begins work");
+            check(executor.submit([&] { ++ran; }) && executor.submit([&] { ++ran; }),
+                  "queue accepts its bounded capacity");
+            check(!executor.submit([&] { ++ran; }), "queue rejects overload");
+            release.set_value();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (ran < 3 && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            check(ran == 3, "queued work recovers after overload");
+            executor.stop();
+            check(!executor.submit([] {}), "stopped executor rejects work");
+            executor.start(1, 1);
+            std::promise<void> restarted;
+            auto done = restarted.get_future();
+            check(executor.submit([&] { restarted.set_value(); }), "executor restarts");
+            check(done.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+                  "restarted worker executes");
+            executor.stop();
+        }
         auto config = nd::default_config();
         check(config.rules.size() == 1 && config.rules.back().is_default &&
               config.rules.back().server_id == 0);

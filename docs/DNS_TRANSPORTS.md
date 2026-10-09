@@ -102,7 +102,9 @@ Rules are applied before upstream I/O.
 
 Configured upstreams may name an ordered fallback group. Transport failures advance to another enabled member within a bounded aggregate deadline. Two consecutive failures open a per-server circuit for 30 seconds with capped exponential backoff; an expired circuit receives a recovery probe. Successful RTT is tracked as an EWMA and ranks already-observed healthy members. DNS RCODE responses are valid transport results and do not trigger fallback.
 
-The Router coalesces concurrent byte-equivalent queries (excluding transaction ID) for the same upstream group. Successful positive replies use the minimum relevant RR TTL; NXDOMAIN/NODATA replies use the RFC-style minimum of the SOA TTL and SOA MINIMUM. The in-memory cache is bounded to 4,096 entries and 24 hours, never stores truncated/SERVFAIL/zero-TTL replies, rewrites each client transaction ID, and decrements ordinary RR TTLs on delivery. EDNS pseudo-record fields are not aged as TTLs.
+The Router coalesces concurrent byte-equivalent queries (excluding transaction ID) for the same upstream group, with at most 256 distinct requests in flight. Successful positive replies use the minimum relevant RR TTL; NXDOMAIN/NODATA replies use the RFC-style minimum of the SOA TTL and SOA MINIMUM. The in-memory cache is bounded to 4,096 entries, 32 MiB of packet/key data and 24 hours, never stores truncated/SERVFAIL/zero-TTL replies, rewrites each client transaction ID, and decrements ordinary RR TTLs on delivery. EDNS pseudo-record fields are not aged as TTLs.
+
+TCP, DoT and DoH transport pools retain at most 128 endpoint/context keys each, evicting idle keys before rejecting new work with `UPSTREAM_BUSY`. Reflected TCP tracks at most 4,096 pending SYN tuples. The UDP application queue holds at most 4,096 packets and 32 MiB of packet data; overload returns SERVFAIL without bypassing routing. Windows IPC reads a complete request within three seconds and applies a separate three-second response transfer deadline.
 
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
 

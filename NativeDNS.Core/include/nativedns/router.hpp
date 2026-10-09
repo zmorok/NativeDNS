@@ -54,6 +54,7 @@ public:
         mutable std::map<std::string, Health> health;
         mutable std::mutex cache_mutex;
         mutable std::map<std::string, CacheEntry> cache;
+        mutable size_t cache_bytes = 0;
         mutable std::map<std::string, std::shared_ptr<Pending>> pending;
     };
     using SnapshotPtr = std::shared_ptr<const Snapshot>;

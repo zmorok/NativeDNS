@@ -391,6 +391,8 @@ void TcpDnsProxy::expect_connection(std::string original_ip, uint16_t client_por
     auto& p = *impl_;
     std::lock_guard lock(p.expected_mutex);
     p.prune_expected(std::chrono::steady_clock::now());
+    if (p.expected.size() >= 4096 && !p.expected.contains({original_ip, client_port}))
+        throw Error("TCP_PROXY_BUSY", "Too many pending reflected TCP connections");
     p.expected[{std::move(original_ip), client_port}] =
         std::chrono::steady_clock::now() + std::chrono::seconds(5);
 }

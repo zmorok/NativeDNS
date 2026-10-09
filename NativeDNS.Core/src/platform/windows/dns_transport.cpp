@@ -1,5 +1,6 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/dns_network.hpp>
+#include "../../pool_limits.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <algorithm>
@@ -274,8 +275,9 @@ private:
                 else
                     ++item;
             }
-            auto& entries = pool_[key];
             for (;;) {
+                detail::limit_idle_pool(pool_, key);
+                auto& entries = pool_[key];
                 const auto found = std::find_if(
                     entries.begin(), entries.end(), [](const auto& entry) { return !entry->busy; });
                 if (found != entries.end()) {

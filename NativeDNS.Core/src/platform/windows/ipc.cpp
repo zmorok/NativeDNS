@@ -95,7 +95,8 @@ void timed_transfer(HANDLE pipe, uint8_t* data, size_t size, bool write, uint64_
         at += amount;
     }
 }
-bool async_transfer(HANDLE pipe, uint8_t* data, size_t size, bool write, HANDLE stop) {
+bool async_transfer(
+    HANDLE pipe, uint8_t* data, size_t size, bool write, HANDLE stop, uint64_t deadline) {
     size_t at = 0;
     while (at < size) {
         HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -113,12 +114,17 @@ bool async_transfer(HANDLE pipe, uint8_t* data, size_t size, bool write, HANDLE 
             throw Error("IPC_IO", "Named pipe I/O: " + std::to_string(error));
         }
         const HANDLE waits[]{stop, event};
-        const DWORD wait = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
-        if (wait == WAIT_OBJECT_0) {
+        const auto now = GetTickCount64();
+        const DWORD remaining = now >= deadline ? 0 : static_cast<DWORD>(deadline - now);
+        const DWORD wait = WaitForMultipleObjects(2, waits, FALSE, remaining);
+        if (wait != WAIT_OBJECT_0 + 1) {
             CancelIoEx(pipe, &overlapped);
             WaitForSingleObject(event, INFINITE);
             CloseHandle(event);
-            return false;
+            if (wait == WAIT_OBJECT_0)
+                return false;
+            throw Error(wait == WAIT_TIMEOUT ? "IPC_TIMEOUT" : "IPC_IO",
+                        "IPC client did not complete its transfer");
         }
         if (wait != WAIT_OBJECT_0 + 1 || !GetOverlappedResult(pipe, &overlapped, &amount, FALSE) ||
             !amount) {
@@ -284,12 +290,14 @@ void PipeServer::run() {
             workers.push_back(
                 {std::jthread([this, pipe, done] {
                      try {
+                         const auto read_deadline = GetTickCount64() + 3000;
                          uint8_t header[header_size]{};
                          if (!async_transfer(pipe,
                                              header,
                                              sizeof(header),
                                              false,
-                                             static_cast<HANDLE>(native_stop_)))
+                                             static_cast<HANDLE>(native_stop_),
+                                             read_deadline))
                              throw Error("IPC_STOPPED", "IPC server is stopping");
                          const auto parsed = detail::parse_ipc_header(header, false);
                          const uint16_t operation = parsed.operation;
@@ -300,7 +308,8 @@ void PipeServer::run() {
                                                        reinterpret_cast<uint8_t*>(payload.data()),
                                                        length,
                                                        false,
-                                                       static_cast<HANDLE>(native_stop_)))
+                                                       static_cast<HANDLE>(native_stop_),
+                                                       read_deadline))
                              throw Error("IPC_STOPPED", "IPC server is stopping");
                          IpcResponse response;
                          try {
@@ -318,7 +327,8 @@ void PipeServer::run() {
                                               output.data(),
                                               output.size(),
                                               true,
-                                              static_cast<HANDLE>(native_stop_));
+                                              static_cast<HANDLE>(native_stop_),
+                                              GetTickCount64() + 3000);
                      } catch (const std::exception&) { /* malformed/abandoned client is isolated */
                      }
                      CloseHandle(pipe);

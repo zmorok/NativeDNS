@@ -23,7 +23,7 @@ public:
     void start(std::size_t workers, std::size_t capacity) {
         if (!workers || !capacity)
             throw std::invalid_argument("executor workers and capacity must be positive");
-        std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         if (!threads_.empty())
             throw std::logic_error("executor already started");
         stopping_ = false;
@@ -34,6 +34,8 @@ public:
         } catch (...) {
             stopping_ = true;
             changed_.notify_all();
+            lock.unlock();
+            stop();
             throw;
         }
     }

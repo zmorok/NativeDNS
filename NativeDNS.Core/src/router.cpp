@@ -99,6 +99,8 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
     {
         std::lock_guard lock(snapshot.health_mutex);
         const auto now = std::chrono::steady_clock::now();
+        if (snapshot.health.size() + candidates.size() > 8192)
+            snapshot.health.clear();
         for (const auto* candidate : candidates)
             snapshot.health.try_emplace(health_key(candidate));
         const bool any_ready =
@@ -203,8 +205,13 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
     {
         std::unique_lock lock(snapshot.cache_mutex);
         const auto now = std::chrono::steady_clock::now();
-        for (auto entry = snapshot.cache.begin(); entry != snapshot.cache.end();)
-            entry = entry->second.expires <= now ? snapshot.cache.erase(entry) : std::next(entry);
+        for (auto entry = snapshot.cache.begin(); entry != snapshot.cache.end();) {
+            if (entry->second.expires <= now) {
+                snapshot.cache_bytes -= entry->second.packet.size() + entry->first.size();
+                entry = snapshot.cache.erase(entry);
+            } else
+                ++entry;
+        }
         if (const auto found = snapshot.cache.find(key); found != snapshot.cache.end()) {
             const auto elapsed = static_cast<uint32_t>(
                 std::chrono::duration_cast<std::chrono::seconds>(now - found->second.stored)
@@ -218,6 +225,8 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
         if (found != snapshot.pending.end())
             pending = found->second;
         else {
+            if (snapshot.pending.size() >= 256)
+                throw Error("UPSTREAM_BUSY", "Too many distinct DNS queries in flight");
             pending = std::make_shared<Pending>();
             snapshot.pending.emplace(key, pending);
             leader = true;
@@ -225,7 +234,9 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
         if (!leader) {
             if (logger_.enabled(Level::debug))
                 logger_.write(Level::debug, "DNS_COALESCED", "server=" + primary.name);
-            pending->changed.wait(lock, [&] { return pending->done; });
+            if (!pending->changed.wait_for(
+                    lock, std::chrono::seconds(120), [&] { return pending->done; }))
+                throw Error("TIMEOUT", "Coalesced DNS request deadline exceeded");
             if (!pending->error_code.empty())
                 throw Error(pending->error_code, pending->error_message);
             return {age_dns_response(pending->packet, transaction_id, 0), pending->used_server_id};
@@ -239,19 +250,25 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
             std::lock_guard lock(snapshot.cache_mutex);
             const auto now = std::chrono::steady_clock::now();
             if (parsed.cacheable) {
-                if (snapshot.cache.size() >= 4096) {
+                constexpr size_t max_cache_bytes = 32 * 1024 * 1024;
+                const auto entry_bytes = exchanged.first.size() + key.size();
+                while (snapshot.cache.size() >= 4096 ||
+                       snapshot.cache_bytes + entry_bytes > max_cache_bytes) {
                     const auto oldest =
                         std::min_element(snapshot.cache.begin(),
                                          snapshot.cache.end(),
                                          [](const auto& left, const auto& right) {
                                              return left.second.expires < right.second.expires;
                                          });
-                    if (oldest != snapshot.cache.end())
-                        snapshot.cache.erase(oldest);
+                    if (oldest == snapshot.cache.end())
+                        break;
+                    snapshot.cache_bytes -= oldest->second.packet.size() + oldest->first.size();
+                    snapshot.cache.erase(oldest);
                 }
                 const auto ttl = std::min<uint32_t>(parsed.cache_ttl, 86400);
                 snapshot.cache[key] = {
                     exchanged.first, now, now + std::chrono::seconds(ttl), used_id};
+                snapshot.cache_bytes += entry_bytes;
             }
             pending->packet = exchanged.first;
             pending->used_server_id = used_id;

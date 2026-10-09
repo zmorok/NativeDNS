@@ -387,6 +387,7 @@ struct WinDivertInterception::Impl {
     std::mutex queue_mutex;
     std::condition_variable queue_changed;
     std::deque<Job> jobs;
+    size_t queued_bytes = 0;
     std::jthread receiver;
     std::vector<std::jthread> workers;
     std::atomic<uint64_t> overload_count = 0;
@@ -559,7 +560,9 @@ struct WinDivertInterception::Impl {
                     bool queued = false;
                     {
                         std::lock_guard lock(queue_mutex);
-                        if (jobs.size() < 4096) {
+                        if (jobs.size() < 4096 &&
+                            queued_bytes + packet.size() <= 32 * 1024 * 1024) {
+                            queued_bytes += packet.size();
                             jobs.push_back({std::move(packet), address, std::move(snapshot)});
                             queued = true;
                         }
@@ -599,6 +602,7 @@ struct WinDivertInterception::Impl {
                 if (jobs.empty())
                     continue;
                 job = std::move(jobs.front());
+                queued_bytes -= job.packet.size();
                 jobs.pop_front();
             }
             process(std::move(job));
@@ -750,6 +754,7 @@ void WinDivertInterception::start() {
         {
             std::lock_guard queue_lock(p.queue_mutex);
             p.jobs.clear();
+            p.queued_bytes = 0;
         }
         try {
             std::rethrow_exception(failure);
@@ -787,6 +792,7 @@ void WinDivertInterception::stop() {
         {
             std::lock_guard queue_lock(p.queue_mutex);
             p.jobs.clear();
+            p.queued_bytes = 0;
         }
         p.release();
         p.state = State::stopped;

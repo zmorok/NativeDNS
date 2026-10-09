@@ -12,6 +12,9 @@
 #include <fstream>
 #include <optional>
 #include <algorithm>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 std::vector<std::filesystem::path> diagnostic_logs(const std::filesystem::path& directory) {
@@ -65,6 +68,23 @@ int main() {
             });
         server.start();
         check(server.running(), "server running");
+#ifdef _WIN32
+        const auto idle = CreateFileW(nd::widen(name).c_str(),
+                                      GENERIC_READ | GENERIC_WRITE,
+                                      0,
+                                      nullptr,
+                                      OPEN_EXISTING,
+                                      0,
+                                      nullptr);
+        check(idle != INVALID_HANDLE_VALUE, "idle IPC client connects");
+        std::this_thread::sleep_for(std::chrono::milliseconds(3300));
+        char idle_byte = 0;
+        DWORD idle_read = 0;
+        check(!ReadFile(idle, &idle_byte, 1, &idle_read, nullptr) &&
+                  GetLastError() == ERROR_BROKEN_PIPE,
+              "abandoned IPC client expires without occupying worker forever");
+        CloseHandle(idle);
+#endif
         auto response = nd::pipe_request(name, nd::IpcOperation::ping, "hello");
         check(response.status == 0 && response.payload == "pong:hello", "ping round trip");
         response = nd::pipe_request(name, nd::IpcOperation::status);
