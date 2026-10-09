@@ -8,6 +8,7 @@
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
@@ -915,6 +916,110 @@ private slots:
         QCOMPARE(scroll->value(), position);
         LogPanel shownReopened(nullptr, &settings);
         QVERIFY(shownReopened.selectedRecordShown());
+    }
+    void logDetailsEnter_data() {
+        QTest::addColumn<int>("key");
+        QTest::newRow("return") << int(Qt::Key_Return);
+        QTest::newRow("keypad enter") << int(Qt::Key_Enter);
+    }
+    void logDetailsEnter() {
+        QFETCH(int, key);
+        LogDisplay display;
+        display.setView(LogView::details);
+        display.resize(700, 400);
+        display.appendRecord(record("first"));
+        display.appendRecord(record("second"));
+        display.show();
+        QCoreApplication::processEvents();
+        auto* tree = display.findChild<QTreeWidget*>("logDetailsTree");
+        auto* first = tree->topLevelItem(0);
+        auto* second = tree->topLevelItem(1);
+        tree->setFocus();
+        tree->setCurrentItem(first);
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(first->isExpanded());
+        QCOMPARE(tree->currentItem(), first);
+        QKeyEvent repeated(QEvent::KeyPress, key, Qt::NoModifier, {}, true);
+        QApplication::sendEvent(tree, &repeated);
+        QVERIFY(first->isExpanded());
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(!first->isExpanded());
+        QTest::keyClick(tree, Qt::Key_Down);
+        QCOMPARE(tree->currentItem(), second);
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(second->isExpanded());
+        tree->setCurrentItem(first);
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(first->isExpanded());
+        QVERIFY(!second->isExpanded());
+        QTest::keyClick(tree, Qt::Key_Down);
+        QCOMPARE(tree->currentItem(), first->child(0));
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(!first->isExpanded());
+        QCOMPARE(tree->currentItem(), first);
+        QTest::keyClick(tree, Qt::Key_Down);
+        QCOMPARE(tree->currentItem(), second);
+        tree->setCurrentItem(nullptr);
+        QTest::keyClick(tree, Qt::Key(key));
+        QVERIFY(!first->isExpanded() && !second->isExpanded());
+    }
+    void logDetailsExpansion() {
+        LogDisplay display;
+        display.setView(LogView::details);
+        display.resize(700, 300);
+        for (int row = 0; row < 100; ++row)
+            display.appendRecord(record(QString("row %1").arg(row)));
+        display.show();
+        QCoreApplication::processEvents();
+        auto* tree = display.findChild<QTreeWidget*>("logDetailsTree");
+        auto* first = tree->topLevelItem(0);
+        auto* second = tree->topLevelItem(1);
+        tree->setFocus();
+        tree->setCurrentItem(first);
+        QTest::keyClick(tree, Qt::Key_Right);
+        QVERIFY(first->isExpanded());
+        tree->setCurrentItem(second);
+        QTest::keyClick(tree, Qt::Key_Right);
+        QVERIFY(second->isExpanded());
+        QVERIFY(!first->isExpanded());
+        QTest::keyClick(tree, Qt::Key_Left);
+        QVERIFY(!second->isExpanded());
+        first->setExpanded(true);
+        tree->setCurrentItem(first->child(0));
+        first->setExpanded(false);
+        QCOMPARE(tree->currentItem(), first);
+        second->setExpanded(true);
+        tree->scrollToItem(first);
+        tree->doItemsLayout();
+        const QRect firstRect = tree->visualItemRect(first);
+        QTest::mouseClick(
+            tree->viewport(),
+            Qt::LeftButton,
+            Qt::NoModifier,
+            QPoint(firstRect.left() - tree->indentation() / 2, firstRect.center().y()));
+        QVERIFY(first->isExpanded());
+        QVERIFY(!second->isExpanded());
+        auto* distant = tree->topLevelItem(80);
+        tree->setCurrentItem(distant);
+        QTest::keyClick(tree, Qt::Key_Return);
+        QVERIFY(distant->isExpanded());
+        QVERIFY(!first->isExpanded());
+        const QRect distantRect = tree->visualItemRect(distant);
+        QVERIFY(distantRect.top() >= 0 && distantRect.bottom() <= tree->viewport()->height());
+        display.appendRecord(record("new while expanded"));
+        QVERIFY(distant->isExpanded());
+        display.removeFirstRecord();
+        QVERIFY(distant->isExpanded());
+        tree->topLevelItem(0)->setExpanded(true);
+        QVERIFY(!distant->isExpanded());
+        display.removeFirstRecord();
+        tree->topLevelItem(0)->setExpanded(true);
+        QVERIFY(tree->topLevelItem(0)->isExpanded());
+        display.clear();
+        display.appendRecord(record("after clear"));
+        tree->setCurrentItem(tree->topLevelItem(0));
+        QTest::keyClick(tree, Qt::Key_Return);
+        QVERIFY(tree->topLevelItem(0)->isExpanded());
     }
     void immediateAutoScroll_data() {
         logViews_data();

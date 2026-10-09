@@ -3,6 +3,7 @@
 #include <QHeaderView>
 #include <QAbstractTextDocumentLayout>
 #include <QEvent>
+#include <QKeyEvent>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
 #include <QScrollBar>
@@ -153,6 +154,24 @@ LogDisplay::LogDisplay(QWidget* parent)
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(true);
     tree_->header()->setSectionResizeMode(QHeaderView::Stretch);
+    tree_->installEventFilter(this);
+    connect(tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) {
+        // Apply the same single-record behavior to keyboard and mouse expansion.
+        for (int row = 0; row < tree_->topLevelItemCount(); ++row) {
+            auto* other = tree_->topLevelItem(row);
+            if (other != item && other->isExpanded())
+                other->setExpanded(false);
+        }
+        tree_->doItemsLayout();
+        tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+    });
+    connect(tree_, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* item) {
+        if (auto* current = tree_->currentItem(); current && current->parent() == item) {
+            tree_->setCurrentItem(item);
+            tree_->doItemsLayout();
+            tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+        }
+    });
     inspector_->setObjectName("logRecordDetails");
     inspector_->setReadOnly(true);
     inspector_->setUndoRedoEnabled(false);
@@ -204,6 +223,26 @@ LogDisplay::LogDisplay(QWidget* parent)
         }
     });
     retranslateUi();
+}
+bool LogDisplay::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == tree_ && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+            if (!key->isAutoRepeat()) {
+                if (auto* item = tree_->currentItem()) {
+                    if (item->parent())
+                        item = item->parent();
+                    tree_->setCurrentItem(item);
+                    item->setExpanded(!item->isExpanded());
+                    tree_->doItemsLayout();
+                    tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+                }
+            }
+            key->accept();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 void LogDisplay::inspect(const LogRecord& record) {
     if (!selectedRecordVisible_)

@@ -55,6 +55,8 @@ with empty details until a new record is selected.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
 The live log supports compound display filters and saved filter management with import/export.
 `Log > View` selects a persistent log view: short line, a line with expandable details, or table.
+In the line with details view, Enter toggles the selected record; opening another record collapses
+the previous one. Enter on its details collapses them and returns selection to the record line.
 All views retain the same filters and access to the original
 record. `Log > Details` controls verbosity independently.
 `Log > Show only action...` filters Process, Block and Bypass independently; multiple actions can
