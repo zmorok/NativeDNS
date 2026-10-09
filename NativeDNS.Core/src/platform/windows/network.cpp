@@ -7,6 +7,34 @@
 #include <algorithm>
 
 namespace nd::platform {
+void bind_upstream_interface(std::intptr_t raw, const NetworkRoute& route) {
+    if (route.interface_id.empty())
+        return;
+    const auto network = NetworkMonitor::shared().snapshot();
+    const auto* info = find_interface(*network, route.interface_id);
+    if (!network->error.empty() || !info || !info->up || info->index4 != route.index4 ||
+        info->index6 != route.index6)
+        throw Error("INTERFACE_DOWN", "Required upstream interface is unavailable");
+    const SOCKET socket = static_cast<SOCKET>(raw);
+    WSAPROTOCOL_INFOW protocol{};
+    int size = sizeof(protocol);
+    if (getsockopt(
+            socket, SOL_SOCKET, SO_PROTOCOL_INFOW, reinterpret_cast<char*>(&protocol), &size) ==
+        SOCKET_ERROR)
+        throw Error("INTERFACE_BIND", "Cannot inspect upstream socket family");
+    const bool ipv6 = protocol.iAddressFamily == AF_INET6;
+    const auto index = ipv6 ? route.index6 : route.index4;
+    if (!index)
+        throw Error("INTERFACE_BIND", "Required interface does not support socket address family");
+    const DWORD option = ipv6 ? index : htonl(index);
+    if (setsockopt(socket,
+                   ipv6 ? IPPROTO_IPV6 : IPPROTO_IP,
+                   ipv6 ? IPV6_UNICAST_IF : IP_UNICAST_IF,
+                   reinterpret_cast<const char*>(&option),
+                   sizeof(option)) == SOCKET_ERROR)
+        throw Error("INTERFACE_BIND",
+                    "Cannot bind upstream interface: " + std::to_string(WSAGetLastError()));
+}
 namespace {
 std::string numeric_address(const sockaddr* address, uint32_t interface6) {
     if (!address)

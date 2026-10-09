@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <nativedns/model.hpp>
 
 namespace nd {
 struct InterfaceInfo {
@@ -24,6 +25,16 @@ struct NetworkSnapshot {
     std::string error;
 };
 using NetworkSnapshotPtr = std::shared_ptr<const NetworkSnapshot>;
+struct NumericEndpoint {
+    std::string address;
+    uint32_t scope6 = 0;
+    bool ipv6 = false;
+};
+NumericEndpoint parse_numeric_endpoint(const std::string& text);
+const InterfaceInfo* find_interface(const NetworkSnapshot& snapshot,
+                                    const std::string& id,
+                                    const std::string& match = "id");
+std::string network_route_key(const NetworkRoute& route);
 class NetworkMonitor final {
 public:
     using Source = std::function<std::vector<InterfaceInfo>()>;
@@ -42,5 +53,6 @@ private:
 };
 namespace platform {
 std::vector<InterfaceInfo> enumerate_interfaces();
-}
+void bind_upstream_interface(std::intptr_t socket, const NetworkRoute& route);
+} // namespace platform
 } // namespace nd

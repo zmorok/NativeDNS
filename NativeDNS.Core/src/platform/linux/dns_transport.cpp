@@ -116,19 +116,22 @@ ConnectedSocket connect_network(const Server& server, bool tcp, Clock::time_poin
     socklen_t address_size = 0;
     auto* v4 = reinterpret_cast<sockaddr_in*>(&address);
     auto* v6 = reinterpret_cast<sockaddr_in6*>(&address);
-    if (inet_pton(AF_INET, server.ip.c_str(), &v4->sin_addr) == 1) {
+    const auto numeric = parse_numeric_endpoint(server.ip);
+    if (inet_pton(AF_INET, numeric.address.c_str(), &v4->sin_addr) == 1) {
         v4->sin_family = AF_INET;
         v4->sin_port = htons(server.port ? server.port : 53);
         address_size = sizeof(*v4);
-    } else if (inet_pton(AF_INET6, server.ip.c_str(), &v6->sin6_addr) == 1) {
+    } else if (inet_pton(AF_INET6, numeric.address.c_str(), &v6->sin6_addr) == 1) {
         v6->sin6_family = AF_INET6;
         v6->sin6_port = htons(server.port ? server.port : 53);
+        v6->sin6_scope_id = numeric.scope6 ? numeric.scope6 : server.route.scope6;
         address_size = sizeof(*v6);
     } else
         throw Error("ENDPOINT", "DNS network transport requires a numeric IP");
     auto socket = std::make_unique<Socket>(::socket(
         address.ss_family, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP));
     platform::configure_upstream_socket(socket->value);
+    platform::bind_upstream_interface(socket->value, server.route);
     const int flags = fcntl(socket->value, F_GETFL, 0);
     if (flags < 0 || fcntl(socket->value, F_SETFL, flags | O_NONBLOCK) < 0)
         socket_error("nonblocking");
@@ -240,7 +243,8 @@ private:
         }
     };
     Packet pooled_tcp(const Packet& request, const Server& server, Clock::time_point deadline) {
-        const auto key = server.ip + ":" + std::to_string(server.port ? server.port : 53);
+        const auto key = server.ip + ":" + std::to_string(server.port ? server.port : 53) + '|' +
+                         network_route_key(server.route);
         std::shared_ptr<Entry> selected;
         {
             std::unique_lock lock(pool_mutex_);

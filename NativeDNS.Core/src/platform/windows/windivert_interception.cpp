@@ -411,7 +411,10 @@ struct WinDivertInterception::Impl {
             const auto view = udp_view(job.packet);
             const auto query =
                 Packet(job.packet.begin() + static_cast<ptrdiff_t>(view.payload), job.packet.end());
-            auto routed = router.route(query, original_server(job.packet, view), job.snapshot);
+            auto original = original_server(job.packet, view);
+            if (view.ipv6 && job.packet[24] == 0xfe && (job.packet[25] & 0xc0) == 0x80)
+                original.route.scope6 = job.address.Network.IfIdx;
+            auto routed = router.route(query, original, job.snapshot);
             if (routed.disposition == Disposition::forward_original) {
                 inject(job.packet, job.address);
                 return;
@@ -516,8 +519,9 @@ struct WinDivertInterception::Impl {
                     const auto captured_question = parse_question(Packet(
                         packet.begin() + static_cast<ptrdiff_t>(view.payload), packet.end()));
                     auto snapshot = router.snapshot();
-                    const auto& captured_rule =
-                        match_rule(snapshot->config, captured_question.name);
+                    const auto captured_decision =
+                        evaluate_rule(snapshot->config, captured_question.name);
+                    const auto& captured_rule = *captured_decision.rule;
                     if (logger.enabled(Level::debug))
                         logger.write(Level::debug,
                                      "DNS_CAPTURE",
@@ -525,7 +529,7 @@ struct WinDivertInterception::Impl {
                                          " rule=" + captured_rule.name +
                                          " action=" + action_name(captured_rule.action) +
                                          " server=" + std::to_string(captured_rule.server_id));
-                    if (should_reinject_udp_immediately(snapshot->config, packet)) {
+                    if (captured_decision.reinject_udp) {
                         const auto original = original_server(packet, view);
                         if (logger.enabled(Level::normal))
                             logger.write(

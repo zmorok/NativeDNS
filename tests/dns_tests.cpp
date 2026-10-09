@@ -463,6 +463,32 @@ int main() {
             }
         {
             Peer peer(true, Mode::good, false, 0, 1500, 2);
+#ifdef _WIN32
+            const auto network = nd::NetworkMonitor::shared().snapshot();
+            for (bool bound_tcp : {false, true})
+                for (bool bound_ipv6 : {false, true}) {
+                    const auto address = bound_ipv6 ? "::1" : "127.0.0.1";
+                    const auto adapter = std::find_if(
+                        network->interfaces.begin(),
+                        network->interfaces.end(),
+                        [&](const auto& info) {
+                            return info.up && std::find(info.addresses.begin(),
+                                                        info.addresses.end(),
+                                                        address) != info.addresses.end();
+                        });
+                    check(adapter != network->interfaces.end(), "Loopback interface enumeration");
+                    Peer bound_peer(bound_tcp, Mode::good, bound_ipv6);
+                    auto bound_server = bound_peer.server();
+                    bound_server.route = {
+                        adapter->id, adapter->name, adapter->index4, adapter->index6};
+                    check(nd::test_server(bound_server, "example.com").success,
+                          "DNS UDP/TCP IPv4/IPv6 exchange through selected interface");
+                    bound_peer.verify();
+                    bound_server.route.interface_id = "missing-interface";
+                    check(nd::test_server(bound_server).error_code == "INTERFACE_DOWN",
+                          "Unavailable required interface fails before sending");
+                }
+#endif
             auto config = nd::default_config();
             auto server = peer.server();
             server.id = 9;

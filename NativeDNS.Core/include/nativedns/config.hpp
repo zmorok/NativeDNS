@@ -2,6 +2,7 @@
 #include <nativedns/model.hpp>
 #include <filesystem>
 #include <stdexcept>
+#include <nativedns/network.hpp>
 
 namespace nd {
 class Error : public std::runtime_error {
@@ -25,11 +26,14 @@ const Rule& match_rule(const Config& config, const std::string& hostname);
 struct RuleDecision {
     const Rule* rule = nullptr;
     bool reinject_udp = false;
+    NetworkRoute route;
+    std::vector<std::string> interface_dns;
     std::string error_code, message;
 };
 // Shared policy decision for the Router and packet fast path. The caller owns
 // the configuration snapshot for the lifetime of the returned rule pointer.
-RuleDecision evaluate_rule(const Config& config, const std::string& hostname);
+RuleDecision
+evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshotPtr network = {});
 struct ImportResult {
     Config config;
     std::vector<std::string> warnings;

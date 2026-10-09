@@ -76,6 +76,7 @@ Server relay_endpoint(const Server& server) {
     relay.enabled = true;
     relay.protocol = Protocol::udp;
     relay.timeout_ms = server.timeout_ms;
+    relay.route = server.route;
     relay.port = 443;
     auto value = server.relay;
     const auto parse_port = [](const std::string& text) {

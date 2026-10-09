@@ -89,6 +89,19 @@ Rules contain:
 
 Rules are evaluated in vector order.
 
+Windows Process rules can bind upstream and bootstrap sockets to an adapter.
+The `interface` selector accepts its GUID (optionally `guid:`-prefixed) or current
+numeric index. Imported `interface_id_type="name"` and `interface_name` select
+the adapter alias/description. Ambiguous selectors fail explicitly. With
+`ignore_rule_if_interface_down=1` (including the imported `yoga.settings.` key),
+an unavailable adapter skips a non-Default rule; otherwise it returns
+`INTERFACE_DOWN`. A bound Default never silently selects another adapter.
+Process/server 0 with a binding uses the selected adapter's DNS; without a
+binding the original intercepted resolver is retained. Bypass retains its
+original path after interface availability checks. POSIX does not infer
+per-interface DNS from a global resolver file. Numeric IPv6 endpoints can
+carry a `%<interface-index>` scope.
+
 The permanent Default rule cannot be removed, disabled, or moved away from the end.
 
 Block modes:

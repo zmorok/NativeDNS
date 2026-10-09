@@ -77,7 +77,10 @@ std::string peer_ip(const sockaddr_storage& peer) {
     if ((family != AF_INET && family != AF_INET6) ||
         !InetNtopA(family, address, text, sizeof(text)))
         throw Error("TCP_PROXY_IO", "Cannot read reflected DNS destination");
-    return text;
+    std::string result = text;
+    if (family == AF_INET6 && reinterpret_cast<const sockaddr_in6*>(&peer)->sin6_scope_id)
+        result += '%' + std::to_string(reinterpret_cast<const sockaddr_in6*>(&peer)->sin6_scope_id);
+    return result;
 }
 } // namespace
 

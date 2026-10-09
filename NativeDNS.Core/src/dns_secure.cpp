@@ -40,6 +40,7 @@ struct CurlHandle {
     CURL* value = nullptr;
     char error_buffer[CURL_ERROR_SIZE]{};
     std::map<curl_socket_t, std::unique_ptr<detail::NetworkUpstreamGuard>> upstream_sockets;
+    NetworkRoute route;
     CurlHandle() {
         static CurlGlobal global;
         value = curl_easy_init();
@@ -77,6 +78,7 @@ private:
     configure_socket(void* context, curl_socket_t socket, curlsocktype purpose) noexcept {
         try {
             auto& self = *static_cast<CurlHandle*>(context);
+            platform::bind_upstream_interface(static_cast<std::intptr_t>(socket), self.route);
             const uint16_t port = platform::prepare_upstream_socket(
                 static_cast<std::intptr_t>(socket), purpose == CURLSOCKTYPE_IPCXN);
             if (port && !self.upstream_sockets.contains(socket))
@@ -218,6 +220,7 @@ private:
             throw Error("DNS_MALFORMED", "Expected query");
         auto lease = acquire(server, deadline);
         auto& handle = *lease->entry->handle;
+        handle.route = server.route;
         const std::string url = dot_ ? "https://" + normalize_host(server.hostname) + ":" +
                                            std::to_string(server.port ? server.port : 853) + "/"
                                      : server.url;
@@ -256,14 +259,24 @@ private:
         if (endpoint.empty() && platform::is_numeric_ip(host))
             endpoint = host;
         auto bootstrap_servers = server.bootstrap;
-        if (endpoint.empty() && bootstrap_servers.empty() && server.use_system_bootstrap)
-            bootstrap_servers = platform::system_dns_servers();
+        if (endpoint.empty() && bootstrap_servers.empty() && server.use_system_bootstrap) {
+            if (server.route.interface_id.empty())
+                bootstrap_servers = platform::system_dns_servers();
+            else {
+                const auto network = NetworkMonitor::shared().snapshot();
+                const auto* info = find_interface(*network, server.route.interface_id);
+                if (!info || !info->up)
+                    throw Error("INTERFACE_DOWN", "Bootstrap interface is unavailable");
+                bootstrap_servers = info->dns_servers;
+            }
+        }
         if (endpoint.empty() && !bootstrap_servers.empty()) {
             std::string failure;
             for (const auto& bootstrap : bootstrap_servers) {
                 Server plain;
                 plain.ip = bootstrap;
                 plain.name = "bootstrap";
+                plain.route = server.route;
                 plain.timeout_ms = remaining(deadline);
                 for (uint16_t type : {uint16_t{1}, uint16_t{28}}) {
                     plain.timeout_ms = remaining(deadline);
@@ -286,6 +299,11 @@ private:
                         "or an explicit bootstrap resolver");
         List resolve;
         if (!endpoint.empty()) {
+            const auto numeric_endpoint = parse_numeric_endpoint(endpoint);
+            endpoint = numeric_endpoint.address;
+            handle.set(CURLOPT_ADDRESS_SCOPE,
+                       static_cast<long>(numeric_endpoint.scope6 ? numeric_endpoint.scope6
+                                                                 : server.route.scope6));
             // Numeric endpoint validation is independent of certificate identity.
             Server numeric;
             numeric.id = 1;
@@ -369,6 +387,7 @@ private:
     std::unique_ptr<Lease> acquire(const Server& server, Clock::time_point deadline) {
         std::string key = server.url + '|' + server.ip + '|' + std::to_string(server.port) + '|' +
                           server.hostname;
+        key += '|' + network_route_key(server.route);
         for (const auto& bootstrap : server.bootstrap)
             key += '|' + bootstrap;
         for (const auto& hash : server.hashes)

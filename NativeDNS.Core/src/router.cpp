@@ -134,6 +134,7 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
                 continue;
         }
         auto attempt = *candidate;
+        attempt.route = primary.route;
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
         attempt.timeout_ms = static_cast<uint32_t>(
@@ -187,6 +188,7 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
     key += configured ? "configured:" : "original:";
     key += std::to_string(configured ? primary.id : static_cast<uint32_t>(primary.protocol));
     key += '|';
+    key += network_route_key(primary.route) + '|';
     if (!configured)
         key += primary.ip + '|' + std::to_string(primary.port) + '|';
     key.append(2, '\0');
@@ -336,6 +338,16 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
             server = &*it;
         }
         selected_server = server;
+        auto routed_server = *server;
+        if (!decision.route.interface_id.empty()) {
+            routed_server.route = decision.route;
+            if (!rule.server_id) {
+                if (decision.interface_dns.empty())
+                    throw Error("INTERFACE_DNS", "Selected interface has no DNS resolver");
+                routed_server.ip = decision.interface_dns.front();
+                routed_server.port = 53;
+            }
+        }
         if (logger_.enabled(Level::verbose))
             log(Level::verbose,
                 "DNS_UPSTREAM",
@@ -343,7 +355,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                     " protocol=" + protocol_name(server->protocol) + " address=" + server->ip +
                     " port=" + std::to_string(server->port));
         exchange_started = std::chrono::steady_clock::now();
-        auto exchanged = exchange_cached(snapshot, request, *server, rule.server_id != 0);
+        auto exchanged = exchange_cached(snapshot, request, routed_server, rule.server_id != 0);
         result.packet = std::move(exchanged.first);
         result.server_id = exchanged.second;
         if (result.server_id) {

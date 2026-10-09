@@ -312,8 +312,7 @@ int main() {
               "Interface capability requirement cannot be bypassed by UDP fast path");
         nd::Logger policy_log;
         nd::Router policy_router(fast_path, policy_log);
-        check(policy_router.route(nd::make_query("example.com"), {}).error_code ==
-                  "NOT_IMPLEMENTED",
+        check(policy_router.route(nd::make_query("example.com"), {}).error_code == "INTERFACE_DOWN",
               "Router and UDP fast path agree about unsupported interface requirement");
         fast_path.rules.front().interface_id.clear();
         fast_path.rules.front().dnssec_validate = true;

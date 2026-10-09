@@ -1,5 +1,6 @@
 #include <nativedns/platform.hpp>
 #include <nativedns/config.hpp>
+#include <nativedns/network.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -14,33 +15,11 @@
 
 namespace nd::platform {
 std::vector<std::string> system_dns_servers() {
-    ULONG size = 16384;
-    std::vector<unsigned char> storage(size);
-    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
-    ULONG result = GetAdaptersAddresses(
-        AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST, nullptr, adapters, &size);
-    if (result == ERROR_BUFFER_OVERFLOW) {
-        storage.resize(size);
-        adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
-        result = GetAdaptersAddresses(
-            AF_UNSPEC, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST, nullptr, adapters, &size);
-    }
-    if (result == ERROR_NO_DATA)
-        return {};
-    if (result != NO_ERROR)
-        throw Error("BOOTSTRAP", "Cannot enumerate system DNS servers: " + std::to_string(result));
     std::vector<std::string> servers;
-    for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
-        if (adapter->OperStatus != IfOperStatusUp)
+    for (const auto& adapter : enumerate_interfaces()) {
+        if (!adapter.up)
             continue;
-        for (auto* dns = adapter->FirstDnsServerAddress; dns; dns = dns->Next) {
-            const auto* address = dns->Address.lpSockaddr;
-            if (!address || (address->sa_family != AF_INET && address->sa_family != AF_INET6))
-                continue;
-            const auto value =
-                address->sa_family == AF_INET
-                    ? format_ip(&reinterpret_cast<const sockaddr_in*>(address)->sin_addr, false)
-                    : format_ip(&reinterpret_cast<const sockaddr_in6*>(address)->sin6_addr, true);
+        for (const auto& value : adapter.dns_servers) {
             if (value == "127.0.0.1" || value == "::1" || value == "0.0.0.0" || value == "::")
                 continue;
             if (std::find(servers.begin(), servers.end(), value) == servers.end())

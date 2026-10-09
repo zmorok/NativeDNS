@@ -9,6 +9,12 @@ enum class Protocol { udp, tcp, doh, dot, doh3, doq, dnscrypt, anonymized_dnscry
 enum class Action { process, bypass, block };
 enum class BlockMode { zero_address, nxdomain, refused, silent_drop };
 enum class Level { errors_only, normal, verbose, debug };
+struct NetworkRoute {
+    std::string interface_id, interface_name;
+    uint32_t index4 = 0, index6 = 0, scope6 = 0;
+    uint64_t generation = 0;
+    bool operator==(const NetworkRoute&) const = default;
+};
 struct Server {
     uint32_t id = 0;
     std::string name;
@@ -24,6 +30,7 @@ struct Server {
     // Runtime-only: CoreHost may bootstrap using the current OS resolver list.
     // Never serialized; explicit bootstrap always takes precedence.
     bool use_system_bootstrap = false;
+    NetworkRoute route; // Runtime-only routing context, never serialized.
     std::string public_key, provider_name, relay;
     std::map<std::string, std::string> metadata;
     bool operator==(const Server&) const = default;

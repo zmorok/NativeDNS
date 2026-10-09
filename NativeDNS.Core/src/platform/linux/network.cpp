@@ -8,6 +8,20 @@
 #include <algorithm>
 
 namespace nd::platform {
+void bind_upstream_interface(std::intptr_t raw, const NetworkRoute& route) {
+    if (route.interface_id.empty())
+        return;
+    const auto network = NetworkMonitor::shared().snapshot();
+    const auto* info = find_interface(*network, route.interface_id);
+    if (!network->error.empty() || !info || !info->up || info->index4 != route.index4)
+        throw Error("INTERFACE_DOWN", "Required upstream interface is unavailable");
+    if (setsockopt(static_cast<int>(raw),
+                   SOL_SOCKET,
+                   SO_BINDTODEVICE,
+                   route.interface_name.c_str(),
+                   static_cast<socklen_t>(route.interface_name.size() + 1)) != 0)
+        throw Error("INTERFACE_BIND", "Cannot bind upstream socket to required device");
+}
 std::vector<InterfaceInfo> enumerate_interfaces() {
     ifaddrs* addresses = nullptr;
     if (getifaddrs(&addresses) != 0)
