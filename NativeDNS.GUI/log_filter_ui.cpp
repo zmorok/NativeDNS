@@ -3,6 +3,7 @@
 #include "bounded_table_header.hpp"
 #include "ui_preferences.hpp"
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QHeaderView>
 #include <QFileDialog>
@@ -333,7 +334,7 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     : QWidget(parent), ownedSettings_(settings ? nullptr : std::make_unique<QSettings>()),
       settings_(settings ? settings : ownedSettings_.get()), input_(new QLineEdit(this)),
       bookmark_(new QToolButton(this)), apply_(new QToolButton(this)), menu_(new QMenu(this)),
-      error_(new QLabel(this)), count_(new QLabel(this)), view_(new QPlainTextEdit(this)) {
+      error_(new QLabel(this)), count_(new QLabel(this)), view_(new LogDisplay(this)) {
     input_->setObjectName("logFilterInput");
     input_->setMaxLength(4096);
     input_->setClearButtonEnabled(true);
@@ -346,11 +347,13 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     error_->setTextFormat(Qt::PlainText);
     error_->setWordWrap(true);
     error_->hide();
-    view_->setObjectName("logDisplay");
-    view_->setReadOnly(true);
-    view_->setUndoRedoEnabled(false);
-    view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    view_->setView(logViewFromKey(settings_->value("ui/logView", "compact").toString()));
+    for (const auto& action : settings_->value("ui/logActions").toStringList())
+        if (action == "process" || action == "block" || action == "bypass")
+            shownActions_.insert(action);
+    commandsView_ = settings_->value("ui/logCommands", "with").toString() == "only"
+                        ? LogCommandsView::only
+                        : LogCommandsView::with_records;
     auto* bar = new QHBoxLayout;
     bar->setSpacing(3);
     bar->addWidget(bookmark_);
@@ -387,6 +390,7 @@ void LogPanel::retranslateUi() {
         makeActionIcon(ActionIcon::bookmark, palette().color(QPalette::Window).lightness() < 128));
     validateDraft();
     updateCount();
+    view_->retranslateUi();
 }
 void LogPanel::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
@@ -434,53 +438,173 @@ bool LogPanel::applyFilter() {
     return true;
 }
 void LogPanel::renderRecord(const LogRecord& record) {
-    auto cursor = QTextCursor(view_->document());
-    cursor.movePosition(QTextCursor::End);
-    QTextCharFormat format;
-    if (record.error)
-        format.setForeground(palette().color(QPalette::Window).lightness() < 128
-                                 ? QColor(255, 105, 105)
-                                 : QColor(190, 0, 0));
-    cursor.insertText(
-        '[' + record.timestamp.toString("dd.MM HH:mm:ss") + "] " + record.message + '\n', format);
+    view_->appendRecord(record);
     ++visible_;
 }
+bool LogPanel::matches(const LogRecord& record) const {
+    if (!filter_.matches(record))
+        return false;
+    if (isTechnicalLogRecord(record))
+        return true;
+    return commandsView_ == LogCommandsView::with_records &&
+           (shownActions_.isEmpty() || shownActions_.contains(record.action));
+}
 void LogPanel::appendRecords(const QList<LogRecord>& records) {
+    if (records.isEmpty())
+        return;
     auto* scroll = view_->verticalScrollBar();
     const int position = scroll->value();
-    const bool follow = position >= scroll->maximum() - 2;
+    const bool follow = position == scroll->maximum();
     view_->setUpdatesEnabled(false);
     for (auto record : records) {
         record.message.replace('\n', ' ').replace('\r', ' ');
         if (!record.timestamp.isValid())
             record.timestamp = QDateTime::currentDateTime();
         if (records_.size() == maximumLogRecords) {
-            if (filter_.matches(records_.front())) {
-                QTextCursor cursor(view_->document());
-                cursor.movePosition(QTextCursor::Start);
-                cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor);
-                cursor.removeSelectedText();
+            if (matches(records_.front())) {
+                view_->removeFirstRecord();
                 --visible_;
             }
             records_.pop_front();
         }
         records_.push_back(std::move(record));
-        if (filter_.matches(records_.back()))
+        if (matches(records_.back()))
             renderRecord(records_.back());
     }
+    view_->finishUpdate(follow, position);
     view_->setUpdatesEnabled(true);
-    scroll->setValue(follow ? scroll->maximum() : std::min(position, scroll->maximum()));
     updateCount();
+}
+void addLogViewActions(QMenu* menu, LogPanel& panel) {
+    auto* group = new QActionGroup(menu);
+    group->setExclusive(true);
+    for (const auto view : {LogView::compact, LogView::details, LogView::table}) {
+        const char* key = logViewTextKey(view);
+        auto* action = menu->addAction(uiText(key));
+        action->setProperty("uiTextKey", QString::fromUtf8(key));
+        action->setCheckable(true);
+        action->setData(static_cast<int>(view));
+        group->addAction(action);
+        action->setChecked(panel.logView() == view);
+        QObject::connect(action, &QAction::triggered, &panel, [&panel, view, group] {
+            panel.setLogView(view);
+            for (auto* candidate : group->actions())
+                candidate->setChecked(candidate->data().toInt() ==
+                                      static_cast<int>(panel.logView()));
+        });
+    }
+}
+void addLogActionFilterActions(QMenu* menu, LogPanel& panel) {
+    auto* all = menu->addAction(uiText("All"));
+    all->setProperty("uiTextKey", "All");
+    all->setData("all");
+    all->setCheckable(true);
+    menu->addSeparator();
+    for (const auto* key : {"Process", "Block", "Bypass"}) {
+        auto* action = menu->addAction(uiText(key));
+        action->setProperty("uiTextKey", QString::fromUtf8(key));
+        action->setData(QString::fromUtf8(key).toLower());
+        action->setCheckable(true);
+    }
+    const auto refresh = [menu, &panel] {
+        for (auto* action : menu->actions())
+            if (!action->isSeparator())
+                action->setChecked(action->data().toString() == "all"
+                                       ? panel.shownActions().isEmpty()
+                                       : panel.shownActions().contains(action->data().toString()));
+    };
+    refresh();
+    QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
+    for (auto* action : menu->actions()) {
+        if (action->isSeparator())
+            continue;
+        QObject::connect(
+            action, &QAction::triggered, &panel, [&panel, action, refresh](bool checked) {
+                auto selected = panel.shownActions();
+                const auto value = action->data().toString();
+                if (value == "all")
+                    selected.clear();
+                else if (checked)
+                    selected.insert(value);
+                else
+                    selected.remove(value);
+                panel.setShownActions(selected);
+                refresh();
+            });
+    }
+}
+void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu) {
+    auto* group = new QActionGroup(menu);
+    group->setExclusive(true);
+    for (const auto* key : {"Only", "With"}) {
+        auto* action = menu->addAction(uiText(key));
+        action->setProperty("uiTextKey", QString::fromUtf8(key));
+        action->setData(QString::fromUtf8(key) == "Only"
+                            ? static_cast<int>(LogCommandsView::only)
+                            : static_cast<int>(LogCommandsView::with_records));
+        action->setCheckable(true);
+        group->addAction(action);
+    }
+    const auto refresh = [group, &panel, actionMenu] {
+        for (auto* action : group->actions())
+            action->setChecked(action->data().toInt() == static_cast<int>(panel.commandsView()));
+        if (actionMenu)
+            actionMenu->menuAction()->setEnabled(panel.commandsView() ==
+                                                 LogCommandsView::with_records);
+    };
+    refresh();
+    QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
+    for (auto* action : group->actions())
+        QObject::connect(action, &QAction::triggered, &panel, [&panel, action, refresh] {
+            panel.setCommandsView(static_cast<LogCommandsView>(action->data().toInt()));
+            refresh();
+        });
+}
+bool LogPanel::setCommandsView(LogCommandsView view) {
+    settings_->setValue("ui/logCommands", view == LogCommandsView::only ? "only" : "with");
+    settings_->sync();
+    if (settings_->status() != QSettings::NoError) {
+        QMessageBox::warning(this, "NativeDNS", uiText("Cannot save log commands view."));
+        return false;
+    }
+    commandsView_ = view;
+    rebuild();
+    return true;
+}
+bool LogPanel::setShownActions(const QSet<QString>& actions) {
+    QStringList selected;
+    for (const auto* action : {"process", "block", "bypass"})
+        if (actions.contains(QString::fromLatin1(action)))
+            selected << QString::fromLatin1(action);
+    settings_->setValue("ui/logActions", selected);
+    settings_->sync();
+    if (settings_->status() != QSettings::NoError) {
+        QMessageBox::warning(this, "NativeDNS", uiText("Cannot save log action filter."));
+        return false;
+    }
+    shownActions_ = QSet<QString>(selected.begin(), selected.end());
+    rebuild();
+    return true;
+}
+bool LogPanel::setLogView(LogView view) {
+    settings_->setValue("ui/logView", logViewKey(view));
+    settings_->sync();
+    if (settings_->status() != QSettings::NoError) {
+        QMessageBox::warning(this, "NativeDNS", uiText("Cannot save log view."));
+        return false;
+    }
+    view_->setView(view);
+    return true;
 }
 void LogPanel::rebuild() {
     view_->setUpdatesEnabled(false);
     view_->clear();
     visible_ = 0;
     for (const auto& record : records_)
-        if (filter_.matches(record))
+        if (matches(record))
             renderRecord(record);
+    view_->finishUpdate(true);
     view_->setUpdatesEnabled(true);
-    view_->verticalScrollBar()->setValue(view_->verticalScrollBar()->maximum());
     updateCount();
 }
 void LogPanel::clear() {

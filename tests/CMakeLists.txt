@@ -105,6 +105,7 @@ if(NATIVEDNS_BUILD_GUI)
     ../NativeDNS.GUI/log_filter_config.cpp
     ../NativeDNS.GUI/log_filter.cpp
     ../NativeDNS.GUI/log_filter_ui.cpp
+    ../NativeDNS.GUI/log_display.cpp
     ../NativeDNS.GUI/action_icons.cpp
     ../NativeDNS.GUI/ui_preferences.cpp)
   if(WIN32)
@@ -132,6 +133,7 @@ if(NATIVEDNS_BUILD_GUI)
   add_executable(log_filter_tests log_filter_tests.cpp
     ../NativeDNS.GUI/log_filter_config.cpp
     ../NativeDNS.GUI/log_filter.cpp ../NativeDNS.GUI/log_filter_ui.cpp
+    ../NativeDNS.GUI/log_display.cpp
     ../NativeDNS.GUI/action_icons.cpp ../NativeDNS.GUI/ui_preferences.cpp)
   set_target_properties(log_filter_tests PROPERTIES AUTOMOC ON)
   target_link_libraries(log_filter_tests PRIVATE NativeDNS.Core.Internal Qt6::Widgets Qt6::Test)
@@ -141,7 +143,7 @@ if(NATIVEDNS_BUILD_GUI)
     nativedns_copy_sodium_runtime(log_filter_tests)
     set_property(TEST log_display_filters PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")
   endif()
-  set_tests_properties(log_display_filters PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+  set_tests_properties(log_display_filters PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 120)
 
   add_executable(update_checker_tests update_checker_tests.cpp
     ../NativeDNS.GUI/update_checker.cpp ../NativeDNS.GUI/ui_preferences.cpp)

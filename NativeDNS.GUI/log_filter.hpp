@@ -23,3 +23,4 @@ private:
 };
 
 QList<LogRecord> decodeLogRecords(const QString& payload);
+bool isTechnicalLogRecord(const LogRecord& record);

@@ -11,6 +11,7 @@ set(NATIVEDNS_GUI_SOURCES
   log_filter_config.cpp
   log_filter.cpp
   log_filter_ui.cpp
+  log_display.cpp
   action_icons.cpp
   ui_preferences.cpp
   single_instance.cpp

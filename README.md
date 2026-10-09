@@ -48,6 +48,17 @@ The production desktop UI uses **Qt 6 Widgets** on both platforms.
 The GUI provides persistent light/dark themes and English/Russian interface languages under `Other`.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
 The live log supports compound display filters and saved filter management with import/export.
+`Log > View` selects a persistent log view: short line, a line with expandable details, or table.
+All views retain the same filters and access to the original
+record. `Log > Details` controls verbosity independently.
+`Log > Show only action...` filters Process, Block and Bypass independently; multiple actions can
+be selected. All (the default) clears these selections and includes events without a routing action.
+The selection is remembered and combined with the text filter. New records follow the bottom
+immediately when the log is already scrolled to the end; scrolling up pauses this following.
+`Log > Show only commands...` selects Only (technical events such as initialization, reload and
+network changes) or With (technical events alongside the selected DNS actions, the default).
+Only temporarily disables action selection without losing it; With restores its effect.
+The mode is remembered. The text filter and verbosity level continue to apply in both modes.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
 
 ## Application lifecycle

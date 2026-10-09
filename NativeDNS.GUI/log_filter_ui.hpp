@@ -1,8 +1,10 @@
 #pragma once
 #include "log_filter.hpp"
 #include "log_filter_config.hpp"
+#include "log_display.hpp"
 #include <QDialog>
 #include <QSettings>
+#include <QSet>
 #include <QWidget>
 #include <deque>
 
@@ -28,6 +30,8 @@ private:
     QList<SavedLogFilter> filters_;
 };
 
+enum class LogCommandsView { with_records, only };
+
 class LogPanel final : public QWidget {
 public:
     explicit LogPanel(QWidget* parent = nullptr, QSettings* settings = nullptr);
@@ -38,6 +42,18 @@ public:
     void clear();
     void retranslateUi();
     bool applyFilter();
+    LogView logView() const {
+        return view_->view();
+    }
+    bool setLogView(LogView view);
+    const QSet<QString>& shownActions() const {
+        return shownActions_;
+    }
+    bool setShownActions(const QSet<QString>& actions);
+    LogCommandsView commandsView() const {
+        return commandsView_;
+    }
+    bool setCommandsView(LogCommandsView view);
     const QList<SavedLogFilter>& savedFilters() const {
         return saved_;
     }
@@ -47,6 +63,7 @@ protected:
 
 private:
     void validateDraft();
+    bool matches(const LogRecord& record) const;
     void rebuild();
     void renderRecord(const LogRecord& record);
     void updateCount();
@@ -63,12 +80,17 @@ private:
     QMenu* menu_;
     QLabel* error_;
     QLabel* count_;
-    QPlainTextEdit* view_;
+    LogDisplay* view_;
     QList<SavedLogFilter> saved_;
     QString selectedId_, appliedExpression_;
     LogFilter filter_;
+    QSet<QString> shownActions_;
+    LogCommandsView commandsView_ = LogCommandsView::with_records;
     std::deque<LogRecord> records_;
     int visible_ = 0;
 };
 
 void showLogFilterHelp(QWidget* parent);
+void addLogViewActions(QMenu* menu, LogPanel& panel);
+void addLogActionFilterActions(QMenu* menu, LogPanel& panel);
+void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu = nullptr);

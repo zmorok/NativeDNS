@@ -2,6 +2,7 @@
 #include "ui_preferences.hpp"
 #include <nativedns/dns.hpp>
 #include <QRegularExpression>
+#include <QStringList>
 #include <stdexcept>
 
 struct LogFilter::Node {
@@ -186,6 +187,23 @@ std::optional<LogFilter> LogFilter::compile(const QString& expression, QString& 
 }
 bool LogFilter::matches(const LogRecord& record) const {
     return !root_ || root_->matches(record);
+}
+
+bool isTechnicalLogRecord(const LogRecord& record) {
+    if (!record.address.isEmpty() || !record.dnsType.isEmpty() || !record.action.isEmpty())
+        return false;
+    if (record.code == "DNS_CACHE_CLEARED")
+        return true;
+    // Query/packet traces can lack routing metadata but are not lifecycle events.
+    static const QStringList queryEvents{"WINDIVERT_RULE_FAST_PATH",
+                                         "WINDIVERT_TCP_REFLECT",
+                                         "WINDIVERT_UPSTREAM_BYPASS",
+                                         "TCP_PROXY_ACCEPT",
+                                         "TCP_PROXY_REJECT",
+                                         "TCP_PROXY_IO",
+                                         "TCP_PROXY_BUSY",
+                                         "CAPTIVE_PORTAL_BYPASS"};
+    return !record.code.startsWith("DNS_") && !queryEvents.contains(record.code);
 }
 
 QList<LogRecord> decodeLogRecords(const QString& payload) {

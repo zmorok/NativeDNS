@@ -1340,7 +1340,8 @@ void NativeDnsWindow::buildUi() {
     auto* logMenu = addMenu("&Log");
     auto* clear = addAction(logMenu, "Clear Display");
     auto* restart = mark(new QAction(this), "Restart");
-    auto* screen = addSubMenu(logMenu, "Screen");
+    auto* screen = addSubMenu(logMenu, "Details");
+    screen->setObjectName("logDetailsMenu");
     auto* group = new QActionGroup(this);
     group->setExclusive(true);
     const int configuredLevel = std::clamp(static_cast<int>(config_.logging.screen), 0, 3);
@@ -1357,6 +1358,15 @@ void NativeDnsWindow::buildUi() {
             saveConfiguration();
         });
     }
+    auto* views = addSubMenu(logMenu, "View");
+    views->setObjectName("logViewMenu");
+    addLogViewActions(views, *log_);
+    auto* actions = addSubMenu(logMenu, "Show only action...");
+    actions->setObjectName("logActionFilterMenu");
+    addLogActionFilterActions(actions, *log_);
+    auto* commands = addSubMenu(logMenu, "Show only commands...");
+    commands->setObjectName("logCommandsFilterMenu");
+    addLogCommandFilterActions(commands, *log_, actions);
     logMenu->addSeparator();
     auto* fileEnabled = addAction(logMenu, "Write diagnostic file");
     fileEnabled->setCheckable(true);
