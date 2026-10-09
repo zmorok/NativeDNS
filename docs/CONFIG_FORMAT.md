@@ -147,6 +147,28 @@ Imported runtime-sensitive options that NativeDNS cannot yet enforce should rema
 
 ## Blocking and DNSSEC semantics
 
+Existing Settings metadata keys are executed by the current backend: native keys
+take precedence over imported `yoga.settings.` keys. Boolean values accept
+`0`/`1` or `false`/`true`; invalid values are rejected before applying a profile.
+
+| Key | Windows behavior |
+|---|---|
+| `clearDnsCache` | Flush the Windows resolver cache after Start and successful Reload. Failures are logged. |
+| `ttlMin`, `ttlMax` | Clamp ordinary RR TTLs in Process replies before caching; range 0..2147483647, minimum <= maximum. |
+| `blockTcpPort53` | Reject external TCP/53 with a reset, retaining Core-owned upstream sockets. |
+| `interceptOthers` | Include third-party injected packets when enabled; changing it requires a CoreHost restart. |
+| `captivePortalDetection` | Permit NCSI discovery queries through the unbound Process Default. On an OS-confirmed captive interface, that Default retains the original resolver until the portal clears. |
+
+TTL limits leave Block replies, explicit Bypass, OPT pseudo-record fields and
+authenticated/signed DNS replies unchanged. Cache aging can reduce a delivered
+TTL below `ttlMin`; it never extends an entry on a cache hit. Captive portal
+handling does not override explicit rules, Block, DNSSEC requirements or a bound
+Default. Disconnected adapters alone are not considered captive portals.
+
+Linux currently reports system cache flush and injected-packet/TCP-block options
+as unsupported. It has no OS captive portal detection source; enabling portal
+support emits `CAPTIVE_PORTAL_UNAVAILABLE` on transparent startup.
+
 `zero address` returns `0.0.0.0` for A and `::` for AAAA with TTL 0. For every other query type it returns NOERROR with no answers (NODATA). Synthetic replies preserve the original question, recursion-desired/checking-disabled bits, and an EDNS(0) OPT record (including the DO bit) when present.
 
 The server `dnssec` field is capability metadata only. Local DNSSEC validation and imported rule flags `validate` / `rejectUnsigned` are not implemented. Such rules fail explicitly with `NOT_IMPLEMENTED`, and the Qt rule editor does not expose those controls.

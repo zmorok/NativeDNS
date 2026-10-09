@@ -26,6 +26,7 @@ Packet fit_udp_response(const Packet& request, const Packet& response);
 Question parse_question(std::span<const uint8_t> packet);
 DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expected);
 Packet age_dns_response(const Packet& response, uint16_t transaction_id, uint32_t elapsed_seconds);
+Packet clamp_dns_ttl(const Packet& response, uint32_t minimum, uint32_t maximum);
 std::string dns_type_name(uint16_t type);
 class IDnsTransport {
 public:

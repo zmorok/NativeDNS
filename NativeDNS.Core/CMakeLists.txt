@@ -26,6 +26,7 @@ if(WIN32)
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/windows/platform.cpp
     src/platform/windows/network.cpp
+    src/platform/windows/network_policy.cpp
     src/platform/windows/interception_conflicts.cpp
     src/platform/windows/dns_transport.cpp
     src/platform/windows/local_proxy.cpp
@@ -74,7 +75,7 @@ foreach(target NativeDNS.Core NativeDNS.Core.Internal)
   target_include_directories(${target} PUBLIC include)
   target_link_libraries(${target} PUBLIC CURL::libcurl Sodium::sodium)
   if(WIN32)
-    target_link_libraries(${target} PUBLIC ole32 oleaut32 taskschd advapi32 shell32 ws2_32 normaliz iphlpapi)
+    target_link_libraries(${target} PUBLIC ole32 oleaut32 uuid taskschd advapi32 shell32 ws2_32 normaliz iphlpapi)
   else()
     target_link_libraries(${target} PUBLIC pthread)
   endif()

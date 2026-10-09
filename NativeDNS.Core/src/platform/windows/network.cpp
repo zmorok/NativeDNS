@@ -81,9 +81,13 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         throw Error("INTERFACE_ENUMERATION",
                     "Cannot enumerate adapters: " + std::to_string(result));
     std::vector<InterfaceInfo> interfaces;
+    const auto captive = captive_portal_adapters();
     for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
         InterfaceInfo info;
         info.id = adapter->AdapterName ? adapter->AdapterName : "";
+        info.captive_portal = std::any_of(captive.begin(), captive.end(), [&](const auto& id) {
+            return _stricmp(id.c_str(), info.id.c_str()) == 0;
+        });
         info.name = adapter->FriendlyName ? narrow(adapter->FriendlyName) : "";
         info.description = adapter->Description ? narrow(adapter->Description) : "";
         info.dns_suffix = adapter->DnsSuffix ? narrow(adapter->DnsSuffix) : "";

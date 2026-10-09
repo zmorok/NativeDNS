@@ -1,5 +1,6 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/host.hpp>
+#include <nativedns/platform.hpp>
 #include <curl/curl.h>
 #include <iostream>
 void check(bool value, const char* message) {
@@ -72,6 +73,9 @@ int main(int argc, char**) {
                   "Runtime system bootstrap policy is not persisted");
         }
         if (argc > 1) {
+#ifdef _WIN32
+            nd::platform::flush_dns_cache();
+#endif
             auto config = nd::import_yoga(FIXTURE_PATH).config;
             nd::prepare_secure_endpoints(config);
             for (uint32_t id : {1001u, 1002u, 1003u}) {

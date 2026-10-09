@@ -8,6 +8,13 @@
 #include <algorithm>
 
 namespace nd::platform {
+std::vector<std::string> captive_portal_adapters() {
+    return {}; // No Windows NCSI-equivalent source is assumed on POSIX.
+}
+void flush_dns_cache() {
+    throw Error("NOT_IMPLEMENTED",
+                "System DNS cache flush requires a configured Linux resolver service");
+}
 std::vector<InterceptionConflict> interception_conflicts() {
     return {};
 }

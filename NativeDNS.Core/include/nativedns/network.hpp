@@ -16,6 +16,7 @@ struct InterfaceInfo {
     uint64_t luid = 0;
     uint32_t index4 = 0, index6 = 0, metric4 = 0, metric6 = 0, mtu = 0;
     bool up = false;
+    bool captive_portal = false;
     std::vector<std::string> addresses, dns_servers, gateways;
     bool operator==(const InterfaceInfo&) const = default;
 };
@@ -59,6 +60,7 @@ struct InterceptionConflict {
 };
 std::vector<InterceptionConflict> interception_conflicts();
 std::vector<InterfaceInfo> enumerate_interfaces();
+std::vector<std::string> captive_portal_adapters();
 void bind_upstream_interface(std::intptr_t socket, const NetworkRoute& route);
 } // namespace platform
 } // namespace nd

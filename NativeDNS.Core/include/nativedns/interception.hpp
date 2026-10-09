@@ -61,6 +61,7 @@ private:
 };
 
 Packet make_intercepted_udp_response(const Packet& captured, const Packet& dns_response);
+Packet make_intercepted_tcp_reset(const Packet& captured);
 Packet make_reflected_tcp_packet(const Packet& captured,
                                  uint16_t proxy_port,
                                  bool toward_proxy,

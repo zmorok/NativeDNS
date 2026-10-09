@@ -344,6 +344,30 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
     }
     return answer;
 }
+Packet clamp_dns_ttl(const Packet& response, uint32_t minimum, uint32_t maximum) {
+    if (minimum > maximum)
+        throw Error("CONFIG_SETTING", "TTL minimum must not exceed maximum");
+    auto result = response;
+    const auto question = parse_question(result);
+    const auto parsed = parse_response(result, question);
+    if (parsed.truncated || parsed.authenticated_data)
+        return result;
+    size_t at = question.end;
+    const uint32_t records = word(result, 6) + word(result, 8) + word(result, 10);
+    std::vector<size_t> offsets;
+    for (uint32_t index = 0; index < records; ++index) {
+        (void)name(result, at);
+        const auto type = word(result, at), length = word(result, at + 8);
+        if (type == 46 || type == 249 || type == 250)
+            return response; // Signed data must retain its original lifetime.
+        if (type != 41)
+            offsets.push_back(at + 4);
+        at += 10 + length;
+    }
+    for (const auto offset : offsets)
+        put_dword(result, offset, std::clamp(dword(result, offset), minimum, maximum));
+    return result;
+}
 Packet age_dns_response(const Packet& response, uint16_t transaction_id, uint32_t elapsed_seconds) {
     auto result = response;
     const auto question = parse_question(result);

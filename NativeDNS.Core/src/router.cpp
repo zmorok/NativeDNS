@@ -269,6 +269,8 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
     }
     try {
         auto exchanged = exchange_group(snapshot, request, primary);
+        exchanged.first =
+            clamp_dns_ttl(exchanged.first, snapshot.options.ttl_min, snapshot.options.ttl_max);
         const auto parsed = parse_response(exchanged.first, parse_question(request));
         const uint32_t used_id = configured ? exchanged.second->id : 0;
         {
@@ -358,7 +360,11 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         result.action = rule.action;
         if (!decision.error_code.empty())
             throw Error(decision.error_code, decision.message);
-        if (rule.action == Action::bypass) {
+        if (decision.captive_bypass || rule.action == Action::bypass) {
+            if (decision.captive_bypass)
+                log(Level::normal,
+                    "CAPTIVE_PORTAL_BYPASS",
+                    "Preserving OS resolver for captive portal discovery");
             if (logger_.enabled(Level::normal))
                 log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, &original));
             result.disposition = Disposition::forward_original;

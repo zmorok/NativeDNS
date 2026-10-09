@@ -45,9 +45,11 @@ private:
 
 public:
     struct Snapshot {
-        explicit Snapshot(Config value) : config(std::move(value)) {
+        explicit Snapshot(Config value)
+            : config(std::move(value)), options(runtime_options(config)) {
         }
         Config config;
+        RuntimeOptions options;
 
     private:
         friend class Router;

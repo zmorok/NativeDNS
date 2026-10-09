@@ -76,6 +76,15 @@ public:
             throw Error("LIFECYCLE", "Linux interception is not stopped");
         status_.state = State::starting;
         try {
+            const auto options = runtime_options(router_->snapshot()->config);
+            if (options.intercept_others || options.block_tcp53)
+                throw Error("NOT_IMPLEMENTED",
+                            "Linux interception does not implement injected-packet selection or "
+                            "TCP/53 blocking");
+            if (options.captive_portal_detection)
+                logger_.write(Level::errors_only,
+                              "CAPTIVE_PORTAL_UNAVAILABLE",
+                              "Linux does not provide a captive portal detection source");
             if (::geteuid() != 0)
                 throw Error("ELEVATION_REQUIRED",
                             "Linux transparent interception requires root/CAP_NET_ADMIN CoreHost "
@@ -134,6 +143,11 @@ public:
         router_->cancel_pending();
     }
     void reload(Config config) override {
+        const auto options = runtime_options(config);
+        if (options.intercept_others || options.block_tcp53)
+            throw Error("NOT_IMPLEMENTED",
+                        "Linux interception does not implement injected-packet selection or TCP/53 "
+                        "blocking");
         router_->reload(std::move(config));
     }
     InterceptionStatus status() const override {

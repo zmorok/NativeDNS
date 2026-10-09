@@ -38,6 +38,26 @@ int main() {
         state[0].up = false;
         monitor.refresh();
         check(monitor.snapshot()->generation == 4, "Disconnect advances generation");
+        {
+            auto portal = std::make_shared<nd::NetworkSnapshot>();
+            nd::InterfaceInfo hotspot;
+            hotspot.id = "hotspot";
+            hotspot.up = hotspot.captive_portal = true;
+            portal->interfaces.push_back(hotspot);
+            auto config = nd::default_config();
+            config.rules.back().server_id = 10;
+            config.settings["captivePortalDetection"] = "1";
+            check(nd::evaluate_rule(config, "login.portal", portal).captive_bypass,
+                  "Confirmed captive portal retains the original default resolver");
+            portal->interfaces.front().captive_portal = false;
+            check(!nd::evaluate_rule(config, "login.portal", portal).captive_bypass,
+                  "Normal network does not bypass a configured upstream");
+            check(nd::evaluate_rule(config, "www.msftconnecttest.com", portal).captive_bypass,
+                  "OS connectivity probe can discover a captive portal");
+            config.rules.back().action = nd::Action::block;
+            check(!nd::evaluate_rule(config, "www.msftconnecttest.com", portal).captive_bypass,
+                  "Captive portal support cannot override Block");
+        }
         fail = true;
         monitor.refresh();
         check(!monitor.snapshot()->error.empty(), "Enumeration failure is visible");

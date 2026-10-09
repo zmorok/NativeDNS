@@ -22,10 +22,17 @@ std::string normalize_dns_name(const std::string& text, bool pattern = false);
 std::vector<std::string> split_patterns(const std::string& text);
 bool host_matches(const std::string& normalized_host, const std::string& normalized_pattern);
 void validate(const Config& config);
+struct RuntimeOptions {
+    bool clear_dns_cache = false, block_tcp53 = false, intercept_others = false;
+    bool captive_portal_detection = false, ignore_interface_down = false;
+    uint32_t ttl_min = 0, ttl_max = 2147483647;
+};
+RuntimeOptions runtime_options(const Config& config);
 const Rule& match_rule(const Config& config, const std::string& hostname);
 struct RuleDecision {
     const Rule* rule = nullptr;
     bool reinject_udp = false;
+    bool captive_bypass = false;
     NetworkRoute route;
     std::vector<std::string> interface_dns;
     std::string error_code, message;

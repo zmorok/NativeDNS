@@ -83,6 +83,16 @@ void CoreHost::start() {
     try {
         logger_.write(Level::verbose, "INTERCEPTION_STARTING", "Starting DNS interception backend");
         interception_->start();
+        if (runtime_options(config_).clear_dns_cache) {
+            try {
+                platform::flush_dns_cache();
+                logger_.write(Level::normal,
+                              "DNS_CACHE_CLEARED",
+                              "System DNS cache cleared after interception start");
+            } catch (const Error& error) {
+                logger_.write(Level::errors_only, error.code, error.what());
+            }
+        }
         stage = "command IPC";
         detail::fault_point("core.command_ipc");
         logger_.write(
@@ -175,6 +185,16 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             interception_->reload(next);
             config_ = std::move(next);
             logger_.set_display_level(config_.logging.screen);
+            if (runtime_options(config_).clear_dns_cache) {
+                try {
+                    platform::flush_dns_cache();
+                    logger_.write(Level::normal,
+                                  "DNS_CACHE_CLEARED",
+                                  "System DNS cache cleared after reload");
+                } catch (const Error& error) {
+                    logger_.write(Level::errors_only, error.code, error.what());
+                }
+            }
             try {
                 if (config_.logging.file_enabled && !file_log_enabled_)
                     file_log_path_ = timestamped_log_path(file_log_directory());
@@ -219,6 +239,13 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
     if (operation == IpcOperation::start) {
         std::lock_guard lock(mutex_);
         interception_->start();
+        if (runtime_options(config_).clear_dns_cache) {
+            try {
+                platform::flush_dns_cache();
+            } catch (const Error& error) {
+                logger_.write(Level::errors_only, error.code, error.what());
+            }
+        }
         return {0, "RUNNING port=" + std::to_string(interception_->status().port)};
     }
     if (operation == IpcOperation::stop) {

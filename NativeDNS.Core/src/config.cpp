@@ -394,6 +394,44 @@ std::map<std::string, std::string> read_metadata(const Node& node) {
     return result;
 }
 } // namespace
+RuntimeOptions runtime_options(const Config& config) {
+    const auto value = [&](const std::string& key) -> const std::string* {
+        auto found = config.settings.find(key);
+        if (found == config.settings.end())
+            found = config.settings.find("yoga.settings." + key);
+        return found == config.settings.end() ? nullptr : &found->second;
+    };
+    const auto boolean = [&](const std::string& key) {
+        const auto text = value(key);
+        if (!text || *text == "0" || *text == "false")
+            return false;
+        if (*text == "1" || *text == "true")
+            return true;
+        throw Error("CONFIG_SETTING", key + " must be 0 or 1");
+    };
+    const auto number = [&](const std::string& key, uint32_t fallback) {
+        const auto text = value(key);
+        if (!text)
+            return fallback;
+        uint32_t result = 0;
+        const auto parsed = std::from_chars(text->data(), text->data() + text->size(), result);
+        if (parsed.ec != std::errc{} || parsed.ptr != text->data() + text->size() ||
+            result > 2147483647)
+            throw Error("CONFIG_SETTING", key + " must be 0..2147483647");
+        return result;
+    };
+    RuntimeOptions options;
+    options.clear_dns_cache = boolean("clearDnsCache");
+    options.block_tcp53 = boolean("blockTcpPort53");
+    options.intercept_others = boolean("interceptOthers");
+    options.captive_portal_detection = boolean("captivePortalDetection");
+    options.ignore_interface_down = boolean("ignore_rule_if_interface_down");
+    options.ttl_min = number("ttlMin", 0);
+    options.ttl_max = number("ttlMax", 2147483647);
+    if (options.ttl_min > options.ttl_max)
+        throw Error("CONFIG_SETTING", "ttlMin must not exceed ttlMax");
+    return options;
+}
 ImportResult import_yoga(const std::filesystem::path& path) {
     const auto root = read_xml(path);
     if (root.name != "YogaDnsProfile" || attr(root, "file_format") != "1")
@@ -406,7 +444,11 @@ ImportResult import_yoga(const std::filesystem::path& path) {
         if (node.name == "Settings") {
             for (const auto& [key, value] : node.attrs) {
                 result.config.settings["yoga.settings." + key] = value;
-                result.warnings.push_back("Preserved Yoga setting pending runtime support: " + key);
+                if (key != "clearDnsCache" && key != "ttlMin" && key != "ttlMax" &&
+                    key != "blockTcpPort53" && key != "interceptOthers" &&
+                    key != "captivePortalDetection" && key != "ignore_rule_if_interface_down")
+                    result.warnings.push_back("Preserved Yoga setting pending runtime support: " +
+                                              key);
             }
             for (const auto& child : node.children) {
                 if (child.name != "DnsChecker" || !child.children.empty())

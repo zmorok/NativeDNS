@@ -293,6 +293,38 @@ Packet make_intercepted_udp_response(const Packet& captured, const Packet& dns_r
     return result;
 }
 
+Packet make_intercepted_tcp_reset(const Packet& captured) {
+    const auto view = tcp_view(captured);
+    if (read16(captured.data() + view.tcp + 2) != 53)
+        throw Error("INTERCEPT_PACKET", "Reset requires a TCP DNS destination");
+    if (captured[view.tcp + 13] & 0x04)
+        return {}; // Never answer a reset with another reset.
+    Packet result(captured.begin(), captured.begin() + static_cast<ptrdiff_t>(view.tcp + 20));
+    std::swap(result[view.tcp], result[view.tcp + 2]);
+    std::swap(result[view.tcp + 1], result[view.tcp + 3]);
+    std::fill(result.begin() + static_cast<ptrdiff_t>(view.tcp + 4), result.end(), 0);
+    result[view.tcp + 12] = 0x50;
+    if (captured[view.tcp + 13] & 0x10) {
+        std::copy_n(captured.begin() + static_cast<ptrdiff_t>(view.tcp + 8),
+                    4,
+                    result.begin() + static_cast<ptrdiff_t>(view.tcp + 4));
+        result[view.tcp + 13] = 0x04;
+    } else {
+        const auto* sequence = captured.data() + view.tcp + 4;
+        uint32_t acknowledgement = (static_cast<uint32_t>(sequence[0]) << 24) |
+                                   (static_cast<uint32_t>(sequence[1]) << 16) |
+                                   (static_cast<uint32_t>(sequence[2]) << 8) | sequence[3];
+        acknowledgement += static_cast<uint32_t>(captured.size() - view.payload) +
+                           ((captured[view.tcp + 13] & 0x02) ? 1u : 0u) +
+                           ((captured[view.tcp + 13] & 0x01) ? 1u : 0u);
+        for (unsigned byte = 0; byte < 4; ++byte)
+            result[view.tcp + 8 + byte] = static_cast<uint8_t>(acknowledgement >> (24 - 8 * byte));
+        result[view.tcp + 13] = 0x14;
+    }
+    write16(result.data() + (view.ipv6 ? 4 : 2),
+            static_cast<uint16_t>(result.size() - (view.ipv6 ? 40 : 0)));
+    return make_reflected_tcp_packet(result, 53, false, 53);
+}
 bool should_reinject_udp_immediately(const Config& config, const Packet& captured) {
     const auto view = udp_view(captured);
     const Packet query(captured.begin() + static_cast<ptrdiff_t>(view.payload), captured.end());
@@ -406,9 +438,16 @@ struct WinDivertInterception::Impl {
     void inject(const Packet& packet, WINDIVERT_ADDRESS address) {
         UINT sent = 0;
         if (!send(handle, packet.data(), static_cast<UINT>(packet.size()), &sent, &address) ||
-            sent != packet.size())
+            sent != packet.size()) {
+            if (address.Impostor && GetLastError() == ERROR_HOST_UNREACHABLE) {
+                logger.write(Level::errors_only,
+                             "INTERCEPT_LOOP_PREVENTED",
+                             "Injected packet exhausted its hop limit");
+                return;
+            }
             throw Error("WINDIVERT_SEND",
                         "WinDivertSend failed: " + std::to_string(GetLastError()));
+        }
     }
     void process(Job job) {
         try {
@@ -491,6 +530,17 @@ struct WinDivertInterception::Impl {
                         if (destination_port == intercepted_tcp_port &&
                             detail::is_network_upstream(true, source_port, view.ipv6)) {
                             inject(packet, address);
+                            continue;
+                        }
+                        if (destination_port == 53 && router.snapshot()->options.block_tcp53) {
+                            policy_selected = true;
+                            auto reset = make_intercepted_tcp_reset(packet);
+                            if (!reset.empty()) {
+                                address.Outbound = 0;
+                                address.IPChecksum = 0;
+                                address.TCPChecksum = 0;
+                                inject(reset, address);
+                            }
                             continue;
                         }
                         const bool toward_proxy = destination_port == intercepted_tcp_port;
@@ -713,11 +763,14 @@ void WinDivertInterception::start() {
         p.calc_checksums = p.symbol<Impl::CalcChecksums>("WinDivertHelperCalcChecksums");
         const std::string target = std::to_string(p.intercepted_tcp_port),
                           proxy = std::to_string(p.tcp_proxy_port);
-        const std::string filter =
-            "(outbound and !loopback and !impostor and !fragment and udp.DstPort == 53 and "
-            "udp.PayloadLength >= 12) or (!impostor and tcp and !fragment and (tcp.DstPort == " +
-            target + " or tcp.SrcPort == " + target + " or tcp.DstPort == " + proxy +
-            " or tcp.SrcPort == " + proxy + "))";
+        const std::string injected =
+            p.router.snapshot()->options.intercept_others ? "" : "!impostor and ";
+        const std::string filter = "(outbound and !loopback and " + injected +
+                                   "!fragment and udp.DstPort == 53 and "
+                                   "udp.PayloadLength >= 12) or (" +
+                                   injected + "tcp and !fragment and (tcp.DstPort == " + target +
+                                   " or tcp.SrcPort == " + target + " or tcp.DstPort == " + proxy +
+                                   " or tcp.SrcPort == " + proxy + "))";
         const char* filter_error = nullptr;
         UINT filter_position = 0;
         if (!p.compile(filter.c_str(),
@@ -819,6 +872,9 @@ void WinDivertInterception::stop() {
     }
 }
 void WinDivertInterception::reload(Config config) {
+    if (runtime_options(config).intercept_others !=
+        impl_->router.snapshot()->options.intercept_others)
+        throw Error("RESTART_REQUIRED", "Changing interceptOthers requires a CoreHost restart");
     impl_->router.reload(std::move(config));
 }
 void WinDivertInterception::cancel_pending() {

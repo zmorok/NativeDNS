@@ -433,6 +433,20 @@ int main() {
         check(read16(tcp6_reply.data() + 40) == 53 && read16(tcp6_reply.data() + 42) == 51001,
               "IPv6 TCP DNS response source");
         verify_tcp_checksum(tcp6_reply, 40, true);
+        for (auto syn : {ipv4_tcp(51000, 53), ipv6_tcp(51001, 53)}) {
+            const bool ipv6 = (syn[0] >> 4) == 6;
+            const size_t tcp_at = ipv6 ? 40 : 20;
+            syn[tcp_at + 13] = 0x02;
+            const auto reset = nd::make_intercepted_tcp_reset(syn);
+            check(reset.size() == tcp_at + 20 && reset[tcp_at + 13] == 0x14 &&
+                      read16(reset.data() + tcp_at) == 53,
+                  "TCP/53 block sends a SYN-acknowledging reset");
+            verify_tcp_checksum(reset, tcp_at, ipv6);
+            auto rst = syn;
+            rst[tcp_at + 13] = 0x04;
+            check(nd::make_intercepted_tcp_reset(rst).empty(),
+                  "Reset does not trigger a reset loop");
+        }
 
         bool failed = false;
         auto fragment = ipv4_query();

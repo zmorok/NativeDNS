@@ -51,6 +51,7 @@ int close_upstream_socket(std::intptr_t socket) noexcept;
 std::vector<std::string> resolve_host(const std::string& hostname);
 // Numeric OS-configured resolvers, without performing any DNS lookup.
 std::vector<std::string> system_dns_servers();
+void flush_dns_cache();
 void atomic_publish_file(const std::filesystem::path& temp,
                          const std::filesystem::path& target,
                          const std::filesystem::path& backup);

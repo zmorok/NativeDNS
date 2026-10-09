@@ -422,6 +422,21 @@ int main() {
         const auto edns_truncated = nd::fit_udp_response(edns_query, edns_large);
         check(edns_truncated.size() <= 1232 && nd::parse_response(edns_truncated, q).truncated,
               "oversized EDNS response requests TCP retry");
+        {
+            const auto original_reply = padded_response(edns_query, 8);
+            const auto limited = nd::clamp_dns_ttl(original_reply, 5, 10);
+            check(nd::parse_response(limited, nd::parse_question(edns_query)).cache_ttl == 10,
+                  "TTL maximum is applied to unsigned responses");
+            check(std::equal(original_reply.end() - 19, original_reply.end(), limited.end() - 19),
+                  "OPT metadata and RDATA remain unchanged");
+            const auto raised = nd::clamp_dns_ttl(original_reply, 100, 200);
+            check(nd::parse_response(raised, nd::parse_question(edns_query)).cache_ttl == 100,
+                  "TTL minimum is applied to unsigned responses");
+            auto authenticated = original_reply;
+            authenticated[3] |= 0x20;
+            check(nd::clamp_dns_ttl(authenticated, 100, 200) == authenticated,
+                  "Authenticated DNS lifetime is not rewritten");
+        }
         auto good = reply(query);
         check(nd::parse_response(good, q).addresses == std::vector<std::string>{"192.0.2.42"},
               "decode compressed answer");

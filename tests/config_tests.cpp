@@ -23,6 +23,30 @@ void put(const std::filesystem::path& path, const std::string& text) {
 }
 int main() {
     try {
+        {
+            auto options_config = nd::default_config();
+            options_config.settings["yoga.settings.clearDnsCache"] = "1";
+            options_config.settings["ttlMin"] = "10";
+            options_config.settings["yoga.settings.ttlMax"] = "60";
+            options_config.settings["interceptOthers"] = "1";
+            const auto options = nd::runtime_options(options_config);
+            check(options.clear_dns_cache && options.intercept_others && options.ttl_min == 10 &&
+                      options.ttl_max == 60,
+                  "Native and imported runtime options are executable");
+            options_config.settings["clearDnsCache"] = "0";
+            check(!nd::runtime_options(options_config).clear_dns_cache,
+                  "Native option overrides imported value");
+            for (const auto* bad : {"-1", "61", "2147483648", "10junk"}) {
+                options_config.settings["ttlMin"] = bad;
+                bool rejected = false;
+                try {
+                    nd::validate(options_config);
+                } catch (const nd::Error& error) {
+                    rejected = error.code == "CONFIG_SETTING";
+                }
+                check(rejected, "Invalid or inverted TTL interval rejected");
+            }
+        }
         const auto imported = nd::import_yoga(FIXTURE_PATH);
         const auto& config = imported.config;
         check(config.servers.size() == 6 && config.rules.size() == 16, "Fixture counts");

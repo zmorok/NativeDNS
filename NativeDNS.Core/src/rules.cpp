@@ -223,6 +223,7 @@ std::string action_name(Action value) {
     throw Error("ACTION", "Unknown action");
 }
 void validate(const Config& config) {
+    (void)runtime_options(config);
     if (config.schema_version != 1)
         throw Error("SCHEMA", "Unsupported schema version");
     if (config.servers.size() > 4096 || config.rules.empty() || config.rules.size() > 4096)
@@ -331,11 +332,7 @@ RuleDecision
 evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshotPtr network) {
     const auto host = normalize_dns_name(hostname);
     RuleDecision decision;
-    bool ignore_down = false;
-    for (const auto* key :
-         {"ignore_rule_if_interface_down", "yoga.settings.ignore_rule_if_interface_down"})
-        if (const auto item = config.settings.find(key); item != config.settings.end())
-            ignore_down = item->second == "1" || item->second == "true";
+    const auto options = runtime_options(config);
     for (const auto& rule : config.rules) {
         if (!rule.enabled ||
             std::none_of(rule.patterns.begin(), rule.patterns.end(), [&](const auto& pattern) {
@@ -370,7 +367,7 @@ evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshot
                 return decision;
             }
             if (!info || !info->up) {
-                if (ignore_down && !rule.is_default)
+                if (options.ignore_interface_down && !rule.is_default)
                     continue;
                 decision.error_code = "INTERFACE_DOWN";
                 decision.message = "Required interface is unavailable: " + selector;
@@ -385,9 +382,23 @@ evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshot
             decision.message = "Selected rule requires local DNSSEC validation";
             return decision;
         }
+        if (options.captive_portal_detection && rule.action == Action::process && rule.is_default &&
+            selector.empty()) {
+            if (!network)
+                network = NetworkMonitor::shared().snapshot();
+            const bool portal =
+                std::any_of(network->interfaces.begin(),
+                            network->interfaces.end(),
+                            [](const auto& info) { return info.up && info.captive_portal; });
+            decision.captive_bypass = portal || host == "dns.msftncsi.com" ||
+                                      host == "www.msftncsi.com" || host == "ipv6.msftncsi.com" ||
+                                      host == "www.msftconnecttest.com" ||
+                                      host == "ipv6.msftconnecttest.com";
+        }
         decision.reinject_udp =
-            rule.action == Action::bypass ||
-            (rule.action == Action::process && rule.server_id == 0 && selector.empty());
+            decision.captive_bypass || rule.action == Action::bypass ||
+            (rule.action == Action::process && rule.server_id == 0 && selector.empty() &&
+             options.ttl_min == 0 && options.ttl_max == 2147483647);
         return decision;
     }
     throw Error("DEFAULT", "No usable Default rule");
