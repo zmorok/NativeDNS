@@ -72,6 +72,11 @@ if(WIN32)
   target_link_libraries(windivert_tests PRIVATE NativeDNS.Core.Internal)
   add_test(NAME windivert_packet_rewrite COMMAND windivert_tests)
   nativedns_copy_windivert_runtime(windivert_tests)
+  # Explicit opt-in only: requires elevation and uses the current external network.
+  add_executable(windivert_live_tests windivert_live_tests.cpp)
+  target_link_libraries(windivert_live_tests PRIVATE NativeDNS.Core.Internal)
+  nativedns_copy_windivert_runtime(windivert_live_tests)
+  nativedns_copy_sodium_runtime(windivert_live_tests)
 endif()
 
 if(WIN32)

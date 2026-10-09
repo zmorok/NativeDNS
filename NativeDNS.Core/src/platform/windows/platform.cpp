@@ -235,8 +235,12 @@ void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::tim
         fd_set set;
         FD_ZERO(&set);
         FD_SET(socket, &set);
-        const int rc =
-            select(0, writing ? nullptr : &set, writing ? &set : nullptr, nullptr, &timeout);
+        auto exceptions = set;
+        const int rc = select(0,
+                              writing ? nullptr : &set,
+                              writing ? &set : nullptr,
+                              writing ? &exceptions : nullptr,
+                              &timeout);
         if (rc == 0)
             continue;
         if (rc < 0)

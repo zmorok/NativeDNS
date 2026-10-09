@@ -73,6 +73,29 @@ int main() {
         check(logger.snapshot(nd::Level::debug).empty());
         logger.write(nd::Level::normal, "INFO", "after clear");
         check(logger.snapshot(nd::Level::normal).back().sequence == 202);
+        {
+            nd::Logger limited;
+            for (int i = 0; i < 100; ++i)
+                limited.write_limited(nd::Level::errors_only,
+                                      "resolver-1",
+                                      "TIMEOUT",
+                                      "first resolver",
+                                      {},
+                                      std::chrono::milliseconds(100));
+            limited.write_limited(
+                nd::Level::errors_only, "resolver-2", "TIMEOUT", "second resolver");
+            check(limited.snapshot(nd::Level::errors_only).size() == 2,
+                  "Repeated errors are bounded without hiding independent failures");
+            std::this_thread::sleep_for(std::chrono::milliseconds(110));
+            limited.write_limited(nd::Level::errors_only, "resolver-1", "TIMEOUT", "still failing");
+            check(limited.snapshot(nd::Level::errors_only).back().message ==
+                      "suppressed=99 still failing",
+                  "Persistent failures include the number of suppressed repetitions");
+            limited.clear_display();
+            limited.write_limited(nd::Level::errors_only, "resolver-1", "TIMEOUT", "after clear");
+            check(limited.snapshot(nd::Level::errors_only).size() == 1,
+                  "Clearing display exposes the next failure immediately");
+        }
         const auto directory = std::filesystem::current_path() /
                                ("logger-test-" + std::to_string(nd::platform::process_id()));
         std::filesystem::create_directories(directory);

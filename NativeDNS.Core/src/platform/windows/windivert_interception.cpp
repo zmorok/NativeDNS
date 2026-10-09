@@ -440,9 +440,10 @@ struct WinDivertInterception::Impl {
         if (!send(handle, packet.data(), static_cast<UINT>(packet.size()), &sent, &address) ||
             sent != packet.size()) {
             if (address.Impostor && GetLastError() == ERROR_HOST_UNREACHABLE) {
-                logger.write(Level::errors_only,
-                             "INTERCEPT_LOOP_PREVENTED",
-                             "Injected packet exhausted its hop limit");
+                logger.write_limited(Level::errors_only,
+                                     "impostor-loop",
+                                     "INTERCEPT_LOOP_PREVENTED",
+                                     "Injected packet exhausted its hop limit");
                 return;
             }
             throw Error("WINDIVERT_SEND",
@@ -482,7 +483,8 @@ struct WinDivertInterception::Impl {
                     shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
                     queue_changed.notify_all();
                 }
-                logger.write(Level::errors_only, error.code, error.what());
+                logger.write_limited(
+                    Level::errors_only, "worker|" + error.code, error.code, error.what());
             }
         }
     }
@@ -597,12 +599,16 @@ struct WinDivertInterception::Impl {
                         evaluate_rule(snapshot->config, captured_question.name);
                     const auto& captured_rule = *captured_decision.rule;
                     if (logger.enabled(Level::debug))
-                        logger.write(Level::debug,
-                                     "DNS_CAPTURE",
-                                     "transport=udp name=" + captured_question.name +
-                                         " rule=" + captured_rule.name +
-                                         " action=" + action_name(captured_rule.action) +
-                                         " server=" + std::to_string(captured_rule.server_id));
+                        logger.write(
+                            Level::debug,
+                            "DNS_CAPTURE",
+                            "transport=udp name=" + captured_question.name + " interface_index=" +
+                                std::to_string(address.Network.IfIdx) + " generation=" +
+                                std::to_string(NetworkMonitor::shared().snapshot()->generation) +
+                                " impostor=" + (address.Impostor ? "1" : "0") +
+                                " rule=" + captured_rule.name +
+                                " action=" + action_name(captured_rule.action) +
+                                " server=" + std::to_string(captured_rule.server_id));
                     if (captured_decision.reinject_udp) {
                         const auto original = original_server(packet, view);
                         if (logger.enabled(Level::normal))
@@ -636,7 +642,12 @@ struct WinDivertInterception::Impl {
                 } catch (const Error& error) {
                     if (error.code == "WINDIVERT_SEND")
                         throw;
-                    logger.write(Level::errors_only, error.code, error.what());
+                    logger.write_limited(
+                        Level::errors_only,
+                        "capture|" + error.code + '|' + std::to_string(address.Network.IfIdx),
+                        error.code,
+                        std::string(error.what()) +
+                            " interface_index=" + std::to_string(address.Network.IfIdx));
                     if (!policy_selected) {
                         inject(packet, address);
                     }
@@ -808,6 +819,14 @@ void WinDivertInterception::start() {
                        "Transparent UDP/TCP DNS interception started; TCP proxy port=" +
                            std::to_string(p.tcp_proxy_port) +
                            ", routing workers=" + std::to_string(worker_count));
+        p.logger.write(
+            Level::verbose,
+            "INTERCEPTION_SCOPE",
+            "backend=WinDivert priority=123 UDP/TCP port=53; encrypted OS/application DNS "
+            "on HTTPS/TLS/QUIC ports is outside this filter; network-layer process ID is "
+            "unavailable; "
+            "interceptOthers=" +
+                std::to_string(p.router.snapshot()->options.intercept_others));
     } catch (...) {
         const auto failure = std::current_exception();
         p.state = State::stopping;

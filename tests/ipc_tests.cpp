@@ -382,6 +382,7 @@ int main() {
         check(host.restart_requested(), "restart intent survives host stop");
         host.stop();
         if (diagnostic_log) {
+            host.logger().flush_file();
             std::ifstream stream(*diagnostic_log, std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)), {});
             const auto first = contents.find("CORE_STOPPED");

@@ -522,6 +522,35 @@ int main() {
                   "plain TCP reuses one upstream connection");
         }
         {
+            struct NonListener {
+                SOCKET value = socket(AF_INET, SOCK_STREAM, 0);
+                ~NonListener() {
+                    if (value != INVALID_SOCKET)
+                        closesocket(value);
+                }
+            } reserved;
+            check(reserved.value != INVALID_SOCKET, "Reserve refused TCP endpoint");
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            check(bind(reserved.value, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0,
+                  "Bind TCP endpoint without listening");
+            SocketLength length = sizeof(address);
+            check(getsockname(reserved.value, reinterpret_cast<sockaddr*>(&address), &length) == 0,
+                  "Read reserved TCP port");
+            nd::Server refused;
+            refused.ip = "127.0.0.1";
+            refused.protocol = nd::Protocol::tcp;
+            refused.port = ntohs(address.sin_port);
+            refused.timeout_ms = 5000;
+            const auto result = nd::test_server(refused);
+            if (result.error_code != "SOCKET" || result.rtt_ms >= 4500)
+                std::cerr << "Refused TCP: " << result.error_code << " " << result.rtt_ms << " ms "
+                          << result.message << '\n';
+            check(result.error_code == "SOCKET" && result.rtt_ms < 4500,
+                  "Refused TCP connection reports socket failure instead of waiting for timeout");
+        }
+        {
             Peer degraded(false, Mode::timeout, false, 0, 80, 2),
                 backup(false, Mode::good, false, 0, 1500, 3);
             auto health_config = nd::default_config();
@@ -640,6 +669,10 @@ int main() {
                                                "(DNS over UDP), rule=selected, time=") !=
                       std::string::npos,
               "combined readable route log");
+        check(route_events[0].message.find("endpoint=127.0.0.1 port=") != std::string::npos &&
+                  route_events[0].message.find("interface=automatic generation=") !=
+                      std::string::npos,
+              "Route diagnostics identify the actual endpoint and network context");
         check(route_events[0].context.address == "example.com" &&
                   route_events[0].context.dns_type == "A" &&
                   route_events[0].context.rule == "selected" &&
@@ -667,6 +700,20 @@ int main() {
                   "upstream failure preserves exact rule metadata for combined filters");
         }
         const auto default_query = nd::make_query("iana.org");
+        {
+            Peer first_failure(false, Mode::servfail), second_failure(false, Mode::servfail);
+            nd::Logger independent_failures;
+            nd::Router default_router(nd::default_config(), independent_failures);
+            check(default_router.route(query, first_failure.server()).error_code == "DNS_RCODE" &&
+                      default_router.route(query, second_failure.server()).error_code ==
+                          "DNS_RCODE",
+                  "Two original DNS endpoints fail independently");
+            first_failure.verify();
+            second_failure.verify();
+            check(
+                independent_failures.snapshot(nd::Level::errors_only).size() == 2,
+                "Log suppression must not hide a second original resolver with the same server ID");
+        }
         routed = router.route(default_query, original.server());
         original.verify();
         check(routed.rule_id == 1 && routed.server_id == 0 &&

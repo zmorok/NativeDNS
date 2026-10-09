@@ -152,10 +152,31 @@ void CoreHost::stop() {
 }
 void CoreHost::wait_for_shutdown() {
     std::unique_lock lock(mutex_);
+    auto previous_network = NetworkMonitor::shared().snapshot();
     for (;;) {
         if (shutdown_cv_.wait_for(
                 lock, std::chrono::milliseconds(500), [&] { return shutdown_requested_; }))
             return;
+        const auto network = NetworkMonitor::shared().snapshot();
+        if (network->generation != previous_network->generation) {
+            logger_.write(Level::normal,
+                          "NETWORK_CHANGED",
+                          "generation=" + std::to_string(network->generation) +
+                              " previous=" + std::to_string(previous_network->generation) +
+                              " interfaces=" + std::to_string(network->interfaces.size()) +
+                              (network->error.empty() ? "" : " error=" + network->error));
+            for (const auto& info : network->interfaces) {
+                std::string details = "id=" + info.id + " name=" + info.name +
+                                      " up=" + (info.up ? "1" : "0") +
+                                      " captive_portal=" + (info.captive_portal ? "1" : "0");
+                for (const auto& address : info.addresses)
+                    details += " address=" + address;
+                for (const auto& dns : info.dns_servers)
+                    details += " dns=" + dns;
+                logger_.write(Level::verbose, "NETWORK_INTERFACE", std::move(details));
+            }
+            previous_network = network;
+        }
         const auto value = interception_->status();
         if (value.state == State::error)
             throw Error(value.error_code.empty() ? "INTERCEPTION_FAILED" : value.error_code,

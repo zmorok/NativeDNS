@@ -87,6 +87,16 @@ Common sources contain:
 
 File logging is isolated from DNS routing threads. Producers append to a bounded in-memory queue, while a dedicated writer batches file output and performs rotation. Configuration, flush, and clear requests are ordered barriers in that queue, so lifecycle operations remain deterministic without putting filesystem latency on packet workers.
 
+Routing diagnostics include the selected endpoint, transport, interface and network
+generation, including fallback attempts and interface-specific system DNS. Repeated
+errors for the same rule/upstream/context are limited to one record per five seconds;
+the next record reports suppressed repetitions. Independent failures remain visible.
+The limiter holds at most 256 keys and clearing the display resets suppression.
+CoreHost records network generation changes and adapter details at verbose level.
+WinDivert startup logs its filter scope: DNS on port 53, without process attribution
+at the network layer. OS or application encrypted DNS on other ports is outside
+that filter, regardless of whether the host uses it.
+
 Platform-specific networking headers should not leak into shared business logic.
 
 ## Platform boundary

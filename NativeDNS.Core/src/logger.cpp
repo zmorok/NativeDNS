@@ -165,6 +165,44 @@ void Logger::write(Level level, std::string code, std::string message, LogContex
     }
     changed_.notify_all();
 }
+void Logger::write_limited(Level level,
+                           std::string key,
+                           std::string code,
+                           std::string message,
+                           LogContext context,
+                           std::chrono::milliseconds interval) {
+    if (!enabled(level))
+        return;
+    if (interval < std::chrono::milliseconds::zero())
+        throw std::invalid_argument("negative log suppression interval");
+    key.resize(std::min<size_t>(key.size(), 1024));
+    uint64_t suppressed = 0;
+    {
+        std::lock_guard lock(mutex_);
+        const auto now = std::chrono::steady_clock::now();
+        auto found = repeated_.find(key);
+        if (found != repeated_.end()) {
+            if (now < found->second.next) {
+                ++found->second.suppressed;
+                return;
+            }
+            suppressed = found->second.suppressed;
+            found->second = {now + interval, 0};
+        } else {
+            if (repeated_.size() >= 256) {
+                const auto oldest = std::min_element(
+                    repeated_.begin(), repeated_.end(), [](const auto& a, const auto& b) {
+                        return a.second.next < b.second.next;
+                    });
+                repeated_.erase(oldest);
+            }
+            repeated_.emplace(std::move(key), RepeatedEvent{now + interval, 0});
+        }
+    }
+    if (suppressed)
+        message = "suppressed=" + std::to_string(suppressed) + " " + message;
+    write(level, std::move(code), std::move(message), std::move(context));
+}
 std::vector<LogEvent>
 Logger::wait_snapshot(Level level, uint64_t after, std::chrono::milliseconds timeout) const {
     std::unique_lock lock(mutex_);
@@ -194,6 +232,7 @@ std::vector<LogEvent> Logger::snapshot(Level level, uint64_t after) const {
 void Logger::clear_display() {
     std::lock_guard lock(mutex_);
     events_.clear();
+    repeated_.clear();
 }
 void Logger::configure_file(bool enabled,
                             Level level,

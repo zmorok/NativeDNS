@@ -45,6 +45,14 @@ std::string route_log_message(const Question& question,
     output << "rule=" << rule.name;
     if (elapsed_ms)
         output << ", time=" << std::fixed << std::setprecision(2) << *elapsed_ms << " ms";
+    if (server)
+        output << ", endpoint="
+               << (!server->ip.empty()         ? server->ip
+                   : !server->hostname.empty() ? server->hostname
+                                               : server->url)
+               << " port=" << server->port << " interface="
+               << (server->route.interface_id.empty() ? "automatic" : server->route.interface_id)
+               << " generation=" << server->route.generation;
     return output.str();
 }
 Router::Router(Config config, Logger& logger) : logger_(logger) {
@@ -185,7 +193,9 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             if (error.code == "CANCELLED")
                 throw;
             last_code = error.code;
-            last_message = error.what();
+            last_message =
+                "server=" + candidate->name + " protocol=" + protocol_name(candidate->protocol) +
+                " context=" + network_route_key(attempt.route) + " error=" + error.what();
             unsigned failures = 0;
             {
                 std::lock_guard lock(snapshot.health_mutex);
@@ -198,10 +208,11 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
                 }
             }
             if (logger_.enabled(Level::verbose))
-                logger_.write(Level::verbose,
-                              "UPSTREAM_FAILOVER",
-                              "server=" + candidate->name + " failure=" + last_code +
-                                  " consecutive=" + std::to_string(failures));
+                logger_.write_limited(Level::verbose,
+                                      "fallback|" + health_key(candidate) + '|' + error.code,
+                                      "UPSTREAM_FAILOVER",
+                                      "server=" + candidate->name + " failure=" + last_code +
+                                          " consecutive=" + std::to_string(failures));
         }
     }
     throw Error(last_code, "Fallback group exhausted: " + last_message);
@@ -336,12 +347,27 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
     RouteResult result;
     Question question;
     LogContext context;
-    const auto log = [this, &context](Level level, std::string code, std::string message) {
-        logger_.write(level, std::move(code), std::move(message), context);
-    };
     bool valid_question = false;
     const Rule* matched_rule = nullptr;
     const Server* selected_server = nullptr;
+    std::optional<Server> diagnostic_server;
+    const auto log =
+        [this, &context, &selected_server](Level level, std::string code, std::string message) {
+            if (level == Level::errors_only) {
+                auto key =
+                    code + '|' + context.rule + '|' +
+                    (selected_server
+                         ? std::to_string(selected_server->id) + '|' +
+                               protocol_name(selected_server->protocol) + '|' +
+                               selected_server->ip + '|' + selected_server->hostname + '|' +
+                               selected_server->url + '|' + std::to_string(selected_server->port) +
+                               '|' + network_route_key(selected_server->route)
+                         : "no-upstream");
+                logger_.write_limited(
+                    level, std::move(key), std::move(code), std::move(message), context);
+            } else
+                logger_.write(level, std::move(code), std::move(message), context);
+        };
     auto exchange_started = std::chrono::steady_clock::time_point{};
     try {
         question = parse_question(request);
@@ -391,7 +417,9 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
             server = &*it;
         }
         selected_server = server;
-        auto routed_server = *server;
+        diagnostic_server = *server;
+        auto& routed_server = *diagnostic_server;
+        selected_server = &routed_server;
         if (!decision.route.interface_id.empty()) {
             routed_server.route = decision.route;
             if (!rule.server_id) {
@@ -403,11 +431,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         }
         routed_server = with_network_context(std::move(routed_server));
         if (logger_.enabled(Level::verbose))
-            log(Level::verbose,
-                "DNS_UPSTREAM",
-                "name=" + question.name + " server=" + server->name +
-                    " protocol=" + protocol_name(server->protocol) + " address=" + server->ip +
-                    " port=" + std::to_string(server->port));
+            log(Level::verbose, "DNS_UPSTREAM", route_log_message(question, rule, &routed_server));
         exchange_started = std::chrono::steady_clock::now();
         auto exchanged = exchange_cached(snapshot, request, routed_server, rule.server_id != 0);
         result.packet = std::move(exchanged.first);
@@ -417,8 +441,11 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 snapshot.config.servers.begin(),
                 snapshot.config.servers.end(),
                 [&](const Server& candidate) { return candidate.id == result.server_id; });
-            if (used != snapshot.config.servers.end())
-                selected_server = &*used;
+            if (used != snapshot.config.servers.end()) {
+                const auto route = routed_server.route;
+                routed_server = *used;
+                routed_server.route = route;
+            }
         }
         const auto parsed = parse_response(result.packet, question);
         const auto elapsed = std::chrono::duration<double, std::milli>(
@@ -429,10 +456,13 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
             result.message = "Upstream returned RCODE " + std::to_string(parsed.rcode);
             log(Level::errors_only,
                 result.error_code,
-                route_log_message(question, rule, server, elapsed) + ", error=" + result.message);
+                route_log_message(question, rule, selected_server, elapsed) +
+                    ", error=" + result.message);
         } else {
             if (logger_.enabled(Level::normal))
-                log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, server, elapsed));
+                log(Level::normal,
+                    "DNS_ROUTE",
+                    route_log_message(question, rule, selected_server, elapsed));
             if (logger_.enabled(Level::debug))
                 log(Level::debug,
                     "DNS_REPLY_DETAIL",

@@ -27,6 +27,8 @@ void curl_check(CURLcode code) {
         category = "TLS_PIN";
     if (code == CURLE_COULDNT_RESOLVE_HOST)
         category = "BOOTSTRAP";
+    if (code == CURLE_COULDNT_CONNECT)
+        category = "CONNECT";
     throw Error(category,
                 std::string(curl_easy_strerror(code)) + " (curl " + std::to_string(code) + ")");
 }
@@ -45,6 +47,8 @@ struct CurlHandle {
     char error_buffer[CURL_ERROR_SIZE]{};
     std::map<curl_socket_t, std::unique_ptr<detail::NetworkUpstreamGuard>> upstream_sockets;
     NetworkRoute route;
+    std::string diagnostic_endpoint;
+    std::exception_ptr socket_failure;
     CurlHandle() {
         static CurlGlobal global;
         value = curl_easy_init();
@@ -87,14 +91,27 @@ struct CurlHandle {
             if (message->msg == CURLMSG_DONE && message->easy_handle == value)
                 code = message->data.result;
         try {
+            if (code != CURLE_OK && socket_failure)
+                std::rethrow_exception(socket_failure);
             curl_check(code);
         } catch (const Error& error) {
             const std::string detail = error_buffer;
+            char* remote = nullptr;
+            (void)curl_easy_getinfo(value, CURLINFO_PRIMARY_IP, &remote);
+            const bool revocation =
+                detail.find("CRYPT_E_REVOCATION_OFFLINE") != std::string::npos ||
+                detail.find("SEC_E_REVOCATION_OFFLINE") != std::string::npos ||
+                detail.find("0x80092013") != std::string::npos;
             const bool cert = detail.find("SEC_E_CERT_EXPIRED") != std::string::npos ||
                               detail.find("SEC_E_WRONG_PRINCIPAL") != std::string::npos ||
                               detail.find("CERT_E_") != std::string::npos;
-            throw Error(cert ? "TLS_CERTIFICATE" : error.code,
-                        std::string(error.what()) + ": " + detail);
+            throw Error(revocation ? "TLS_REVOCATION_OFFLINE"
+                        : cert     ? "TLS_CERTIFICATE"
+                                   : error.code,
+                        std::string(error.what()) + ": " + detail + " endpoint=" +
+                            (remote && *remote ? remote : diagnostic_endpoint) + " interface=" +
+                            (route.interface_id.empty() ? "automatic" : route.interface_id) +
+                            " generation=" + std::to_string(route.generation));
         }
     }
     void reset() noexcept {
@@ -103,6 +120,8 @@ struct CurlHandle {
             attached = false;
         }
         curl_easy_reset(value);
+        socket_failure = nullptr;
+        diagnostic_endpoint.clear();
         std::fill(std::begin(error_buffer), std::end(error_buffer), '\0');
         set_callbacks_noexcept();
     }
@@ -110,8 +129,8 @@ struct CurlHandle {
 private:
     static int
     configure_socket(void* context, curl_socket_t socket, curlsocktype purpose) noexcept {
+        auto& self = *static_cast<CurlHandle*>(context);
         try {
-            auto& self = *static_cast<CurlHandle*>(context);
             platform::bind_upstream_interface(static_cast<std::intptr_t>(socket), self.route);
             const uint16_t port = platform::prepare_upstream_socket(
                 static_cast<std::intptr_t>(socket), purpose == CURLSOCKTYPE_IPCXN);
@@ -122,6 +141,7 @@ private:
                         true, port, platform::socket_is_ipv6(static_cast<std::intptr_t>(socket))));
             return CURL_SOCKOPT_OK;
         } catch (...) {
+            self.socket_failure = std::current_exception();
             return CURL_SOCKOPT_ERROR;
         }
     }
@@ -243,8 +263,9 @@ public:
         try {
             return exchange_attempt(request, server, deadline);
         } catch (const Error& error) {
-            if (!dot_ || (error.code != "TIMEOUT" && error.code != "TLS" &&
-                          error.code != "TLS_HTTP" && error.code != "DNS_EOF"))
+            if (!dot_ ||
+                (error.code != "TIMEOUT" && error.code != "TLS" && error.code != "TLS_HTTP" &&
+                 error.code != "CONNECT" && error.code != "DNS_EOF"))
                 throw;
             return exchange_attempt(request, server, deadline);
         }
@@ -337,6 +358,7 @@ private:
         }
         if (!pins.empty())
             handle.set(CURLOPT_PINNEDPUBLICKEY, pins.c_str());
+        handle.diagnostic_endpoint = endpoint + ':' + port;
         handle.set(CURLOPT_TIMEOUT_MS, static_cast<long>(remaining(deadline)));
         handle.set(CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(remaining(deadline)));
         Packet response;
@@ -384,7 +406,8 @@ private:
     }
     struct BootstrapState {
         bool refreshing = false;
-        std::string endpoint, failure;
+        std::string endpoint;
+        std::exception_ptr failure;
         Clock::time_point expires{}, retry_after{};
         std::condition_variable changed;
     };
@@ -415,8 +438,8 @@ private:
             for (;;) {
                 if (!state->endpoint.empty() && state->expires > Clock::now())
                     return state->endpoint;
-                if (!state->failure.empty() && state->retry_after > Clock::now())
-                    throw Error("BOOTSTRAP", state->failure);
+                if (state->failure && state->retry_after > Clock::now())
+                    std::rethrow_exception(state->failure);
                 if (!state->refreshing) {
                     state->refreshing = true;
                     break;
@@ -446,9 +469,13 @@ private:
                             ttl = std::min<uint32_t>(answer.cache_ttl, 60);
                             break;
                         }
-                        failure = "Bootstrap response has no usable address";
+                        failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
+                                  " RCODE=" + std::to_string(answer.rcode) + " no usable address";
                     } catch (const Error& error) {
-                        failure = error.code + ": " + error.what();
+                        if (error.code == "CANCELLED")
+                            throw;
+                        failure = "resolver=" + resolver + " type=" + dns_type_name(type) +
+                                  " error=" + error.code + ": " + error.what();
                         if (Clock::now() >= deadline)
                             break;
                     }
@@ -457,11 +484,13 @@ private:
                     break;
             }
             if (endpoint.empty())
-                throw Error("BOOTSTRAP", "Upstream bootstrap failed: " + failure);
+                throw Error("BOOTSTRAP",
+                            "host=" + host + " context=" + network_route_key(server.route) +
+                                " upstream bootstrap failed: " + failure);
             {
                 std::lock_guard lock(bootstrap_mutex_);
                 state->endpoint = endpoint;
-                state->failure.clear();
+                state->failure = nullptr;
                 state->expires = Clock::now() + std::chrono::seconds(ttl);
                 state->refreshing = false;
             }
@@ -471,7 +500,7 @@ private:
             {
                 std::lock_guard lock(bootstrap_mutex_);
                 state->refreshing = false;
-                state->failure = "Upstream bootstrap is temporarily unavailable";
+                state->failure = std::current_exception();
                 state->retry_after = Clock::now() + std::chrono::seconds(1);
             }
             state->changed.notify_all();

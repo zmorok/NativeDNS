@@ -9,6 +9,7 @@
 #include <future>
 #include <thread>
 #include <vector>
+#include <map>
 
 namespace nd {
 std::filesystem::path timestamped_log_path(
@@ -33,6 +34,12 @@ public:
     bool enabled(Level level) const noexcept;
     void set_display_level(Level level);
     void write(Level level, std::string code, std::string message, LogContext context = {});
+    void write_limited(Level level,
+                       std::string key,
+                       std::string code,
+                       std::string message,
+                       LogContext context = {},
+                       std::chrono::milliseconds interval = std::chrono::seconds(5));
     std::vector<LogEvent> snapshot(Level level, uint64_t after = 0) const;
     std::vector<LogEvent>
     wait_snapshot(Level level, uint64_t after, std::chrono::milliseconds timeout) const;
@@ -66,6 +73,11 @@ private:
     std::deque<LogEvent> events_;
     size_t capacity_;
     uint64_t sequence_ = 0;
+    struct RepeatedEvent {
+        std::chrono::steady_clock::time_point next;
+        uint64_t suppressed = 0;
+    };
+    std::map<std::string, RepeatedEvent> repeated_;
     std::atomic_bool file_enabled_ = false;
     std::atomic<Level> file_level_ = Level::normal;
     std::atomic<Level> display_level_ = Level::debug;

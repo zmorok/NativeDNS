@@ -205,6 +205,23 @@ cmake --build build/fuzz --target fuzz_dns fuzz_dnscrypt fuzz_config fuzz_ipc
 
 External secure-transport tests remain opt-in locally through `NATIVEDNS_LIVE_TESTS`; the scheduled CI workflow runs them nightly so provider/network failures are kept separate from deterministic pull-request checks.
 
+On Windows, `windivert_live_tests` is a separate opt-in executable built with
+the test targets. Close NativeDNS and other active DNS interceptors first, then
+run it from an administrator terminal:
+
+```powershell
+& ./build/windows/windows-debug/tests/Debug/windivert_live_tests.exe "$PWD/build/windows/windivert-live-result.txt"
+```
+
+It exercises real UDP/TCP interception, Block, Process, Process/0, Bypass,
+interface binding when an active IPv4 gateway exists, TTL, TCP/53 reset,
+configuration reload and CoreHost Stop/Start/Restart cleanup. It uses the current
+network and a public resolver at `1.1.1.1`. Other names use a Bypass Default rule.
+The result file contains checks and diagnostic logs; the temporary test config
+is written alongside it. This test is not registered with ordinary CTest runs.
+It does not replace Windows 10, IPv6 connectivity, VPN, captive portal or physical
+network transition testing.
+
 Local UDP/TCP churn, latency percentiles, throughput, and process resource growth are measured by the opt-in stress runner:
 
 ```bash

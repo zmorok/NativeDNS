@@ -50,6 +50,15 @@ int main(int argc, char**) {
         check(!bootstrap_config.servers.front().ip.empty(),
               "Secure endpoint was not resolved before interception");
         {
+            auto bound = server;
+            bound.ip = "127.0.0.1";
+            bound.port = 443;
+            bound.route.interface_id = "NativeDNS-nonexistent-interface";
+            bound.timeout_ms = 500;
+            check(nd::test_server(bound).error_code == "INTERFACE_DOWN",
+                  "TLS socket callback preserves interface failure instead of generic curl error");
+        }
+        {
             auto offline = nd::default_config();
             offline.logging.file_enabled = false;
             auto unavailable = server;
@@ -105,25 +114,38 @@ int main(int argc, char**) {
             const auto expired = nd::test_server(server);
             std::cout << "expired certificate: " << expired.error_code << " " << expired.message
                       << '\n';
-            check(expired.error_code == "TLS_CERTIFICATE",
-                  "Expired certificate must fail verification");
+            bool live_failed = expired.error_code != "TLS_CERTIFICATE";
+            if (live_failed)
+                std::cerr << "Expired certificate check failed: " << expired.error_code << '\n';
             server.url = "https://wrong.host.badssl.com/";
             server.ip.clear();
             server = prepare(server);
             const auto wrong = nd::test_server(server);
             std::cout << "wrong certificate name: " << wrong.error_code << '\n';
-            check(wrong.error_code == "TLS_CERTIFICATE", "Wrong hostname must fail verification");
+            if (wrong.error_code != "TLS_CERTIFICATE") {
+                live_failed = true;
+                std::cerr << "Wrong hostname check failed: " << wrong.error_code << '\n';
+            }
             server.url = "https://xbox-dns.ru/dns-query";
             server.ip.clear();
             server = prepare(server);
             server.hashes = {"sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="};
             const auto pin = nd::test_server(server);
             std::cout << "wrong pin: " << pin.error_code << '\n';
-            check(pin.error_code == "TLS_PIN", "Wrong pin must fail");
+            if (pin.error_code != "TLS_PIN") {
+                live_failed = true;
+                std::cerr << "Wrong pin check failed: " << pin.error_code << '\n';
+            }
             server.hashes.clear();
             server.ip.clear();
             server.bootstrap = {"1.1.1.1"};
-            check(nd::test_server(server).success, "Explicit bootstrap DoH");
+            const auto bootstrapped = nd::test_server(server);
+            std::cout << "explicit bootstrap: " << bootstrapped.success << ' '
+                      << bootstrapped.error_code << '\n';
+            if (!bootstrapped.success)
+                live_failed = true;
+            check(!live_failed,
+                  "One or more live TLS/bootstrap checks failed; see individual results");
         }
         std::cout << "secure transport checks passed\n";
         return 0;

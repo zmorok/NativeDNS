@@ -8,6 +8,14 @@ implicitly. A failed bootstrap affects that server/request, not host startup or
 unrelated rules. Later requests retry bootstrap using the current resolver list.
 TLS hostname verification remains tied to the configured secure hostname.
 
+Bootstrap diagnostics retain the hostname, numeric resolver, query type and root
+failure during the retry cooldown. TLS diagnostics preserve interface binding
+errors and distinguish certificate verification, SPKI pin mismatch and an offline
+Windows certificate revocation check. Revocation checking remains enabled;
+`TLS_REVOCATION_OFFLINE` does not imply that the certificate is expired or that
+the DNS upstream is unavailable. Connection failures and request timeouts have distinct
+`CONNECT` and `TIMEOUT` codes.
+
 DNS cache/coalescing, upstream health and connection pools are separated by
 adapter context and network generation. A DHCP DNS or interface-state change
 prevents new requests from reusing a connection from the previous generation.
