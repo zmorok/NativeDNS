@@ -1,4 +1,20 @@
 {
+  "categories": [
+    {
+      "id": "interception_corehost",
+      "text": {
+        "en": "Packet interception and CoreHost",
+        "ru": "Перехват пакетов и CoreHost"
+      }
+    },
+    {
+      "id": "other",
+      "text": {
+        "en": "Other changes",
+        "ru": "Другие изменения"
+      }
+    }
+  ],
   "ab38ee3d2ae3d10e9f6ae6f84c13112712fe293b": {
     "en": "Added bulk Action and DNS Server changes for rules selected with Ctrl or Shift, respecting Block and Bypass restrictions.",
     "ru": "Добавлено групповое изменение Action и DNS Server для правил, выбранных через Ctrl или Shift, с учётом ограничений Block и Bypass."
@@ -22,5 +38,110 @@
   "e208662404667c529f12d009b9bfb36a409fcb20": {
     "en": "Integrated update checking through GitHub release metadata, with scrollable release notes, commit links, English/Russian descriptions and retry support.",
     "ru": "Добавлена проверка обновлений через данные GitHub-релиза с прокручиваемым списком изменений, ссылками на коммиты, описаниями на русском и английском и возможностью повторной проверки."
+  },
+  "b46444491d42d432974983ebc9973a06c3f39a65": {
+    "category": "interception_corehost",
+    "en": "Fixed CoreHost startup without a network connection. Secure DNS server hostnames are resolved on demand, so an unavailable upstream no longer prevents interception from starting.",
+    "ru": "Исправлен запуск CoreHost без подключения к сети. Имена защищённых DNS-серверов разрешаются по мере необходимости, поэтому недоступный сервер больше не мешает запуску перехвата."
+  },
+  "3bc2621f3b1c16bdf14a67fc020bb8982c7c21cb": {
+    "category": "interception_corehost",
+    "en": "Unified Process, Block, Bypass and Default routing rules for UDP and TCP DNS queries.",
+    "ru": "Унифицирована обработка правил Process, Block, Bypass и Default для DNS-запросов по UDP и TCP."
+  },
+  "339735d3582ccacf6cbb8722194d0a99df283244": {
+    "category": "interception_corehost",
+    "en": "Added monitoring of network interfaces and system DNS addresses to refresh the routing context when the network changes.",
+    "ru": "Добавлено отслеживание сетевых интерфейсов и системных DNS-адресов для обновления контекста маршрутизации при изменении сети."
+  },
+  "35103d638c4ca35003b59fe548b860dcd7223723": {
+    "category": "interception_corehost",
+    "en": "Added interface binding for upstream and bootstrap queries, with interface-specific system DNS selection.",
+    "ru": "Добавлена привязка запросов к DNS-серверам и bootstrap-запросов к выбранному интерфейсу с использованием его системных DNS-адресов."
+  },
+  "263175f900d9fec874974b02faf32c3921cd37b3": {
+    "category": "interception_corehost",
+    "en": "Separated DNS caches, upstream health and connection pools by network context to avoid reusing stale data after network changes.",
+    "ru": "DNS-кеши, состояние серверов и пулы соединений разделены по сетевому контексту, чтобы после изменения сети не использовать устаревшие данные."
+  },
+  "1830c92ed687bb3adb2807a4d797b4e6d4d0c935": {
+    "category": "interception_corehost",
+    "en": "Added protection against recapturing NativeDNS upstream queries and diagnostics for competing interceptor instances and drivers.",
+    "ru": "Добавлена защита от повторного перехвата собственных запросов NativeDNS и диагностика конкурирующих экземпляров перехватчика и драйверов."
+  },
+  "2ecc4492bed28cfe998f30961184a56fd7295f31": {
+    "category": "interception_corehost",
+    "en": "Fixed TCP packet reflection and IPv4/IPv6 handling, including checksums and bounded frame deadlines.",
+    "ru": "Исправлены отражение TCP-пакетов и обработка IPv4/IPv6, включая контрольные суммы и ограничение времени обработки кадров."
+  },
+  "07c41a62d6c91364f26778bc3664ff661e0feacc": {
+    "category": "interception_corehost",
+    "en": "Limited routing queues, DNS caches and connection pools to keep resource use bounded under load.",
+    "ru": "Ограничены очереди маршрутизации, DNS-кеши и пулы соединений для контроля потребления ресурсов под нагрузкой."
+  },
+  "deb9287fdc20f7af5ed9961f4f15022df28551ea": {
+    "category": "interception_corehost",
+    "en": "Added cancellation of active DNS queries and reliable shutdown of interception, sockets and CoreHost workers.",
+    "ru": "Добавлены отмена активных DNS-запросов и корректная остановка перехвата, сокетов и рабочих потоков CoreHost."
+  },
+  "c008046e9e7597cd09fd0b277661cbe4cf45ca47": {
+    "category": "interception_corehost",
+    "en": "Improved recovery after CoreHost crashes and sleep, with bounded relaunch attempts and protection against a second CoreHost instance.",
+    "ru": "Улучшено восстановление после сбоев CoreHost и сна: ограничены попытки повторного запуска и добавлена защита от второго экземпляра CoreHost."
+  },
+  "ee3911724060988302635bdb8f3d02b83e8daea5": {
+    "category": "interception_corehost",
+    "en": "Implemented Windows DNS cache clearing, TTL limits, TCP/53 blocking, injected-packet interception settings and captive portal handling.",
+    "ru": "Реализованы очистка DNS-кеша Windows, ограничения TTL, блокировка TCP/53, настройка перехвата внедрённых пакетов и обработка captive portal."
+  },
+  "75f56e1ddc0517fe30c5a9a4d1f2000734e058a3": {
+    "category": "interception_corehost",
+    "en": "Expanded routing and CoreHost diagnostics with endpoint and interface context, suppressed repeated errors, and added an opt-in real WinDivert interception test.",
+    "ru": "Расширена диагностика маршрутизации и CoreHost с данными об адресе сервера и интерфейсе, ограничены повторяющиеся ошибки и добавлен отдельный тест реального перехвата WinDivert."
+  },
+  "40dfdb6478a4a22f671930ed2ef13c10fd4bdf99": {
+    "category": "interception_corehost",
+    "en": "Fixed automatic DNS bootstrap by excluding obsolete resolver placeholders and unusable adapters, and sharing the request deadline across fallback resolvers.",
+    "ru": "Исправлен автоматический DNS bootstrap: исключены устаревшие адреса-заглушки и непригодные адаптеры, а время запроса распределено между основным и запасными резолверами."
+  },
+  "29346a28c43745813b08075d8e0804833b7d419a": {
+    "category": "interception_corehost",
+    "en": "Removed YogaDNS-specific conflict checks and driver messages. NativeDNS packet interception continues to use WinDivert independently of the YogaDNS driver.",
+    "ru": "Удалены специальные проверки конфликтов YogaDNS и сообщения о его драйвере. Перехват пакетов NativeDNS работает через WinDivert независимо от драйвера YogaDNS."
+  },
+  "aa4965a47ea41c90c860aac53d82dd61101380e6": {
+    "category": "other",
+    "en": "Fixed address, action and rule metadata in fast-path log records so display filters can match them correctly.",
+    "ru": "Исправлены поля адреса, действия и правила в записях журнала быстрого пути обработки для корректной работы фильтров."
+  },
+  "49c2b18720fecd19e96fed7ecfbacdf206f3688e": {
+    "category": "other",
+    "en": "Added Short line, Line with details and Table log views, action and technical-event filters, and immediate scrolling when new records arrive at the bottom.",
+    "ru": "Добавлены виды журнала Short line, Line with details и Table, фильтры действий и технических событий и мгновенная прокрутка при поступлении новых записей в конец списка."
+  },
+  "bed98a1188493b90eac9b6d8732da14916b97d2a": {
+    "category": "other",
+    "en": "Preserved the log scroll position when opening or closing selected-record details, including following the bottom when already scrolled to the end.",
+    "ru": "Сохраняется положение прокрутки журнала при открытии и закрытии подробностей выбранной записи, включая слежение за концом списка."
+  },
+  "a46db312f74b3880ff1ba6f5f12e90dcc749f7dc": {
+    "category": "other",
+    "en": "Made Only and With technical-event modes mutually exclusive, with the option to uncheck the active mode and hide technical events entirely.",
+    "ru": "Режимы технических событий Only и With стали взаимоисключающими; снятие активной галочки полностью скрывает технические события."
+  },
+  "1f7e5ae6f3a004f8e1944b5dd01186c6bfc7b980": {
+    "category": "other",
+    "en": "Moved Other to View between File and Configuration. Added persistent Filters and Selected record visibility controls; hidden text filters are paused, and restored record details start collapsed and empty.",
+    "ru": "Меню Other переименовано в View и перенесено между File и Configuration. Добавлено сохранение видимости Filters и Selected record: скрытый текстовый фильтр приостанавливается, а возвращённая панель записи остаётся свёрнутой и пустой."
+  },
+  "38657ae50fa9700a167a5b82acfc021115ad3046": {
+    "category": "other",
+    "en": "Added Check update on start, enabled by default and remembered between launches. Background checks show a window only when a newer release is available.",
+    "ru": "Добавлена опция Check update on start, включённая по умолчанию и сохраняемая между запусками. Фоновая проверка открывает окно только при наличии новой версии."
+  },
+  "39cdbad275a30052c5f203aefd28858173ff2e0d": {
+    "category": "other",
+    "en": "Added Enter to expand or collapse a log record, keeping only one record expanded. Enter inside details collapses them and returns selection to the record line.",
+    "ru": "Enter раскрывает и сворачивает запись журнала; одновременно раскрыта только одна запись. Enter внутри подробностей сворачивает их и возвращает выделение на основную строку."
   }
 }

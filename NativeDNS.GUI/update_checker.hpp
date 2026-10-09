@@ -20,6 +20,13 @@ struct ReleaseChange {
     QString commit;
     QString english;
     QString russian;
+    QString category;
+};
+
+struct ReleaseCategory {
+    QString id;
+    QString english;
+    QString russian;
 };
 
 struct ReleaseManifest {
@@ -27,6 +34,7 @@ struct ReleaseManifest {
     QVersionNumber number;
     QUrl releaseUrl;
     QList<ReleaseChange> changes;
+    QList<ReleaseCategory> categories;
 };
 
 inline constexpr qsizetype maximumUpdateManifestBytes = 512 * 1024;

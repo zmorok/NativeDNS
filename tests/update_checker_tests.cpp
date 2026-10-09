@@ -1,6 +1,7 @@
 #include "../NativeDNS.GUI/update_checker.hpp"
 #include "../NativeDNS.GUI/ui_preferences.hpp"
 #include <QAction>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -34,6 +35,27 @@ QByteArray manifest(const QString& version = "0.4.3", int count = 1) {
                    {"release_url", "https://github.com/zmorok/NativeDNS/releases/tag/v" + version},
                    {"whats_new", changes}})
         .toJson();
+}
+QJsonObject groupedManifest() {
+    auto root = QJsonDocument::fromJson(manifest("0.4.4", 3)).object();
+    root["categories"] =
+        QJsonArray{QJsonObject{{"id", "core"},
+                               {"text",
+                                QJsonObject{{"en", "Core <script> & changes"},
+                                            {"ru", "Перехват и CoreHost"}}}},
+                   QJsonObject{{"id", "other"}, {"text", QJsonObject{{"en", "Other changes"}}}},
+                   QJsonObject{{"id", "unused"}, {"text", QJsonObject{{"en", "Unused category"}}}}};
+    auto changes = root["whats_new"].toArray();
+    for (int index = 0; index < changes.size(); ++index) {
+        auto change = changes[index].toObject();
+        change["commit"] = QString(40, QChar('a' + index));
+        change["text"] = QJsonObject{{"en", QString("Change %1").arg(index)}};
+        if (index < 2)
+            change["category"] = index == 0 ? "other" : "core";
+        changes[index] = change;
+    }
+    root["whats_new"] = changes;
+    return root;
 }
 
 class StubReply final : public QNetworkReply {
@@ -233,6 +255,104 @@ private slots:
         entries[0] = item;
         root["whats_new"] = entries;
         QVERIFY(!parseReleaseManifest(QJsonDocument(root).toJson(), error));
+    }
+    void categorizedNotes() {
+        const auto data = QJsonDocument(groupedManifest()).toJson();
+        QString error;
+        const auto parsed = parseReleaseManifest(data, error);
+        QVERIFY(parsed && error.isEmpty());
+        QCOMPARE(parsed->categories.size(), 3);
+        QCOMPARE(parsed->changes[0].category, "other");
+        QVERIFY(parsed->changes[2].category.isEmpty());
+        StubNetwork network;
+        UpdateDialog dialog("0.4.3", nullptr, &network);
+        dialog.check();
+        network.last->complete(data);
+        auto* browser = dialog.findChild<QTextBrowser*>("releaseNotes");
+        auto plain = browser->toPlainText();
+        QVERIFY(plain.indexOf("Core <script> & changes") < plain.indexOf("Change 1"));
+        QVERIFY(plain.indexOf("Change 1") < plain.indexOf("Other changes"));
+        QVERIFY(plain.indexOf("Other changes") < plain.indexOf("Change 0"));
+        QVERIFY(plain.indexOf("Change 0") < plain.indexOf("Change 2"));
+        QVERIFY(!plain.contains("Unused category"));
+        QVERIFY(browser->toHtml().contains("&lt;script&gt;"));
+        for (const auto& change : parsed->changes)
+            QVERIFY(browser->toHtml().contains("https://github.com/zmorok/NativeDNS/commit/" +
+                                               change.commit));
+        setUiLanguage(UiLanguage::russian);
+        dialog.check();
+        network.last->complete(data);
+        plain = browser->toPlainText();
+        QVERIFY(plain.contains("Перехват и CoreHost"));
+        QVERIFY(plain.contains("Other changes")); // Missing translation falls back to English.
+        const auto artifactPath = qEnvironmentVariable("NATIVEDNS_UPDATE_MANIFEST_PATH");
+        if (!artifactPath.isEmpty()) {
+            QFile artifact(artifactPath);
+            QVERIFY(artifact.open(QIODevice::ReadOnly));
+            const auto bytes = artifact.readAll();
+            const auto release = parseReleaseManifest(bytes, error);
+            QVERIFY2(release.has_value(), qPrintable(error));
+            QCOMPARE(release->version, "0.4.4");
+            QCOMPARE(release->categories.size(), 2);
+            QCOMPARE(release->changes.size(), 21);
+            dialog.check();
+            network.last->complete(bytes);
+            plain = browser->toPlainText();
+            QVERIFY(plain.contains("Перехват пакетов и CoreHost"));
+            QVERIFY(plain.contains("Другие изменения"));
+            for (const auto& change : release->changes)
+                QVERIFY(plain.contains(change.commit.left(7)));
+        }
+    }
+    void rejectsInvalidCategories_data() {
+        QTest::addColumn<QJsonObject>("root");
+        auto root = groupedManifest();
+        const auto categories = root["categories"].toArray();
+        root["categories"] = "invalid";
+        QTest::newRow("not array") << root;
+        root["categories"] = QJsonArray{42};
+        QTest::newRow("not object") << root;
+        root["categories"] = QJsonArray{categories[0], categories[0]};
+        QTest::newRow("duplicate") << root;
+        for (const auto& field : {"id", "en", "ru"}) {
+            auto category = categories[0].toObject();
+            if (QString(field) == "id")
+                category["id"] = "<script>";
+            else {
+                auto text = category["text"].toObject();
+                text[field] = QString(field) == "en" ? QJsonValue(" ") : QJsonValue(42);
+                category["text"] = text;
+            }
+            root["categories"] = QJsonArray{category};
+            QTest::newRow(field) << root;
+        }
+        root = groupedManifest();
+        auto changes = root["whats_new"].toArray();
+        auto change = changes[0].toObject();
+        change["category"] = "unknown";
+        changes[0] = change;
+        root["whats_new"] = changes;
+        QTest::newRow("unknown reference") << root;
+        change["category"] = 42;
+        changes[0] = change;
+        root["whats_new"] = changes;
+        QTest::newRow("invalid reference") << root;
+        root = groupedManifest();
+        root.remove("categories");
+        QTest::newRow("missing definitions") << root;
+        root = groupedManifest();
+        QJsonArray tooMany;
+        for (int index = 0; index < 17; ++index)
+            tooMany.append(QJsonObject{{"id", QString("category%1").arg(index)},
+                                       {"text", QJsonObject{{"en", "Category"}}}});
+        root["categories"] = tooMany;
+        QTest::newRow("too many") << root;
+    }
+    void rejectsInvalidCategories() {
+        QFETCH(QJsonObject, root);
+        QString error;
+        QVERIFY(!parseReleaseManifest(QJsonDocument(root).toJson(), error));
+        QVERIFY(!error.isEmpty());
     }
     void comparison_data() {
         QTest::addColumn<QString>("current");

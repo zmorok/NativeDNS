@@ -13,10 +13,10 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 ## Download
 
-The current Windows release is [v0.4.3](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.3):
+The Windows release packages for [v0.4.4](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.4):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.3/NativeDNS-0.4.3-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.3/NativeDNS-0.4.3-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.4/NativeDNS-0.4.4-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.4/NativeDNS-0.4.4-windows-x64-portable.zip)
 
 Linux packages are not part of this release. Linux interception still needs validation on a real privileged host.
 
@@ -71,6 +71,8 @@ technical events while keeping DNS records subject to the action filter.
 The mode is remembered, including the state with neither item selected. The text filter and
 verbosity level continue to apply in every mode.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
+Release notes support categories, including packet interception and CoreHost changes separately
+from other changes; descriptions and category headings follow the selected interface language.
 `Help > Check update on start` enables a background update check once per GUI launch (on by default).
 The preference is remembered. Startup checks show the update window only for a newer release;
 an up-to-date version or a failed check stays silent. Manual checks still show results and errors.

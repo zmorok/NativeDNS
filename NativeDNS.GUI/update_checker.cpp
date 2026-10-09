@@ -20,6 +20,7 @@
 #include <QTextDocument>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace {
 constexpr auto repositoryUrl = "https://github.com/zmorok/NativeDNS";
@@ -92,6 +93,31 @@ std::optional<ReleaseManifest> parseReleaseManifest(const QByteArray& json, QStr
     if (entries.size() > 256)
         return std::nullopt;
     ReleaseManifest manifest{version, *number, expectedUrl, {}};
+    static const QRegularExpression categoryPattern("^[a-z][a-z0-9_]{0,63}$");
+    if (root.contains("categories")) {
+        if (!root.value("categories").isArray())
+            return std::nullopt;
+        const auto categories = root.value("categories").toArray();
+        if (categories.size() > 16)
+            return std::nullopt;
+        for (const auto& entry : categories) {
+            if (!entry.isObject())
+                return std::nullopt;
+            const auto category = entry.toObject();
+            const auto id = category.value("id").toString();
+            const auto text = category.value("text").toObject();
+            const auto english = text.value("en").toString();
+            const auto russian = text.value("ru").toString();
+            if (!categoryPattern.match(id).hasMatch() || english.trimmed().isEmpty() ||
+                english.size() > 4096 || russian.size() > 4096 ||
+                (text.contains("ru") && !text.value("ru").isString()) ||
+                std::any_of(manifest.categories.cbegin(),
+                            manifest.categories.cend(),
+                            [&](const auto& existing) { return existing.id == id; }))
+                return std::nullopt;
+            manifest.categories.append({id, english, russian});
+        }
+    }
     static const QRegularExpression commitPattern("^[0-9a-f]{40}$");
     for (const auto& entry : entries) {
         if (!entry.isObject())
@@ -101,11 +127,18 @@ std::optional<ReleaseManifest> parseReleaseManifest(const QByteArray& json, QStr
         const auto text = change.value("text").toObject();
         const auto english = text.value("en").toString();
         const auto russian = text.value("ru").toString();
+        const auto category = change.value("category").toString();
         if (!commitPattern.match(commit).hasMatch() || english.trimmed().isEmpty() ||
             english.size() > 4096 || russian.size() > 4096 ||
             (text.contains("ru") && !text.value("ru").isString()))
             return std::nullopt;
-        manifest.changes.append({commit, english, russian});
+        if (change.contains("category") &&
+            (!change.value("category").isString() ||
+             std::none_of(manifest.categories.cbegin(),
+                          manifest.categories.cend(),
+                          [&](const auto& existing) { return existing.id == category; })))
+            return std::nullopt;
+        manifest.changes.append({commit, english, russian, category});
     }
     error.clear();
     return manifest;
@@ -327,16 +360,39 @@ void UpdateDialog::displayManifest(bool cached) {
                        uiText("Release version: %1").arg(manifest_->version));
     notesTitle_->setText(cached ? uiText("What's new (last successful check)")
                                 : uiText("What's new"));
-    QString html = "<ul>";
-    for (const auto& change : manifest_->changes) {
+    QString html;
+    const auto appendChange = [&](const ReleaseChange& change) {
         const auto& text =
             uiLanguage() == UiLanguage::russian && !change.russian.trimmed().isEmpty()
                 ? change.russian
                 : change.english;
         html += "<li><a href=\"" + commitUrl(change.commit) + "\">" + change.commit.left(7) +
                 "</a> " + text.toHtmlEscaped().replace("\n", "<br>") + "</li>";
+    };
+    for (const auto& category : manifest_->categories) {
+        if (std::none_of(manifest_->changes.cbegin(),
+                         manifest_->changes.cend(),
+                         [&](const auto& change) { return change.category == category.id; }))
+            continue;
+        const auto& title =
+            uiLanguage() == UiLanguage::russian && !category.russian.trimmed().isEmpty()
+                ? category.russian
+                : category.english;
+        html += "<h3>" + title.toHtmlEscaped() + "</h3><ul>";
+        for (const auto& change : manifest_->changes)
+            if (change.category == category.id)
+                appendChange(change);
+        html += "</ul>";
     }
-    html += "</ul>";
+    if (std::any_of(manifest_->changes.cbegin(), manifest_->changes.cend(), [](const auto& change) {
+            return change.category.isEmpty();
+        })) {
+        html += "<ul>";
+        for (const auto& change : manifest_->changes)
+            if (change.category.isEmpty())
+                appendChange(change);
+        html += "</ul>";
+    }
     if (manifest_->changes.isEmpty())
         html = uiText("No release notes were provided.").toHtmlEscaped();
     notes_->document()->setDefaultStyleSheet(

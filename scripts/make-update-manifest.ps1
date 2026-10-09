@@ -41,6 +41,7 @@ if ($PreviousRef) {
 $notes = Get-Content -LiteralPath (Join-Path $repoRoot 'packaging/release-notes.json') -Raw -Encoding UTF8 |
     ConvertFrom-Json
 $changes = @()
+$usedCategories = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($line in @(Invoke-ReleaseGit @('log', '--no-merges', '--reverse', '--format=%H%x09%s', $range))) {
     $parts = $line -split "`t", 2
     if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[0-9a-f]{40}$') { throw 'Invalid Git log entry.' }
@@ -54,7 +55,12 @@ foreach ($line in @(Invoke-ReleaseGit @('log', '--no-merges', '--reverse', '--fo
     foreach ($value in $text.Values) {
         if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -gt 4096) { throw 'Invalid release note text.' }
     }
-    $changes += [ordered]@{ commit = $parts[0]; text = $text }
+    $change = [ordered]@{ commit = $parts[0]; text = $text }
+    if ($override -and $override.Value.category) {
+        $change['category'] = [string]$override.Value.category
+        $usedCategories.Add($change.category) | Out-Null
+    }
+    $changes += $change
 }
 if ($changes.Count -gt 256) { throw 'A release can contain at most 256 change entries.' }
 $manifest = [ordered]@{
@@ -63,6 +69,26 @@ $manifest = [ordered]@{
     release_url = "https://github.com/zmorok/NativeDNS/releases/tag/v$releaseVersion"
     whats_new = @($changes)
 }
+$categories = @()
+foreach ($category in @($notes.categories)) {
+    if (-not $category) { continue }
+    if ($category.id -cnotmatch '^[a-z][a-z0-9_]{0,63}$' -or
+        $categories.id -ccontains $category.id) { throw 'Invalid or duplicate release category.' }
+    $text = [ordered]@{ en = [string]$category.text.en }
+    if ($category.text.ru) { $text['ru'] = [string]$category.text.ru }
+    foreach ($value in $text.Values) {
+        if ([string]::IsNullOrWhiteSpace($value) -or $value.Length -gt 4096) {
+            throw 'Invalid release category text.'
+        }
+    }
+    $categories += [ordered]@{ id = [string]$category.id; text = $text }
+}
+if ($categories.Count -gt 16) { throw 'A release can contain at most 16 categories.' }
+foreach ($id in $usedCategories) {
+    if ($categories.id -cnotcontains $id) { throw "Unknown release category: $id" }
+}
+$categories = @($categories | Where-Object { $usedCategories.Contains($_.id) })
+if ($categories.Count) { $manifest['categories'] = $categories }
 $json = ConvertTo-Json -InputObject $manifest -Depth 6
 $encoding = [System.Text.UTF8Encoding]::new($false)
 if ($encoding.GetByteCount($json) -gt 524288) { throw 'Update manifest exceeds 512 KiB.' }

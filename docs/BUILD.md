@@ -72,7 +72,7 @@ The release tag must be `v` followed by the version in `VERSION`.
 Prepare the manifest after committing the release version and before publishing:
 
 ```powershell
-./scripts/make-update-manifest.ps1 -ReleaseRef HEAD -PreviousRef v0.4.2
+./scripts/make-update-manifest.ps1 -ReleaseRef HEAD -PreviousRef v0.4.3
 ```
 
 Attach `out/release/update.json` alongside the release packages. Run the script
@@ -81,6 +81,13 @@ earlier stable version tag reachable from the release commit. Non-merge commits
 since that tag become bullet points; release-preparation commits are omitted.
 `packaging/release-notes.json` supplies descriptions keyed by full commit hash.
 Other commits use their subject in English, also used as the Russian fallback.
+Optional `categories` in that file is an ordered array of `{ "id": "...", "text":
+{ "en": "...", "ru": "..." } }` objects. A commit description can name its `category`
+by ID. The generator includes only categories used by the selected release and rejects
+unknown IDs. In `update.json`, `whats_new` remains a flat array of commit/text entries,
+with optional category IDs and an additional `categories` array. Schema version remains
+1: older clients display the complete flat list; newer clients group entries under
+localized headings in category order. Uncategorized entries remain visible after the groups.
 
 For mutable releases without an existing manifest, the release workflow generates
 and attaches it after publication. Until the upload completes, checks may report
