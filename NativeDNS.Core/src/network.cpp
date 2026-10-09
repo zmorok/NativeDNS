@@ -58,7 +58,13 @@ find_interface(const NetworkSnapshot& snapshot, const std::string& id, const std
 }
 std::string network_route_key(const NetworkRoute& route) {
     return route.interface_id + '|' + std::to_string(route.index4) + '|' +
-           std::to_string(route.index6) + '|' + std::to_string(route.scope6);
+           std::to_string(route.index6) + '|' + std::to_string(route.scope6) + '|' +
+           std::to_string(route.generation);
+}
+Server with_network_context(Server server) {
+    if (!server.route.generation)
+        server.route.generation = NetworkMonitor::shared().snapshot()->generation;
+    return server;
 }
 NetworkMonitor::NetworkMonitor(Source source, bool watch)
     : source_(source ? std::move(source) : platform::enumerate_interfaces) {

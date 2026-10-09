@@ -701,6 +701,26 @@ int main() {
                       std::vector<std::string>{"0.0.0.0"},
                   "new DNS query receives the updated configuration");
         }
+        // An identical query must be sent again after a network change,
+        // while repeated queries in the same context can use the cache.
+        {
+            Peer context_peer(false, Mode::good, false, 0, 1500, 2);
+            nd::Logger log;
+            nd::Router contextual(nd::default_config(), log);
+            auto destination = context_peer.server();
+            destination.route.generation = 100;
+            const auto request = nd::make_query("context.example");
+            check(contextual.route(request, destination).error_code.empty(),
+                  "Initial context exchange");
+            check(contextual.route(request, destination).error_code.empty() &&
+                      context_peer.requests == 1,
+                  "Same-context query uses DNS cache");
+            destination.route.generation = 101;
+            check(contextual.route(request, destination).error_code.empty(),
+                  "Changed context exchange");
+            context_peer.verify();
+            check(context_peer.requests == 2, "New network context cannot use previous DNS cache");
+        }
         for (const auto action : {nd::Action::process, nd::Action::bypass}) {
             Peer peer(false, Mode::good);
             auto proxy_config = nd::default_config();

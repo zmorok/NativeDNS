@@ -196,7 +196,8 @@ class SecureTransport final : public IDnsTransport {
 public:
     explicit SecureTransport(bool dot) : dot_(dot) {
     }
-    Packet exchange(const Packet& request, const Server& server) override {
+    Packet exchange(const Packet& request, const Server& configured_server) override {
+        const auto server = with_network_context(configured_server);
         if (!server.enabled)
             throw Error("SERVER_DISABLED", "DNS server is disabled");
         if (!server.timeout_ms || server.timeout_ms > 120000)
@@ -271,27 +272,7 @@ private:
             }
         }
         if (endpoint.empty() && !bootstrap_servers.empty()) {
-            std::string failure;
-            for (const auto& bootstrap : bootstrap_servers) {
-                Server plain;
-                plain.ip = bootstrap;
-                plain.name = "bootstrap";
-                plain.route = server.route;
-                plain.timeout_ms = remaining(deadline);
-                for (uint16_t type : {uint16_t{1}, uint16_t{28}}) {
-                    plain.timeout_ms = remaining(deadline);
-                    auto result = test_server(plain, host, type);
-                    if (result.success) {
-                        endpoint = result.addresses.front();
-                        break;
-                    }
-                    failure = result.error_code + ": " + result.message;
-                }
-                if (!endpoint.empty())
-                    break;
-            }
-            if (endpoint.empty())
-                throw Error("BOOTSTRAP", "Upstream bootstrap failed: " + failure);
+            endpoint = bootstrap_endpoint(server, host, bootstrap_servers, deadline);
         }
         if (endpoint.empty())
             throw Error("BOOTSTRAP",
@@ -364,9 +345,107 @@ private:
             throw Error("DNS_TRUNCATED", "Truncated secure DNS response");
         return response;
     }
+    struct BootstrapState {
+        bool refreshing = false;
+        std::string endpoint, failure;
+        Clock::time_point expires{}, retry_after{};
+        std::condition_variable changed;
+    };
+    std::string bootstrap_endpoint(const Server& server,
+                                   const std::string& host,
+                                   const std::vector<std::string>& resolvers,
+                                   Clock::time_point deadline) {
+        auto key = host + '|' + network_route_key(server.route);
+        for (const auto& resolver : resolvers)
+            key += '|' + resolver;
+        std::shared_ptr<BootstrapState> state;
+        {
+            std::unique_lock lock(bootstrap_mutex_);
+            for (auto item = bootstrap_.begin(); item != bootstrap_.end();) {
+                if (item->second.use_count() == 1 && !item->second->refreshing &&
+                    item->second->expires <= Clock::now() &&
+                    item->second->retry_after <= Clock::now())
+                    item = bootstrap_.erase(item);
+                else
+                    ++item;
+            }
+            if (bootstrap_.size() >= 128 && !bootstrap_.contains(key))
+                throw Error("BOOTSTRAP_BUSY", "Bootstrap cache is at capacity");
+            auto& slot = bootstrap_[key];
+            if (!slot)
+                slot = std::make_shared<BootstrapState>();
+            state = slot;
+            for (;;) {
+                if (!state->endpoint.empty() && state->expires > Clock::now())
+                    return state->endpoint;
+                if (!state->failure.empty() && state->retry_after > Clock::now())
+                    throw Error("BOOTSTRAP", state->failure);
+                if (!state->refreshing) {
+                    state->refreshing = true;
+                    break;
+                }
+                if (state->changed.wait_until(lock, deadline) == std::cv_status::timeout)
+                    throw Error("TIMEOUT", "Bootstrap refresh is busy");
+            }
+        }
+        try {
+            std::string endpoint, failure;
+            uint32_t ttl = 0;
+            for (const auto& resolver : resolvers) {
+                Server plain;
+                plain.ip = resolver;
+                plain.name = "bootstrap";
+                plain.route = server.route;
+                for (uint16_t type : {uint16_t{1}, uint16_t{28}}) {
+                    try {
+                        plain.timeout_ms = std::min<uint32_t>(remaining(deadline), 1000);
+                        const auto request = make_query(host, type);
+                        const auto response =
+                            make_transport(Protocol::udp)->exchange(request, plain);
+                        const auto answer = parse_response(response, parse_question(request));
+                        if (!answer.rcode && !answer.addresses.empty()) {
+                            endpoint = answer.addresses.front();
+                            ttl = std::min<uint32_t>(answer.cache_ttl, 60);
+                            break;
+                        }
+                        failure = "Bootstrap response has no usable address";
+                    } catch (const Error& error) {
+                        failure = error.code + ": " + error.what();
+                        if (Clock::now() >= deadline)
+                            break;
+                    }
+                }
+                if (!endpoint.empty() || Clock::now() >= deadline)
+                    break;
+            }
+            if (endpoint.empty())
+                throw Error("BOOTSTRAP", "Upstream bootstrap failed: " + failure);
+            {
+                std::lock_guard lock(bootstrap_mutex_);
+                state->endpoint = endpoint;
+                state->failure.clear();
+                state->expires = Clock::now() + std::chrono::seconds(ttl);
+                state->refreshing = false;
+            }
+            state->changed.notify_all();
+            return endpoint;
+        } catch (...) {
+            {
+                std::lock_guard lock(bootstrap_mutex_);
+                state->refreshing = false;
+                state->failure = "Upstream bootstrap is temporarily unavailable";
+                state->retry_after = Clock::now() + std::chrono::seconds(1);
+            }
+            state->changed.notify_all();
+            throw;
+        }
+    }
+    std::mutex bootstrap_mutex_;
+    std::map<std::string, std::shared_ptr<BootstrapState>> bootstrap_;
     bool dot_;
     struct Entry {
         bool busy = false;
+        uint64_t generation = 0;
         std::unique_ptr<CurlHandle> handle = std::make_unique<CurlHandle>();
     };
     struct Lease {
@@ -393,6 +472,16 @@ private:
         for (const auto& hash : server.hashes)
             key += '|' + hash;
         std::unique_lock lock(pool_mutex_);
+        for (auto item = pool_.begin(); item != pool_.end();) {
+            const bool stale =
+                std::all_of(item->second.begin(), item->second.end(), [&](const auto& entry) {
+                    return !entry->busy && entry->generation != server.route.generation;
+                });
+            if (stale)
+                item = pool_.erase(item);
+            else
+                ++item;
+        }
         auto& entries = pool_[key];
         for (;;) {
             const auto found = std::find_if(
@@ -404,6 +493,7 @@ private:
             const size_t limit = dot_ ? 4 : 8;
             if (entries.size() < limit) {
                 auto entry = std::make_shared<Entry>();
+                entry->generation = server.route.generation;
                 entry->busy = true;
                 entries.push_back(entry);
                 return std::make_unique<Lease>(*this, std::move(entry));

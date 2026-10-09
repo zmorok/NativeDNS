@@ -51,7 +51,7 @@ public:
     private:
         friend class Router;
         mutable std::mutex health_mutex;
-        mutable std::map<uint32_t, Health> health;
+        mutable std::map<std::string, Health> health;
         mutable std::mutex cache_mutex;
         mutable std::map<std::string, CacheEntry> cache;
         mutable std::map<std::string, std::shared_ptr<Pending>> pending;

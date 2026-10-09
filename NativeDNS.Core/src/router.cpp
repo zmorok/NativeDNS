@@ -93,19 +93,22 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
     for (const auto* server : candidates)
         budget_ms = std::min<uint64_t>(120000, budget_ms + server->timeout_ms);
     const auto deadline = started + std::chrono::milliseconds(budget_ms);
+    const auto health_key = [&](const Server* server) {
+        return std::to_string(server->id) + '|' + network_route_key(primary.route);
+    };
     {
         std::lock_guard lock(snapshot.health_mutex);
         const auto now = std::chrono::steady_clock::now();
         for (const auto* candidate : candidates)
-            snapshot.health.try_emplace(candidate->id);
+            snapshot.health.try_emplace(health_key(candidate));
         const bool any_ready =
             std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                return snapshot.health.at(server->id).retry_after <= now;
+                return snapshot.health.at(health_key(server)).retry_after <= now;
             });
         std::stable_sort(
             candidates.begin(), candidates.end(), [&](const Server* left, const Server* right) {
-                const auto& a = snapshot.health.at(left->id);
-                const auto& b = snapshot.health.at(right->id);
+                const auto& a = snapshot.health.at(health_key(left));
+                const auto& b = snapshot.health.at(health_key(right));
                 const bool a_open = any_ready && a.retry_after > now,
                            b_open = any_ready && b.retry_after > now;
                 if (a_open != b_open)
@@ -128,9 +131,10 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             std::lock_guard lock(snapshot.health_mutex);
             const bool another_ready =
                 std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                    return server != candidate && snapshot.health[server->id].retry_after <= now;
+                    return server != candidate &&
+                           snapshot.health[health_key(server)].retry_after <= now;
                 });
-            if (snapshot.health[candidate->id].retry_after > now && another_ready)
+            if (snapshot.health[health_key(candidate)].retry_after > now && another_ready)
                 continue;
         }
         auto attempt = *candidate;
@@ -147,7 +151,7 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
                                        .count();
             {
                 std::lock_guard lock(snapshot.health_mutex);
-                auto& state = snapshot.health[candidate->id];
+                auto& state = snapshot.health[health_key(candidate)];
                 state.consecutive_failures = 0;
                 state.retry_after = {};
                 state.latency_ms =
@@ -160,7 +164,7 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             unsigned failures = 0;
             {
                 std::lock_guard lock(snapshot.health_mutex);
-                auto& state = snapshot.health[candidate->id];
+                auto& state = snapshot.health[health_key(candidate)];
                 failures = ++state.consecutive_failures;
                 if (failures >= 2) {
                     const auto shift = std::min(failures - 2, 3u);
@@ -348,6 +352,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 routed_server.port = 53;
             }
         }
+        routed_server = with_network_context(std::move(routed_server));
         if (logger_.enabled(Level::verbose))
             log(Level::verbose,
                 "DNS_UPSTREAM",

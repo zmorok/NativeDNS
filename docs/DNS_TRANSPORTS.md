@@ -8,6 +8,14 @@ implicitly. A failed bootstrap affects that server/request, not host startup or
 unrelated rules. Later requests retry bootstrap using the current resolver list.
 TLS hostname verification remains tied to the configured secure hostname.
 
+DNS cache/coalescing, upstream health and connection pools are separated by
+adapter context and network generation. A DHCP DNS or interface-state change
+prevents new requests from reusing a connection from the previous generation.
+Idle previous-generation TCP/TLS pool entries are retired on the next use.
+Secure bootstrap results are coalesced and cached for at most their DNS TTL or
+60 seconds; failed bootstrap has a one-second retry delay. Bootstrap uses the
+same selected interface as the secure connection and bounded request deadlines.
+
 NativeDNS transports exchange DNS wire messages through a common Core interface.
 
 ## Plain DNS

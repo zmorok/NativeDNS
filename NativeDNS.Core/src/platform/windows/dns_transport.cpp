@@ -217,7 +217,8 @@ class PlainTransport final : public IDnsTransport {
 public:
     explicit PlainTransport(bool tcp) : tcp_(tcp) {
     }
-    Packet exchange(const Packet& request, const Server& server) override {
+    Packet exchange(const Packet& request, const Server& configured_server) override {
+        const auto server = with_network_context(configured_server);
         if (!server.enabled)
             throw Error("SERVER_DISABLED", "DNS server is disabled");
         if (!server.timeout_ms || server.timeout_ms > 120000)
@@ -241,6 +242,7 @@ public:
 private:
     struct Entry {
         bool busy = false;
+        uint64_t generation = 0;
         std::unique_ptr<ConnectedSocket> connection;
         Clock::time_point last_used{};
     };
@@ -259,6 +261,16 @@ private:
         std::shared_ptr<Entry> selected;
         {
             std::unique_lock lock(pool_mutex_);
+            for (auto item = pool_.begin(); item != pool_.end();) {
+                const bool stale =
+                    std::all_of(item->second.begin(), item->second.end(), [&](const auto& entry) {
+                        return !entry->busy && entry->generation != server.route.generation;
+                    });
+                if (stale)
+                    item = pool_.erase(item);
+                else
+                    ++item;
+            }
             auto& entries = pool_[key];
             for (;;) {
                 const auto found = std::find_if(
@@ -270,6 +282,7 @@ private:
                 }
                 if (entries.size() < 4) {
                     selected = std::make_shared<Entry>();
+                    selected->generation = server.route.generation;
                     selected->busy = true;
                     entries.push_back(selected);
                     break;

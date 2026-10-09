@@ -178,7 +178,8 @@ class DnsCryptTransport final : public IDnsTransport {
 public:
     explicit DnsCryptTransport(bool anonymized) : anonymized_(anonymized) {
     }
-    Packet exchange(const Packet& request, const Server& server) override {
+    Packet exchange(const Packet& request, const Server& configured_server) override {
+        const auto server = with_network_context(configured_server);
         if (!server.enabled)
             throw Error("SERVER_DISABLED", "DNS server is disabled");
         if (!server.timeout_ms || server.timeout_ms > 120000)
@@ -266,7 +267,8 @@ private:
                                 std::to_string(server.port ? server.port : 443) + '|' +
                                 server.provider_name + '|' + server.public_key + '|' +
                                 server.relay + '|' +
-                                (server.allow_direct_certificate_fallback ? '1' : '0');
+                                (server.allow_direct_certificate_fallback ? '1' : '0') + '|' +
+                                network_route_key(server.route);
         std::shared_ptr<CertificateState> state;
         std::optional<DnsCryptCertificate> current;
         {

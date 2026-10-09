@@ -35,6 +35,7 @@ const InterfaceInfo* find_interface(const NetworkSnapshot& snapshot,
                                     const std::string& id,
                                     const std::string& match = "id");
 std::string network_route_key(const NetworkRoute& route);
+Server with_network_context(Server server);
 class NetworkMonitor final {
 public:
     using Source = std::function<std::vector<InterfaceInfo>()>;
