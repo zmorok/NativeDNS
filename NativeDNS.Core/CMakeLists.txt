@@ -19,11 +19,13 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
   src/host.cpp
   src/ipc_wire.cpp
   src/fault_injection.cpp
+  src/network.cpp
 )
 
 if(WIN32)
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/windows/platform.cpp
+    src/platform/windows/network.cpp
     src/platform/windows/dns_transport.cpp
     src/platform/windows/local_proxy.cpp
     src/platform/windows/firewall.cpp
@@ -36,6 +38,7 @@ if(WIN32)
 else()
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/linux/platform.cpp
+    src/platform/linux/network.cpp
     src/platform/linux/dns_transport.cpp
     src/platform/linux/local_proxy.cpp
     src/platform/linux/linux_interception.cpp

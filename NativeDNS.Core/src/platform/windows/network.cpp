@@ -1,0 +1,80 @@
+#include <nativedns/network.hpp>
+#include <nativedns/platform.hpp>
+#include <nativedns/config.hpp>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#include <algorithm>
+
+namespace nd::platform {
+namespace {
+std::string numeric_address(const sockaddr* address, uint32_t interface6) {
+    if (!address)
+        return {};
+    if (address->sa_family == AF_INET)
+        return format_ip(&reinterpret_cast<const sockaddr_in*>(address)->sin_addr, false);
+    if (address->sa_family != AF_INET6)
+        return {};
+    const auto& v6 = *reinterpret_cast<const sockaddr_in6*>(address);
+    auto text = format_ip(&v6.sin6_addr, true);
+    auto scope = v6.sin6_scope_id;
+    if (!scope && IN6_IS_ADDR_LINKLOCAL(&v6.sin6_addr))
+        scope = interface6;
+    if (scope)
+        text += '%' + std::to_string(scope);
+    return text;
+}
+void append(std::vector<std::string>& values, std::string value) {
+    if (!value.empty() && std::find(values.begin(), values.end(), value) == values.end())
+        values.push_back(std::move(value));
+}
+} // namespace
+std::vector<InterfaceInfo> enumerate_interfaces() {
+    ULONG size = 16384;
+    std::vector<unsigned char> storage(size);
+    IP_ADAPTER_ADDRESSES* adapters = nullptr;
+    ULONG result = ERROR_BUFFER_OVERFLOW;
+    for (unsigned attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; ++attempt) {
+        if (size > 1024 * 1024)
+            throw Error("INTERFACE_ENUMERATION", "Adapter snapshot exceeds limit");
+        storage.resize(size);
+        adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(storage.data());
+        result =
+            GetAdaptersAddresses(AF_UNSPEC,
+                                 GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                     GAA_FLAG_INCLUDE_ALL_INTERFACES | GAA_FLAG_INCLUDE_GATEWAYS,
+                                 nullptr,
+                                 adapters,
+                                 &size);
+    }
+    if (result == ERROR_NO_DATA)
+        return {};
+    if (result != NO_ERROR)
+        throw Error("INTERFACE_ENUMERATION",
+                    "Cannot enumerate adapters: " + std::to_string(result));
+    std::vector<InterfaceInfo> interfaces;
+    for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+        InterfaceInfo info;
+        info.id = adapter->AdapterName ? adapter->AdapterName : "";
+        info.name = adapter->FriendlyName ? narrow(adapter->FriendlyName) : "";
+        info.description = adapter->Description ? narrow(adapter->Description) : "";
+        info.dns_suffix = adapter->DnsSuffix ? narrow(adapter->DnsSuffix) : "";
+        info.luid = adapter->Luid.Value;
+        info.index4 = adapter->IfIndex;
+        info.index6 = adapter->Ipv6IfIndex;
+        info.metric4 = adapter->Ipv4Metric;
+        info.metric6 = adapter->Ipv6Metric;
+        info.mtu = adapter->Mtu;
+        info.up = adapter->OperStatus == IfOperStatusUp;
+        for (auto* item = adapter->FirstUnicastAddress; item; item = item->Next)
+            append(info.addresses, numeric_address(item->Address.lpSockaddr, info.index6));
+        for (auto* item = adapter->FirstDnsServerAddress; item; item = item->Next)
+            append(info.dns_servers, numeric_address(item->Address.lpSockaddr, info.index6));
+        for (auto* item = adapter->FirstGatewayAddress; item; item = item->Next)
+            append(info.gateways, numeric_address(item->Address.lpSockaddr, info.index6));
+        std::sort(info.addresses.begin(), info.addresses.end());
+        interfaces.push_back(std::move(info));
+    }
+    return interfaces;
+}
+} // namespace nd::platform

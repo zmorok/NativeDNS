@@ -5,6 +5,13 @@ An original-destination reinjection is allowed only when the selected rule has
 no unmet runtime requirements; otherwise the Router returns a readable error
 and SERVFAIL for a valid query. TCP continues to use the Router per DNS frame.
 
+CoreHost uses a shared Qt-independent network monitor. Platform enumeration
+publishes immutable adapter snapshots, refreshed every second; a generation
+changes only when adapter state, addresses, DNS, or enumeration health changes.
+Windows snapshots include adapter GUID/LUID, IPv4/IPv6 indices, metrics, DNS,
+gateways and scoped IPv6 addresses. POSIX snapshots expose interface names,
+indices and addresses; per-interface DNS is not inferred from resolv.conf.
+
 NativeDNS is a C++20 cross-platform DNS client/interceptor with a Qt 6 Widgets GUI and a Qt-independent Core.
 
 ```text

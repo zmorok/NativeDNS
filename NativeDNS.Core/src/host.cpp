@@ -1,5 +1,6 @@
 #include <nativedns/host.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/network.hpp>
 #include <nativedns/detail/fault_injection.hpp>
 #include <charconv>
 #include <sstream>
@@ -36,6 +37,11 @@ CoreHost::CoreHost(Config config,
         logger_.write(Level::errors_only, "FILE_LOG_INIT_FAILED", error.what());
     }
     logger_.write(Level::normal, "CORE_INITIALIZING", "Core host initialization started");
+    const auto network = NetworkMonitor::shared().snapshot();
+    logger_.write(Level::verbose,
+                  "NETWORK_SNAPSHOT",
+                  "generation=" + std::to_string(network->generation) +
+                      " interfaces=" + std::to_string(network->interfaces.size()));
     logger_.write(Level::normal, "SYSTEM_ENVIRONMENT", platform::system_summary());
     logger_.write(Level::verbose,
                   "CORE_PATHS",
