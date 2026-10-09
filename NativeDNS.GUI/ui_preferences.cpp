@@ -105,6 +105,8 @@ constexpr std::array translations{
     Translation{"Selected record details", "Подробности выбранной записи"},
     Translation{"Select a record to read its complete original text.", "Выберите запись, чтобы прочитать её полный исходный текст."},
     Translation{"Check for updates", "Проверить обновления"},
+    Translation{"Check update on start", "Проверять обновления при запуске"},
+    Translation{"Cannot save update preferences.", "Не удалось сохранить настройки проверки обновлений."},
     Translation{"Checking for updates...", "Проверка обновлений..."},
     Translation{"Installed version: %1", "Установленная версия: %1"},
     Translation{"Release version: %1", "Версия релиза: %1"},

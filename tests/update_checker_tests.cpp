@@ -1,9 +1,11 @@
 #include "../NativeDNS.GUI/update_checker.hpp"
 #include "../NativeDNS.GUI/ui_preferences.hpp"
+#include <QAction>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QPushButton>
@@ -108,6 +110,105 @@ private slots:
     void init() {
         QSettings().clear();
         setUiLanguage(UiLanguage::english);
+    }
+    void startupPreference() {
+        QVERIFY(startupUpdateCheckEnabled());
+        QMenu menu;
+        auto* action = addStartupUpdateCheckAction(&menu);
+        QVERIFY(action->isCheckable() && action->isChecked());
+        QCOMPARE(action->text(), "Check update on start");
+        action->trigger();
+        QVERIFY(!action->isChecked() && !startupUpdateCheckEnabled());
+        QMenu reopened;
+        QVERIFY(!addStartupUpdateCheckAction(&reopened)->isChecked());
+        StubNetwork network;
+        UpdateDialog dialog("0.4.3", nullptr, &network);
+        dialog.checkOnStart();
+        QCOMPARE(network.requests, 0);
+        QVERIFY(!dialog.isVisible());
+        dialog.check(); // The preference never disables manual checks.
+        QCOMPARE(network.requests, 1);
+        network.last->complete(manifest("0.4.4"));
+        QVERIFY(dialog.findChild<QLabel*>("updateStatus")->text().contains("available"));
+        action->trigger();
+        QVERIFY(action->isChecked() && startupUpdateCheckEnabled());
+        QMenu enabled;
+        QVERIFY(addStartupUpdateCheckAction(&enabled)->isChecked());
+        setUiLanguage(UiLanguage::russian);
+        QMenu translated;
+        QCOMPARE(addStartupUpdateCheckAction(&translated)->text(), uiText("Check update on start"));
+    }
+    void startupComparison_data() {
+        comparison_data();
+    }
+    void startupComparison() {
+        QFETCH(QString, current);
+        QFETCH(QString, release);
+        QFETCH(QString, status);
+        StubNetwork network;
+        UpdateDialog dialog(current, nullptr, &network);
+        dialog.checkOnStart();
+        dialog.checkOnStart();
+        QCOMPARE(network.requests, 1);
+        QVERIFY(!dialog.isVisible());
+        network.last->complete(manifest(release));
+        const bool newer = status == "A new NativeDNS version is available.";
+        QCOMPARE(dialog.isVisible(), newer);
+        QCOMPARE(dialog.findChild<QLabel*>("updateStatus")->text(), status);
+        QCOMPARE(QSettings().value("updates/lastManifest").toByteArray(), manifest(release));
+        if (newer)
+            QVERIFY(
+                dialog.findChild<QTextBrowser*>("releaseNotes")->toPlainText().contains("aaaaaaa"));
+    }
+    void startupFailures_data() {
+        QTest::addColumn<QByteArray>("data");
+        QTest::addColumn<int>("http");
+        QTest::newRow("offline") << QByteArray{} << 0;
+        QTest::newRow("missing") << QByteArray{} << 404;
+        QTest::newRow("limited") << QByteArray{} << 429;
+        QTest::newRow("invalid") << QByteArray("invalid") << 200;
+        QTest::newRow("oversized") << QByteArray(maximumUpdateManifestBytes + 100, ' ') << 200;
+    }
+    void startupFailures() {
+        QFETCH(QByteArray, data);
+        QFETCH(int, http);
+        // Cached newer metadata must not produce a notification after a failed live check.
+        QSettings().setValue("updates/lastManifest", manifest("0.4.4"));
+        StubNetwork network;
+        QPointer<UpdateDialog> dialog = new UpdateDialog("0.4.3", nullptr, &network);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->checkOnStart();
+        network.last->complete(data,
+                               http,
+                               http == 200 ? QNetworkReply::NoError
+                                           : QNetworkReply::ConnectionRefusedError);
+        QVERIFY(!dialog || !dialog->isVisible());
+        QTRY_VERIFY(!dialog);
+    }
+    void startupCancellationAndManualTakeover() {
+        StubNetwork network;
+        UpdateDialog dialog("0.4.3", nullptr, &network);
+        dialog.checkOnStart();
+        auto* pending = network.last.data();
+        dialog.cancelStartupCheck();
+        QVERIFY(pending->aborted);
+        QVERIFY(!dialog.isVisible());
+        dialog.checkOnStart();
+        auto* timer = dialog.findChild<QTimer*>();
+        const auto timedOut = network.last;
+        timer->start(1);
+        QTRY_VERIFY(!timedOut || timedOut->aborted);
+        QVERIFY(!dialog.isVisible());
+        dialog.checkOnStart();
+        QCOMPARE(network.requests, 3);
+        dialog.showForManualCheck();
+        dialog.cancelStartupCheck(); // An opened manual check must remain active.
+        QVERIFY(dialog.isVisible());
+        QVERIFY(!network.last->aborted);
+        network.last->complete({}, 0, QNetworkReply::ConnectionRefusedError);
+        QVERIFY(dialog.isVisible());
+        QVERIFY(dialog.findChild<QLabel*>("updateStatus")->text().contains("Could not connect"));
+        QCOMPARE(network.requests, 3);
     }
     void rejectsInvalidManifest() {
         QString error;

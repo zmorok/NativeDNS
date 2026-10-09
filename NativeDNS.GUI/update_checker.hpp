@@ -13,6 +13,8 @@ class QTextBrowser;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QTimer;
+class QAction;
+class QMenu;
 
 struct ReleaseChange {
     QString commit;
@@ -29,6 +31,8 @@ struct ReleaseManifest {
 
 inline constexpr qsizetype maximumUpdateManifestBytes = 512 * 1024;
 QUrl updateManifestUrl();
+bool startupUpdateCheckEnabled();
+QAction* addStartupUpdateCheckAction(QMenu* menu);
 std::optional<ReleaseManifest> parseReleaseManifest(const QByteArray& json, QString& error);
 
 // Checks and displays release metadata only; package installation is separate.
@@ -39,12 +43,16 @@ public:
                           QNetworkAccessManager* network = nullptr);
     ~UpdateDialog() override;
     void check();
+    void checkOnStart();
+    void cancelStartupCheck();
+    void showForManualCheck();
 
 protected:
     void done(int result) override;
 
 private:
     void cancelRequest();
+    void startRequest();
     void readResponse();
     void finishRequest();
     void showFailure(const QString& message);
@@ -63,4 +71,5 @@ private:
     QTextBrowser* notes_;
     QPushButton* openRelease_;
     QPushButton* retry_;
+    bool quiet_ = false;
 };

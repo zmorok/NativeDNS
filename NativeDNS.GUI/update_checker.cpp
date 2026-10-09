@@ -2,11 +2,14 @@
 #include "ui_preferences.hpp"
 
 #include <QDesktopServices>
+#include <QAction>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMenu>
+#include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -43,6 +46,26 @@ QString commitUrl(const QString& commit) {
 
 QUrl updateManifestUrl() {
     return QUrl(QString::fromLatin1(repositoryUrl) + "/releases/latest/download/update.json");
+}
+bool startupUpdateCheckEnabled() {
+    return QSettings().value("updates/checkOnStart", true).toBool();
+}
+QAction* addStartupUpdateCheckAction(QMenu* menu) {
+    auto* action = menu->addAction(uiText("Check update on start"));
+    action->setProperty("uiTextKey", "Check update on start");
+    action->setObjectName("startupUpdateCheck");
+    action->setCheckable(true);
+    action->setChecked(startupUpdateCheckEnabled());
+    QObject::connect(action, &QAction::triggered, menu, [action, menu](bool checked) {
+        QSettings settings;
+        settings.setValue("updates/checkOnStart", checked);
+        settings.sync();
+        if (settings.status() != QSettings::NoError)
+            QMessageBox::warning(
+                menu->parentWidget(), "NativeDNS", uiText("Cannot save update preferences."));
+        action->setChecked(startupUpdateCheckEnabled());
+    });
+    return action;
 }
 
 std::optional<ReleaseManifest> parseReleaseManifest(const QByteArray& json, QString& error) {
@@ -182,6 +205,26 @@ void UpdateDialog::cancelRequest() {
     }
 }
 void UpdateDialog::check() {
+    quiet_ = false;
+    startRequest();
+}
+void UpdateDialog::checkOnStart() {
+    if (!startupUpdateCheckEnabled() || reply_)
+        return;
+    quiet_ = true;
+    startRequest();
+}
+void UpdateDialog::cancelStartupCheck() {
+    if (quiet_)
+        reject();
+}
+void UpdateDialog::showForManualCheck() {
+    quiet_ = false;
+    show();
+    raise();
+    activateWindow();
+}
+void UpdateDialog::startRequest() {
     if (reply_)
         return;
     status_->setStyleSheet({});
@@ -261,8 +304,18 @@ void UpdateDialog::finishRequest() {
                      : comparison == 0
                          ? uiText("NativeDNS is up to date.")
                          : uiText("The installed version is newer than the published release."));
+    if (quiet_) {
+        if (comparison > 0)
+            showForManualCheck();
+        else
+            reject();
+    }
 }
 void UpdateDialog::showFailure(const QString& message) {
+    if (quiet_) {
+        reject();
+        return;
+    }
     status_->setStyleSheet("color: " + palette().color(QPalette::BrightText).name() + ";");
     status_->setText(uiText("Could not check for updates.") + "\n" + message);
     retry_->show();

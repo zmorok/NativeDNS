@@ -69,6 +69,9 @@ technical events while keeping DNS records subject to the action filter.
 The mode is remembered, including the state with neither item selected. The text filter and
 verbosity level continue to apply in every mode.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
+`Help > Check update on start` enables a background update check once per GUI launch (on by default).
+The preference is remembered. Startup checks show the update window only for a newer release;
+an up-to-date version or a failed check stays silent. Manual checks still show results and errors.
 
 ## Application lifecycle
 

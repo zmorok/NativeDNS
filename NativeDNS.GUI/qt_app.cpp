@@ -1255,7 +1255,11 @@ NativeDnsWindow::NativeDnsWindow(bool background) {
     networkSignature_ = networkSignature();
     connect(&statusTimer_, &QTimer::timeout, this, [this] { refreshStatus(); });
     connect(&logTimer_, &QTimer::timeout, this, [this] { refreshLogs(); });
-    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdownCoreForExit(); });
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+        if (updateDialog_)
+            updateDialog_->reject();
+        shutdownCoreForExit();
+    });
     statusTimer_.start(1000);
     logTimer_.start(500);
     statusTimer_.setTimerType(Qt::CoarseTimer);
@@ -1263,6 +1267,14 @@ NativeDnsWindow::NativeDnsWindow(bool background) {
     QTimer::singleShot(100, this, [this] {
         refreshStatus();
         ensureCoreStarted();
+    });
+    QTimer::singleShot(1000, this, [this] {
+        if (exiting_ || !startupUpdateCheckEnabled() || updateDialog_)
+            return;
+        auto* dialog = new UpdateDialog(QCoreApplication::applicationVersion(), this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        updateDialog_ = dialog;
+        dialog->checkOnStart();
     });
 }
 
@@ -1452,6 +1464,12 @@ void NativeDnsWindow::buildUi() {
 
     auto* help = addMenu("&Help");
     auto* checkUpdates = addAction(help, "Check for updates");
+    auto* startupUpdates = addStartupUpdateCheckAction(help);
+    connect(startupUpdates, &QAction::triggered, this, [this] {
+        if (!startupUpdateCheckEnabled() && updateDialog_)
+            updateDialog_->cancelStartupCheck();
+    });
+    help->addSeparator();
     auto* about = addAction(help, "About NativeDNS");
 
     auto* bar = addToolBar("Main");
@@ -1585,9 +1603,7 @@ void NativeDnsWindow::buildUi() {
             dialog->show();
             dialog->check();
         } else {
-            updateDialog_->show();
-            updateDialog_->raise();
-            updateDialog_->activateWindow();
+            updateDialog_->showForManualCheck();
         }
     });
 
