@@ -299,16 +299,16 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         valid_question = true;
         context.address = question.name;
         context.dns_type = dns_type_name(question.type);
-        const auto& rule = match_rule(snapshot.config, question.name);
+        const auto decision = evaluate_rule(snapshot.config, question.name);
+        const auto& rule = *decision.rule;
         matched_rule = &rule;
         context.rule = rule.name;
         context.action = action_name(rule.action);
         result.rule_id = rule.id;
         result.server_id = rule.server_id;
         result.action = rule.action;
-        if (!rule.interface_id.empty() || rule.dnssec_validate || rule.dnssec_reject_unsigned)
-            throw Error("NOT_IMPLEMENTED",
-                        "Selected rule requires interface binding or local DNSSEC validation");
+        if (!decision.error_code.empty())
+            throw Error(decision.error_code, decision.message);
         if (rule.action == Action::bypass) {
             if (logger_.enabled(Level::normal))
                 log(Level::normal, "DNS_ROUTE", route_log_message(question, rule, &original));

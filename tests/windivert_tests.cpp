@@ -307,6 +307,19 @@ int main() {
         fast_path.rules.front().action = nd::Action::bypass;
         check(nd::should_reinject_udp_immediately(fast_path, ipv4_query()),
               "Bypass action bypasses worker queue");
+        fast_path.rules.front().interface_id = "unavailable-interface";
+        check(!nd::should_reinject_udp_immediately(fast_path, ipv4_query()),
+              "Interface capability requirement cannot be bypassed by UDP fast path");
+        nd::Logger policy_log;
+        nd::Router policy_router(fast_path, policy_log);
+        check(policy_router.route(nd::make_query("example.com"), {}).error_code ==
+                  "NOT_IMPLEMENTED",
+              "Router and UDP fast path agree about unsupported interface requirement");
+        fast_path.rules.front().interface_id.clear();
+        fast_path.rules.front().dnssec_validate = true;
+        check(!nd::should_reinject_udp_immediately(fast_path, ipv4_query()),
+              "Local DNSSEC requirement cannot be bypassed by UDP fast path");
+        fast_path.rules.front().dnssec_validate = false;
         fast_path.rules.front().action = nd::Action::block;
         check(!nd::should_reinject_udp_immediately(fast_path, ipv4_query()),
               "Block remains on worker queue");

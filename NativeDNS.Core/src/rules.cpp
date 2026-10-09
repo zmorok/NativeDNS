@@ -328,6 +328,19 @@ const Rule& match_rule(const Config& config, const std::string& hostname) {
     }
     throw Error("DEFAULT", "No matching rule: invalid configuration");
 }
+RuleDecision evaluate_rule(const Config& config, const std::string& hostname) {
+    const auto& rule = match_rule(config, hostname);
+    RuleDecision decision;
+    decision.rule = &rule;
+    if (!rule.interface_id.empty() || rule.dnssec_validate || rule.dnssec_reject_unsigned) {
+        decision.error_code = "NOT_IMPLEMENTED";
+        decision.message = "Selected rule requires interface binding or local DNSSEC validation";
+        return decision;
+    }
+    decision.reinject_udp =
+        rule.action == Action::bypass || (rule.action == Action::process && rule.server_id == 0);
+    return decision;
+}
 ConfigEditor::ConfigEditor(Config config) : config_(std::move(config)) {
     validate(config_);
 }

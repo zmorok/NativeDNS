@@ -296,8 +296,7 @@ bool should_reinject_udp_immediately(const Config& config, const Packet& capture
     const auto question = parse_question(query);
     if (question.flags & 0x8000)
         throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
-    const auto& rule = match_rule(config, question.name);
-    return rule.action == Action::bypass || (rule.action == Action::process && rule.server_id == 0);
+    return evaluate_rule(config, question.name).reinject_udp;
 }
 
 Packet make_reflected_tcp_packet(const Packet& captured,
@@ -412,13 +411,6 @@ struct WinDivertInterception::Impl {
             const auto view = udp_view(job.packet);
             const auto query =
                 Packet(job.packet.begin() + static_cast<ptrdiff_t>(view.payload), job.packet.end());
-            const auto question = parse_question(query);
-            const auto& rule = match_rule(job.snapshot->config, question.name);
-            if (rule.action == Action::bypass ||
-                (rule.action == Action::process && rule.server_id == 0)) {
-                inject(job.packet, job.address);
-                return;
-            }
             auto routed = router.route(query, original_server(job.packet, view), job.snapshot);
             if (routed.disposition == Disposition::forward_original) {
                 inject(job.packet, job.address);

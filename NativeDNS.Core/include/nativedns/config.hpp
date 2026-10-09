@@ -22,6 +22,14 @@ std::vector<std::string> split_patterns(const std::string& text);
 bool host_matches(const std::string& normalized_host, const std::string& normalized_pattern);
 void validate(const Config& config);
 const Rule& match_rule(const Config& config, const std::string& hostname);
+struct RuleDecision {
+    const Rule* rule = nullptr;
+    bool reinject_udp = false;
+    std::string error_code, message;
+};
+// Shared policy decision for the Router and packet fast path. The caller owns
+// the configuration snapshot for the lifetime of the returned rule pointer.
+RuleDecision evaluate_rule(const Config& config, const std::string& hostname);
 struct ImportResult {
     Config config;
     std::vector<std::string> warnings;

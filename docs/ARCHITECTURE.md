@@ -1,5 +1,10 @@
 # Architecture
 
+The Router and the WinDivert UDP fast path share rule capability evaluation.
+An original-destination reinjection is allowed only when the selected rule has
+no unmet runtime requirements; otherwise the Router returns a readable error
+and SERVFAIL for a valid query. TCP continues to use the Router per DNS frame.
+
 NativeDNS is a C++20 cross-platform DNS client/interceptor with a Qt 6 Widgets GUI and a Qt-independent Core.
 
 ```text
