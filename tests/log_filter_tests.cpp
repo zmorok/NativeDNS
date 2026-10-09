@@ -152,6 +152,35 @@ private slots:
         QCOMPARE(decoded[2].dnsType, "AAAA");
         QCOMPARE(decoded[3].message, "legacy failure");
     }
+    void fastPathMetadataRecovery() {
+        const auto raw =
+            QStringLiteral("dns.msftncsi.com [AAAA] - bypass : server=192.168.31.1 "
+                           "(UDP) (DNS over UDP), rule=Default, endpoint=192.168.31.1 port=53 "
+                           "interface=automatic generation=0");
+        const auto wire = "102\t1\t1700000000000\tDNS_ROUTE\t" + raw;
+        for (const auto& frame : {wire + "\t\t\t\t\n", wire + "\n", wire + "\t\t\tDefault\t\n"}) {
+            const auto decoded = decodeLogRecords(frame);
+            QCOMPARE(decoded.size(), 1);
+            QCOMPARE(decoded[0].message, raw);
+            QCOMPARE(decoded[0].address, "dns.msftncsi.com");
+            QCOMPARE(decoded[0].dnsType, "AAAA");
+            QCOMPARE(decoded[0].rule, "Default");
+            QCOMPARE(decoded[0].action, "bypass");
+            QString error;
+            QVERIFY(!LogFilter::compile("!action=\"bypass\"", error)->matches(decoded[0]));
+            QVERIFY(LogFilter::compile("addr=\"dns.msftncsi.com\" && rule=\"Default\"", error)
+                        ->matches(decoded[0]));
+        }
+        const auto suppressed =
+            decodeLogRecords("104\t0\t1700000000000\tTIMEOUT\tsuppressed=2 " + raw + "\t\t\t\t\n");
+        QCOMPARE(suppressed[0].address, "dns.msftncsi.com");
+        QCOMPARE(suppressed[0].rule, "Default");
+        const auto explicitFields =
+            decodeLogRecords(wire + "\tauthoritative.example\tA\tCustom, endpoint=x\tprocess\n");
+        QCOMPARE(explicitFields[0].address, "authoritative.example");
+        QCOMPARE(explicitFields[0].rule, "Custom, endpoint=x");
+        QCOMPARE(explicitFields[0].action, "process");
+    }
     void applyAndRetain() {
         QTemporaryDir directory;
         QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);

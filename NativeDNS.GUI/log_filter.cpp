@@ -190,8 +190,10 @@ bool LogFilter::matches(const LogRecord& record) const {
 
 QList<LogRecord> decodeLogRecords(const QString& payload) {
     QList<LogRecord> result;
-    static const QRegularExpression route("^(\\S+) \\[([^\\]]+)\\] - (process|bypass|block) : "
-                                          ".*?rule=(.*?)(?:, time=[0-9.]+ ms|, error=|$)");
+    static const QRegularExpression route(
+        "^(?:suppressed=[0-9]+ )?(\\S+) \\[([^\\]]+)\\] - "
+        "(process|bypass|block) : "
+        ".*?rule=(.*?)(?:, time=[0-9.]+ ms|, endpoint=|, error=|$)");
     for (const auto& line : payload.split('\n', Qt::SkipEmptyParts)) {
         const auto fields = line.split('\t');
         if (fields.size() < 4)
@@ -222,12 +224,21 @@ QList<LogRecord> decodeLogRecords(const QString& payload) {
             record.action = fields[8];
         } else {
             record.message = fields.mid(message).join('\t');
+        }
+        // Fast-path/older hosts can send the structured frame without routing fields.
+        // Recover missing fields from the original text without replacing explicit metadata.
+        if (record.address.isEmpty() || record.dnsType.isEmpty() || record.rule.isEmpty() ||
+            record.action.isEmpty()) {
             const auto match = route.match(record.message);
             if (match.hasMatch()) {
-                record.address = match.captured(1);
-                record.dnsType = match.captured(2);
-                record.action = match.captured(3);
-                record.rule = match.captured(4);
+                if (record.address.isEmpty())
+                    record.address = match.captured(1);
+                if (record.dnsType.isEmpty())
+                    record.dnsType = match.captured(2);
+                if (record.action.isEmpty())
+                    record.action = match.captured(3);
+                if (record.rule.isEmpty())
+                    record.rule = match.captured(4);
             }
         }
         result.push_back(std::move(record));
