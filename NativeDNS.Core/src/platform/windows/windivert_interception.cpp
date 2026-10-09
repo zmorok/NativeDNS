@@ -195,13 +195,16 @@ Server original_server(const Packet& packet, const UdpView& view) {
     server.port = read16(packet.data() + view.udp + 2);
     return server;
 }
-std::string destination_ip(const Packet& packet, bool ipv6) {
+std::string destination_ip(const Packet& packet, bool ipv6, uint32_t scope6 = 0) {
     char address[INET6_ADDRSTRLEN]{};
     const void* destination = ipv6 ? static_cast<const void*>(packet.data() + 24)
                                    : static_cast<const void*>(packet.data() + 16);
     if (!InetNtopA(ipv6 ? AF_INET6 : AF_INET, destination, address, sizeof(address)))
         throw Error("INTERCEPT_PACKET", "Cannot format TCP DNS destination");
-    return address;
+    std::string result = address;
+    if (ipv6 && scope6 && packet[24] == 0xfe && (packet[25] & 0xc0) == 0x80)
+        result += '%' + std::to_string(scope6);
+    return result;
 }
 TcpView tcp_view(const Packet& packet) {
     if (packet.size() < 40)
@@ -462,6 +465,7 @@ struct WinDivertInterception::Impl {
                     throw Error("WINDIVERT_RECV", "WinDivertRecv failed: " + std::to_string(error));
                 }
                 packet.resize(length);
+                bool policy_selected = false;
                 try {
                     if (is_tcp_packet(packet)) {
                         const auto view = tcp_view(packet);
@@ -481,13 +485,16 @@ struct WinDivertInterception::Impl {
                             inject(packet, address);
                             continue;
                         }
+                        policy_selected = true;
                         const auto flags = packet[view.tcp + 13];
                         if (toward_proxy && (flags & 0x02) != 0 && (flags & 0x10) == 0)
-                            tcp_proxy.expect_connection(destination_ip(packet, view.ipv6),
-                                                        source_port);
+                            tcp_proxy.expect_connection(
+                                destination_ip(packet, view.ipv6, address.Network.IfIdx),
+                                source_port);
                         else if (toward_proxy && (flags & 0x04) != 0)
-                            tcp_proxy.forget_connection(destination_ip(packet, view.ipv6),
-                                                        source_port);
+                            tcp_proxy.forget_connection(
+                                destination_ip(packet, view.ipv6, address.Network.IfIdx),
+                                source_port);
                         if (logger.enabled(Level::debug))
                             logger.write(Level::debug,
                                          "WINDIVERT_TCP_REFLECT",
@@ -517,8 +524,11 @@ struct WinDivertInterception::Impl {
                         inject(packet, address);
                         continue;
                     }
+                    policy_selected = true;
                     const auto captured_question = parse_question(Packet(
                         packet.begin() + static_cast<ptrdiff_t>(view.payload), packet.end()));
+                    if (captured_question.flags & 0x8000)
+                        throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
                     auto snapshot = router.snapshot();
                     const auto captured_decision =
                         evaluate_rule(snapshot->config, captured_question.name);
@@ -559,11 +569,11 @@ struct WinDivertInterception::Impl {
                     else
                         reject_overload(packet, view, address);
                 } catch (const Error& error) {
+                    if (error.code == "WINDIVERT_SEND")
+                        throw;
                     logger.write(Level::errors_only, error.code, error.what());
-                    try {
+                    if (!policy_selected) {
                         inject(packet, address);
-                    } catch (const Error& inject_error) {
-                        logger.write(Level::errors_only, inject_error.code, inject_error.what());
                     }
                 }
             }

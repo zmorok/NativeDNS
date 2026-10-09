@@ -106,7 +106,9 @@ The Router coalesces concurrent byte-equivalent queries (excluding transaction I
 
 Core-owned upstream sockets must be excluded from transparent self-interception to prevent DNS routing loops.
 
-Before transparent interception starts, enabled DoH/DoT hostnames that have neither a numeric connection IP nor explicit bootstrap resolvers are resolved once through the system resolver. The resulting numeric address is retained only in the runtime configuration; the original hostname remains the TLS identity. Secure requests never perform implicit system resolution after interception has started.
+Transparent interception starts without resolving secure endpoint hostnames. On demand, enabled DoH/DoT hostnames without a numeric connection IP or explicit bootstrap resolvers use guarded DNS queries to the OS-configured numeric resolvers. The original hostname remains the TLS identity; secure requests never invoke the system recursive resolver while interception is running.
+
+The Windows TCP proxy applies a single five-second deadline to each complete incoming frame (length prefix and body), and a separate deadline to sending a response. Partial progress does not extend either deadline. An interception error after selecting a routing policy does not reinject the original query; a failed WinDivert send moves the backend to an error state.
 
 On Windows, every libcurl-created secure TCP socket is bound before connect and its ephemeral source port remains registered with the same self-bypass registry used by plain DNS until libcurl closes the socket. On Linux, secure sockets receive the NativeDNS `SO_MARK` used by the nftables loop-prevention rules.
 

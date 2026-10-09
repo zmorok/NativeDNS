@@ -1,4 +1,5 @@
 #include <nativedns/tcp_dns_proxy.hpp>
+#include <nativedns/platform.hpp>
 #include "../../bounded_executor.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -24,28 +25,26 @@ struct Socket {
 };
 
 void set_timeout(SOCKET socket) {
-    constexpr DWORD timeout_ms = 5000;
-    if (setsockopt(socket,
-                   SOL_SOCKET,
-                   SO_RCVTIMEO,
-                   reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms)) ||
-        setsockopt(socket,
-                   SOL_SOCKET,
-                   SO_SNDTIMEO,
-                   reinterpret_cast<const char*>(&timeout_ms),
-                   sizeof(timeout_ms)))
+    u_long nonblocking = 1;
+    if (ioctlsocket(socket, FIONBIO, &nonblocking) == SOCKET_ERROR)
         throw Error("TCP_PROXY_IO",
-                    "Cannot set client timeout: " + std::to_string(WSAGetLastError()));
+                    "Cannot make client nonblocking: " + std::to_string(WSAGetLastError()));
 }
 
-bool receive_exact(SOCKET socket, uint8_t* bytes, size_t size, bool allow_clean_eof) {
+bool receive_exact(SOCKET socket,
+                   uint8_t* bytes,
+                   size_t size,
+                   bool allow_clean_eof,
+                   std::chrono::steady_clock::time_point deadline) {
     size_t at = 0;
     while (at < size) {
+        platform::wait_socket(static_cast<std::intptr_t>(socket), false, deadline);
         const int received =
             recv(socket, reinterpret_cast<char*>(bytes + at), static_cast<int>(size - at), 0);
         if (!received && allow_clean_eof && at == 0)
             return false;
+        if (received == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
         if (received <= 0)
             throw Error(received ? "TCP_PROXY_IO" : "DNS_EOF",
                         received ? "TCP proxy receive failed: " + std::to_string(WSAGetLastError())
@@ -55,11 +54,17 @@ bool receive_exact(SOCKET socket, uint8_t* bytes, size_t size, bool allow_clean_
     return true;
 }
 
-void send_exact(SOCKET socket, const uint8_t* bytes, size_t size) {
+void send_exact(SOCKET socket,
+                const uint8_t* bytes,
+                size_t size,
+                std::chrono::steady_clock::time_point deadline) {
     size_t at = 0;
     while (at < size) {
+        platform::wait_socket(static_cast<std::intptr_t>(socket), true, deadline);
         const int sent =
             send(socket, reinterpret_cast<const char*>(bytes + at), static_cast<int>(size - at), 0);
+        if (sent == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+            continue;
         if (sent <= 0)
             throw Error("TCP_PROXY_IO",
                         "TCP proxy send failed: " + std::to_string(WSAGetLastError()));
@@ -88,6 +93,7 @@ struct TcpDnsProxy::Impl {
     const Router& router;
     Logger& logger;
     uint16_t intercepted_port;
+    uint32_t frame_timeout_ms;
     std::atomic<bool> running = false;
     SOCKET ipv4 = INVALID_SOCKET, ipv6 = INVALID_SOCKET;
     uint16_t port = 0;
@@ -108,10 +114,12 @@ struct TcpDnsProxy::Impl {
         }
     }
 
-    Impl(const Router& value, Logger& output, uint16_t target)
-        : router(value), logger(output), intercepted_port(target) {
+    Impl(const Router& value, Logger& output, uint16_t target, uint32_t timeout)
+        : router(value), logger(output), intercepted_port(target), frame_timeout_ms(timeout) {
         if (!intercepted_port)
             throw Error("PORT", "Intercepted TCP DNS port must be 1..65535");
+        if (!frame_timeout_ms || frame_timeout_ms > 120000)
+            throw Error("TIMEOUT", "TCP frame timeout must be 1..120000 ms");
     }
 
     Packet process(const Packet& request, const Server& original) {
@@ -141,6 +149,14 @@ struct TcpDnsProxy::Impl {
 
     void handle(std::shared_ptr<Socket> owned, sockaddr_storage peer) {
         const SOCKET client = owned->value;
+        struct RemoveClient {
+            Impl& owner;
+            SOCKET socket;
+            ~RemoveClient() {
+                std::lock_guard lock(owner.clients_mutex);
+                owner.clients.erase(socket);
+            }
+        } remove{*this, client};
         try {
             set_timeout(client);
             Server original;
@@ -162,15 +178,17 @@ struct TcpDnsProxy::Impl {
                 logger.write(Level::debug,
                              "TCP_PROXY_ACCEPT",
                              "destination=" + original.ip + ":" + std::to_string(intercepted_port));
-            for (;;) {
+            while (running) {
+                const auto read_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(frame_timeout_ms);
                 uint8_t prefix[2]{};
-                if (!receive_exact(client, prefix, sizeof(prefix), true))
+                if (!receive_exact(client, prefix, sizeof(prefix), true, read_deadline))
                     break;
                 const size_t length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
                 if (length < 12)
                     throw Error("DNS_MALFORMED", "Client TCP DNS frame too short");
                 Packet request(length);
-                receive_exact(client, request.data(), request.size(), false);
+                receive_exact(client, request.data(), request.size(), false, read_deadline);
                 const auto response = process(request, original);
                 if (response.empty())
                     continue;
@@ -178,8 +196,10 @@ struct TcpDnsProxy::Impl {
                     throw Error("DNS_MALFORMED", "TCP DNS response is too large");
                 const uint8_t response_prefix[]{static_cast<uint8_t>(response.size() >> 8),
                                                 static_cast<uint8_t>(response.size())};
-                send_exact(client, response_prefix, sizeof(response_prefix));
-                send_exact(client, response.data(), response.size());
+                const auto write_deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(frame_timeout_ms);
+                send_exact(client, response_prefix, sizeof(response_prefix), write_deadline);
+                send_exact(client, response.data(), response.size(), write_deadline);
             }
         } catch (const Error& error) {
             if (running)
@@ -188,8 +208,6 @@ struct TcpDnsProxy::Impl {
             if (running)
                 logger.write(Level::errors_only, "TCP_PROXY_IO", error.what());
         }
-        std::lock_guard lock(clients_mutex);
-        clients.erase(client);
     }
 
     void accept_loop(SOCKET listener) {
@@ -243,8 +261,11 @@ struct TcpDnsProxy::Impl {
     }
 };
 
-TcpDnsProxy::TcpDnsProxy(const Router& router, Logger& logger, uint16_t intercepted_port)
-    : impl_(std::make_unique<Impl>(router, logger, intercepted_port)) {
+TcpDnsProxy::TcpDnsProxy(const Router& router,
+                         Logger& logger,
+                         uint16_t intercepted_port,
+                         uint32_t frame_timeout_ms)
+    : impl_(std::make_unique<Impl>(router, logger, intercepted_port, frame_timeout_ms)) {
 }
 TcpDnsProxy::~TcpDnsProxy() {
     stop();

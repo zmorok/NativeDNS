@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <iostream>
+#include <thread>
 
 void check(bool value, const char* message) {
     if (!value)
@@ -186,7 +187,7 @@ void tcp_proxy_roundtrip() {
     config.rules.front().block_mode = nd::BlockMode::zero_address;
     nd::Logger logger;
     nd::Router router(config, logger);
-    nd::detail::TcpDnsProxy proxy(router, logger);
+    nd::detail::TcpDnsProxy proxy(router, logger, 53, 200);
     const auto port = proxy.start();
     SOCKET client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     check(client != INVALID_SOCKET, "TCP proxy test socket");
@@ -209,10 +210,13 @@ void tcp_proxy_roundtrip() {
     nd::Packet frame{static_cast<uint8_t>(query.size() >> 8), static_cast<uint8_t>(query.size())};
     frame.insert(frame.end(), query.begin(), query.end());
     for (unsigned request = 0; request < 2; ++request) {
+        // A split prefix and body are one frame, not separate receive calls.
+        check(send(client, reinterpret_cast<const char*>(frame.data()), 1, 0) == 1,
+              "TCP proxy split prefix");
         check(send(client,
-                   reinterpret_cast<const char*>(frame.data()),
-                   static_cast<int>(frame.size()),
-                   0) == static_cast<int>(frame.size()),
+                   reinterpret_cast<const char*>(frame.data() + 1),
+                   static_cast<int>(frame.size() - 1),
+                   0) == static_cast<int>(frame.size() - 1),
               "TCP proxy query send");
         uint8_t prefix[2]{};
         check(recv(client, reinterpret_cast<char*>(prefix), 2, MSG_WAITALL) == 2,
@@ -229,6 +233,29 @@ void tcp_proxy_roundtrip() {
               "TCP proxy routes framed DNS");
     }
     closesocket(client);
+    SOCKET slow = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    check(slow != INVALID_SOCKET, "slow frame socket");
+    sockaddr_in slow_local = local;
+    slow_local.sin_port = 0;
+    check(bind(slow, reinterpret_cast<sockaddr*>(&slow_local), sizeof(slow_local)) == 0,
+          "slow frame bind");
+    int slow_size = sizeof(slow_local);
+    check(getsockname(slow, reinterpret_cast<sockaddr*>(&slow_local), &slow_size) == 0,
+          "slow frame endpoint");
+    proxy.expect_connection("127.0.0.1", ntohs(slow_local.sin_port));
+    check(connect(slow, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0,
+          "slow frame connect");
+    check(send(slow, reinterpret_cast<const char*>(frame.data()), 1, 0) == 1,
+          "slow frame first byte");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    check(send(slow, reinterpret_cast<const char*>(frame.data() + 1), 1, 0) == 1,
+          "slow frame second byte");
+    const auto started_waiting = std::chrono::steady_clock::now();
+    char closed = 0;
+    check(recv(slow, &closed, 1, 0) == 0, "Incomplete frame closed at total deadline");
+    check(std::chrono::steady_clock::now() - started_waiting < std::chrono::milliseconds(180),
+          "Progress does not reset TCP frame deadline");
+    closesocket(slow);
     SOCKET rejected = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     check(rejected != INVALID_SOCKET &&
               connect(rejected, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0,

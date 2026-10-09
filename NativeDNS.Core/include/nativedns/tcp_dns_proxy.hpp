@@ -7,7 +7,10 @@ namespace nd::detail {
 // is the original DNS destination, so Process/0 and Bypass retain that endpoint.
 class TcpDnsProxy final {
 public:
-    TcpDnsProxy(const Router& router, Logger& logger, uint16_t intercepted_port = 53);
+    TcpDnsProxy(const Router& router,
+                Logger& logger,
+                uint16_t intercepted_port = 53,
+                uint32_t frame_timeout_ms = 5000);
     ~TcpDnsProxy();
     uint16_t start();
     void stop();
