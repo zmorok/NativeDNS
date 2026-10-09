@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <memory>
+#include <stop_token>
 namespace nd {
 enum class Disposition { reply, forward_original, silent_drop };
 struct RouteResult {
@@ -61,6 +62,8 @@ public:
     explicit Router(Config config, Logger& logger);
     SnapshotPtr snapshot() const;
     void reload(Config config) const;
+    void cancel_pending() const;
+    void resume() const;
     RouteResult route(const Packet& request, const Server& original) const;
     RouteResult route(const Packet& request, const Server& original, SnapshotPtr snapshot) const;
     Packet exchange(const Packet& request, const Server& server) const;
@@ -74,7 +77,9 @@ private:
                                                 bool configured) const;
     Logger& logger_;
     mutable std::atomic<SnapshotPtr> snapshot_;
-    mutable std::array<std::once_flag, 8> transport_once_;
-    mutable std::array<std::unique_ptr<IDnsTransport>, 8> transports_;
+    mutable std::atomic<std::shared_ptr<std::stop_source>> cancellation_{
+        std::make_shared<std::stop_source>()};
+    mutable std::mutex transport_mutex_;
+    mutable std::array<std::shared_ptr<IDnsTransport>, 8> transports_;
 };
 } // namespace nd

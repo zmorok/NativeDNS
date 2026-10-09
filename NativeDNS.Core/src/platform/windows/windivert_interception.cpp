@@ -419,6 +419,8 @@ struct WinDivertInterception::Impl {
             if (view.ipv6 && job.packet[24] == 0xfe && (job.packet[25] & 0xc0) == 0x80)
                 original.route.scope6 = job.address.Network.IfIdx;
             auto routed = router.route(query, original, job.snapshot);
+            if (state != State::running)
+                return;
             if (routed.disposition == Disposition::forward_original) {
                 inject(job.packet, job.address);
                 return;
@@ -432,7 +434,17 @@ struct WinDivertInterception::Impl {
             job.address.UDPChecksum = 0;
             inject(response, job.address);
         } catch (const Error& error) {
-            logger.write(Level::errors_only, error.code, error.what());
+            if (state == State::running) {
+                if (error.code == "WINDIVERT_SEND") {
+                    std::lock_guard lock(lifecycle);
+                    error_code = error.code;
+                    error_message = error.what();
+                    state = State::error;
+                    shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
+                    queue_changed.notify_all();
+                }
+                logger.write(Level::errors_only, error.code, error.what());
+            }
         }
     }
     void reject_overload(const Packet& packet, const UdpView& view, WINDIVERT_ADDRESS address) {
@@ -584,10 +596,13 @@ struct WinDivertInterception::Impl {
             if (handle != INVALID_HANDLE_VALUE)
                 shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
             std::lock_guard lock(lifecycle);
-            error_code = error.code;
-            error_message = error.what();
-            state = State::error;
-            logger.write(Level::errors_only, error.code, error.what());
+            if (state == State::running) {
+                error_code = error.code;
+                error_message = error.what();
+                state = State::error;
+                router.cancel_pending();
+                logger.write(Level::errors_only, error.code, error.what());
+            }
         }
         queue_changed.notify_all();
     }
@@ -650,13 +665,14 @@ WinDivertInterception::~WinDivertInterception() {
 }
 void WinDivertInterception::start() {
     auto& p = *impl_;
-    std::lock_guard lock(p.lifecycle);
+    std::unique_lock lock(p.lifecycle);
     if (p.state != State::stopped)
         throw Error("LIFECYCLE", "WinDivert interception is not stopped");
     p.state = State::starting;
     p.error_code.clear();
     p.error_message.clear();
     try {
+        p.router.resume();
         p.firewall.disable();
         for (const auto& conflict : platform::interception_conflicts())
             p.logger.write(conflict.suspected ? Level::errors_only : Level::normal,
@@ -742,6 +758,8 @@ void WinDivertInterception::start() {
     } catch (...) {
         const auto failure = std::current_exception();
         p.state = State::stopping;
+        p.router.cancel_pending();
+        lock.unlock();
         if (p.handle != INVALID_HANDLE_VALUE && p.shutdown)
             p.shutdown(p.handle, WINDIVERT_SHUTDOWN_BOTH);
         p.queue_changed.notify_all();
@@ -751,6 +769,7 @@ void WinDivertInterception::start() {
             if (worker.joinable())
                 worker.join();
         p.workers.clear();
+        lock.lock();
         {
             std::lock_guard queue_lock(p.queue_mutex);
             p.jobs.clear();
@@ -778,6 +797,7 @@ void WinDivertInterception::stop() {
             return;
         p.state = State::stopping;
     }
+    p.router.cancel_pending();
     if (p.handle != INVALID_HANDLE_VALUE)
         p.shutdown(p.handle, WINDIVERT_SHUTDOWN_BOTH);
     p.queue_changed.notify_all();
@@ -800,6 +820,9 @@ void WinDivertInterception::stop() {
 }
 void WinDivertInterception::reload(Config config) {
     impl_->router.reload(std::move(config));
+}
+void WinDivertInterception::cancel_pending() {
+    impl_->router.cancel_pending();
 }
 InterceptionStatus WinDivertInterception::status() const {
     const auto& p = *impl_;

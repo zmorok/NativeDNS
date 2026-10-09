@@ -147,9 +147,12 @@ struct LocalProxy::Impl {
         while (at < length) {
             if (stopping())
                 throw Error("STOPPED", "Proxy stopping");
-            const auto left = std::chrono::duration_cast<std::chrono::microseconds>(
-                                  deadline - std::chrono::steady_clock::now())
-                                  .count();
+            const auto left =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::min(deadline,
+                             std::chrono::steady_clock::now() + std::chrono::milliseconds(100)) -
+                    std::chrono::steady_clock::now())
+                    .count();
             if (left <= 0)
                 throw Error("TIMEOUT", "Client TCP frame deadline");
             fd_set fds;
@@ -159,7 +162,7 @@ struct LocalProxy::Impl {
             const auto ready = select(
                 0, send_bytes ? nullptr : &fds, send_bytes ? &fds : nullptr, nullptr, &timeout);
             if (!ready)
-                throw Error("TIMEOUT", "Client TCP frame timeout");
+                continue;
             if (ready < 0)
                 throw Error("PROXY_IO", "Client TCP select failed");
             const int n = send_bytes ? send(socket,
@@ -178,12 +181,6 @@ struct LocalProxy::Impl {
         }
     }
     void handle_client(SOCKET client) {
-        struct ClientGuard {
-            SOCKET value;
-            ~ClientGuard() {
-                closesocket(value);
-            }
-        } guard{client};
         try {
             if (WSAEventSelect(client, nullptr, 0))
                 throw Error("PROXY_IO", "Client event reset failed");
@@ -233,8 +230,11 @@ struct LocalProxy::Impl {
                             break;
                         throw Error("PROXY_IO", "Accept failed");
                     }
-                    if (!tcp_handlers.submit([this, client] { handle_client(client); })) {
-                        closesocket(client);
+                    auto owned = std::shared_ptr<SOCKET>(new SOCKET(client), [](SOCKET* socket) {
+                        closesocket(*socket);
+                        delete socket;
+                    });
+                    if (!tcp_handlers.submit([this, owned] { handle_client(*owned); })) {
                         logger.write(Level::errors_only,
                                      "PROXY_BUSY",
                                      "Local TCP proxy connection limit reached");
@@ -264,6 +264,7 @@ void LocalProxy::start() {
         throw Error("LIFECYCLE", "Proxy is not stopped");
     p.state = State::starting;
     try {
+        p.router->resume();
         WSADATA data{};
         if (WSAStartup(MAKEWORD(2, 2), &data))
             throw Error("SOCKET_INIT", "Proxy WSAStartup failed");
@@ -372,6 +373,7 @@ void LocalProxy::stop() {
     if (p.state == State::stopped)
         return;
     p.state = State::stopping;
+    p.router->cancel_pending();
     if (p.stop_event)
         SetEvent(p.stop_event);
     if (p.udp_worker.joinable())
@@ -385,6 +387,9 @@ void LocalProxy::stop() {
 }
 void LocalProxy::reload(Config config) {
     impl_->router->reload(std::move(config));
+}
+void LocalProxy::cancel_pending() {
+    impl_->router->cancel_pending();
 }
 InterceptionStatus LocalProxy::status() const {
     std::lock_guard lock(impl_->lifecycle);

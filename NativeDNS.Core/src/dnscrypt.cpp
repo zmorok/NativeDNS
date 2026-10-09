@@ -1,5 +1,6 @@
 #include <nativedns/dnscrypt.hpp>
 #include <nativedns/dns_network.hpp>
+#include <nativedns/detail/cancellation.hpp>
 #include <sodium.h>
 #include <nativedns/platform.hpp>
 #include <algorithm>
@@ -299,7 +300,8 @@ private:
                         current = state->certificate;
                     break;
                 }
-                if (state->changed.wait_until(lock, deadline) == std::cv_status::timeout)
+                if (detail::wait_until_change(state->changed, lock, deadline) ==
+                    std::cv_status::timeout)
                     throw Error("TIMEOUT", "DNSCrypt certificate refresh is busy");
             }
         }

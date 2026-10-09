@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstring>
 #include <thread>
+#include <set>
 
 namespace nd {
 namespace {
@@ -188,6 +189,8 @@ struct LocalProxy::Impl {
     std::jthread tcp6_worker;
     detail::BoundedExecutor udp_handlers;
     detail::BoundedExecutor tcp_handlers;
+    std::mutex clients_mutex;
+    std::set<int> clients;
 
     Impl(std::shared_ptr<const Router> r, Server o, Logger& l, uint16_t p)
         : router(std::move(r)), original(std::move(o)), logger(l), requested_port(p) {
@@ -294,12 +297,12 @@ struct LocalProxy::Impl {
         }
     }
 
-    void handle_client(int fd) {
-        Fd client(fd);
+    void handle_client(std::shared_ptr<Fd> client) {
+        const int fd = client->value;
         set_timeout(fd);
 
         try {
-            for (;;) {
+            while (running.load(std::memory_order_acquire)) {
                 uint8_t prefix[2]{};
 
                 if (!recv_exact(fd, prefix, 2, true)) {
@@ -361,8 +364,16 @@ struct LocalProxy::Impl {
                 break;
             }
 
-            if (!tcp_handlers.submit([this, client] { handle_client(client); })) {
-                ::close(client);
+            {
+                std::lock_guard lock(clients_mutex);
+                clients.insert(client);
+            }
+            auto owned = std::shared_ptr<Fd>(new Fd(client), [this](Fd* socket) {
+                std::lock_guard lock(clients_mutex);
+                clients.erase(socket->value);
+                delete socket;
+            });
+            if (!tcp_handlers.submit([this, owned] { handle_client(owned); })) {
                 logger.write(
                     Level::errors_only, "PROXY_BUSY", "Local TCP proxy connection limit reached");
             }
@@ -406,6 +417,7 @@ void LocalProxy::start() {
     p.state = State::starting;
 
     try {
+        p.router->resume();
         int last = 0;
         const unsigned attempts = p.requested_port ? 1u : 128u;
 
@@ -509,9 +521,15 @@ void LocalProxy::stop() {
     }
 
     p.state = State::stopping;
+    p.router->cancel_pending();
     p.running.store(false, std::memory_order_release);
 
     p.join_listener_workers();
+    {
+        std::lock_guard clients_lock(p.clients_mutex);
+        for (const auto client : p.clients)
+            shutdown(client, SHUT_RDWR);
+    }
     p.udp_handlers.stop();
     p.tcp_handlers.stop();
     p.close_listeners();
@@ -522,6 +540,9 @@ void LocalProxy::stop() {
 
 void LocalProxy::reload(Config config) {
     impl_->router->reload(std::move(config));
+}
+void LocalProxy::cancel_pending() {
+    impl_->router->cancel_pending();
 }
 InterceptionStatus LocalProxy::status() const {
     std::lock_guard lock(impl_->lifecycle);

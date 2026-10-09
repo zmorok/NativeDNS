@@ -2,6 +2,7 @@
 #include <nativedns/platform.hpp>
 #include <nativedns/autostart.hpp>
 #include <iostream>
+#include <charconv>
 
 namespace {
 void log_startup_failure(const char* code, const std::string& message) noexcept {
@@ -50,9 +51,16 @@ int main(int argc, char** argv) {
                 config_path = argv[++i];
             else if (arg == "--transparent")
                 transparent = true;
-            else if (arg == "--port" && i + 1 < argc)
-                port = static_cast<uint16_t>(std::stoul(argv[++i]));
-            else if (arg == "--register-autostart" && i + 1 < argc) {
+            else if (arg == "--port" && i + 1 < argc) {
+                const std::string value = argv[++i];
+                unsigned parsed = 0;
+                const auto [end, error] =
+                    std::from_chars(value.data(), value.data() + value.size(), parsed);
+                if (error != std::errc{} || end != value.data() + value.size() || !parsed ||
+                    parsed > 65535)
+                    throw nd::Error("PORT", "Port must be an integer in 1..65535");
+                port = static_cast<uint16_t>(parsed);
+            } else if (arg == "--register-autostart" && i + 1 < argc) {
                 register_autostart = true;
                 autostart_config = argv[++i];
             } else if (arg == "--unregister-autostart")

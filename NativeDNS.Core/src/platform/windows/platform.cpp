@@ -1,4 +1,5 @@
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/cancellation.hpp>
 #include <nativedns/config.hpp>
 #include <nativedns/network.hpp>
 #include <winsock2.h>
@@ -222,20 +223,28 @@ std::string system_summary() {
 }
 void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::time_point deadline) {
     const SOCKET socket = static_cast<SOCKET>(raw);
-    const auto left = std::chrono::duration_cast<std::chrono::microseconds>(
-        deadline - std::chrono::steady_clock::now());
-    if (left.count() <= 0)
-        throw Error("TIMEOUT", "Socket wait deadline exceeded");
-    timeval timeout{static_cast<long>(left.count() / 1000000),
-                    static_cast<long>(left.count() % 1000000)};
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(socket, &set);
-    const int rc = select(0, writing ? nullptr : &set, writing ? &set : nullptr, nullptr, &timeout);
-    if (rc == 0)
-        throw Error("TIMEOUT", "Socket wait timed out");
-    if (rc < 0)
-        throw Error("SOCKET", "Socket wait failed: Winsock " + std::to_string(WSAGetLastError()));
+    for (;;) {
+        detail::check_cancelled();
+        const auto left = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::min(deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(100)) -
+            std::chrono::steady_clock::now());
+        if (left.count() <= 0)
+            throw Error("TIMEOUT", "Socket wait deadline exceeded");
+        timeval timeout{static_cast<long>(left.count() / 1000000),
+                        static_cast<long>(left.count() % 1000000)};
+        fd_set set;
+        FD_ZERO(&set);
+        FD_SET(socket, &set);
+        const int rc =
+            select(0, writing ? nullptr : &set, writing ? &set : nullptr, nullptr, &timeout);
+        if (rc == 0)
+            continue;
+        if (rc < 0)
+            throw Error("SOCKET",
+                        "Socket wait failed: Winsock " + std::to_string(WSAGetLastError()));
+        detail::check_cancelled();
+        return;
+    }
 }
 void configure_upstream_socket(std::intptr_t) {
 }

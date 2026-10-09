@@ -1,5 +1,5 @@
 #pragma once
-#include <nativedns/model.hpp>
+#include <nativedns/config.hpp>
 #include <algorithm>
 
 namespace nd::detail {

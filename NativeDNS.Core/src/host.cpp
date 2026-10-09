@@ -127,6 +127,8 @@ void CoreHost::stop() {
     if (stopped_.exchange(true))
         return;
     logger_.write(Level::verbose, "CORE_STOPPING", "Core host shutdown started");
+    if (interception_)
+        interception_->cancel_pending();
     if (log_ipc_)
         log_ipc_->stop();
     if (ipc_)
@@ -230,6 +232,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             if (operation == IpcOperation::restart)
                 restart_requested_ = true;
             shutdown_requested_ = true;
+            interception_->cancel_pending();
         }
         shutdown_cv_.notify_all();
         return {0, operation == IpcOperation::restart ? "RESTARTING" : "SHUTTING_DOWN"};

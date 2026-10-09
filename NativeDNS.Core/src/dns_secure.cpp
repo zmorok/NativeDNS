@@ -1,5 +1,6 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/dns_network.hpp>
+#include <nativedns/detail/cancellation.hpp>
 #include "pool_limits.hpp"
 #include <nativedns/platform.hpp>
 #include <curl/curl.h>
@@ -39,6 +40,8 @@ struct CurlGlobal {
 };
 struct CurlHandle {
     CURL* value = nullptr;
+    CURLM* multi = nullptr;
+    bool attached = false;
     char error_buffer[CURL_ERROR_SIZE]{};
     std::map<curl_socket_t, std::unique_ptr<detail::NetworkUpstreamGuard>> upstream_sockets;
     NetworkRoute route;
@@ -47,16 +50,42 @@ struct CurlHandle {
         value = curl_easy_init();
         if (!value)
             throw Error("MEMORY", "Cannot initialize TLS/HTTP handle");
+        multi = curl_multi_init();
+        if (!multi) {
+            curl_easy_cleanup(value);
+            throw Error("MEMORY", "Cannot initialize TLS/HTTP event loop");
+        }
         set_callbacks();
     }
     ~CurlHandle() {
+        if (attached)
+            curl_multi_remove_handle(multi, value);
+        curl_multi_cleanup(multi);
         curl_easy_cleanup(value);
     }
     template <typename T> void set(CURLoption option, T v) {
         curl_check(curl_easy_setopt(value, option, v));
     }
     void perform() {
-        const auto code = curl_easy_perform(value);
+        detail::check_cancelled();
+        const auto check_multi = [](CURLMcode result) {
+            if (result != CURLM_OK)
+                throw Error("TLS_HTTP", curl_multi_strerror(result));
+        };
+        check_multi(curl_multi_add_handle(multi, value));
+        attached = true;
+        int running = 0;
+        do {
+            detail::check_cancelled();
+            check_multi(curl_multi_perform(multi, &running));
+            if (running)
+                check_multi(curl_multi_poll(multi, nullptr, 0, 100, nullptr));
+        } while (running);
+        CURLcode code = CURLE_RECV_ERROR;
+        int messages = 0;
+        while (const auto message = curl_multi_info_read(multi, &messages))
+            if (message->msg == CURLMSG_DONE && message->easy_handle == value)
+                code = message->data.result;
         try {
             curl_check(code);
         } catch (const Error& error) {
@@ -69,6 +98,10 @@ struct CurlHandle {
         }
     }
     void reset() noexcept {
+        if (attached) {
+            curl_multi_remove_handle(multi, value);
+            attached = false;
+        }
         curl_easy_reset(value);
         std::fill(std::begin(error_buffer), std::end(error_buffer), '\0');
         set_callbacks_noexcept();
@@ -150,6 +183,7 @@ struct Url {
     }
 };
 uint32_t remaining(Clock::time_point deadline) {
+    detail::check_cancelled();
     const auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
     if (ms <= 0)
@@ -387,7 +421,8 @@ private:
                     state->refreshing = true;
                     break;
                 }
-                if (state->changed.wait_until(lock, deadline) == std::cv_status::timeout)
+                if (detail::wait_until_change(state->changed, lock, deadline) ==
+                    std::cv_status::timeout)
                     throw Error("TIMEOUT", "Bootstrap refresh is busy");
             }
         }
@@ -502,7 +537,7 @@ private:
                 entries.push_back(entry);
                 return std::make_unique<Lease>(*this, std::move(entry));
             }
-            if (pool_changed_.wait_until(lock, deadline) == std::cv_status::timeout)
+            if (detail::wait_until_change(pool_changed_, lock, deadline) == std::cv_status::timeout)
                 throw Error("TIMEOUT",
                             std::string(dot_ ? "DoT" : "DoH") + " connection pool is busy");
         }

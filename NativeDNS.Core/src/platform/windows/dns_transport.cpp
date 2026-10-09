@@ -1,6 +1,8 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/dns_network.hpp>
 #include "../../pool_limits.hpp"
+#include <nativedns/platform.hpp>
+#include <nativedns/detail/cancellation.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <algorithm>
@@ -47,30 +49,14 @@ void socket_error(const char* operation) {
                 std::string(operation) + ": Winsock " + std::to_string(code));
 }
 void ready(SOCKET socket, bool writing, Clock::time_point deadline) {
-    auto remaining = std::chrono::duration_cast<std::chrono::microseconds>(deadline - Clock::now());
-    if (remaining.count() <= 0)
-        throw Error("TIMEOUT", "DNS request deadline exceeded");
-    timeval timeout{static_cast<long>(remaining.count() / 1000000),
-                    static_cast<long>(remaining.count() % 1000000)};
-    fd_set requested, errors;
-    FD_ZERO(&requested);
-    FD_ZERO(&errors);
-    FD_SET(socket, &requested);
-    FD_SET(socket, &errors);
-    const int result = select(
-        0, writing ? nullptr : &requested, writing ? &requested : nullptr, &errors, &timeout);
-    if (result == SOCKET_ERROR)
-        socket_error("select");
-    if (!result)
-        throw Error("TIMEOUT", "DNS request timed out");
-    if (FD_ISSET(socket, &errors)) {
-        int error = 0;
-        int size = sizeof(error);
-        if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &size) ==
-            SOCKET_ERROR)
-            socket_error("getsockopt");
+    platform::wait_socket(static_cast<std::intptr_t>(socket), writing, deadline);
+    int error = 0;
+    int size = sizeof(error);
+    if (getsockopt(socket, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &size) ==
+        SOCKET_ERROR)
+        socket_error("getsockopt");
+    if (error)
         throw Error("SOCKET", "Socket operation failed: Winsock " + std::to_string(error));
-    }
 }
 void transfer(
     SOCKET socket, uint8_t* bytes, size_t size, bool sending, Clock::time_point deadline) {
@@ -292,7 +278,8 @@ private:
                     entries.push_back(selected);
                     break;
                 }
-                if (pool_changed_.wait_until(lock, deadline) == std::cv_status::timeout)
+                if (detail::wait_until_change(pool_changed_, lock, deadline) ==
+                    std::cv_status::timeout)
                     throw Error("TIMEOUT", "DNS TCP connection pool is busy");
             }
         }

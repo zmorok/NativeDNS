@@ -24,6 +24,7 @@ inline int closesocket(SOCKET s) {
 #include <thread>
 #include <atomic>
 #include <array>
+#include <future>
 
 void check(bool value, const char* message) {
     if (!value)
@@ -703,6 +704,39 @@ int main() {
         }
         // An identical query must be sent again after a network change,
         // while repeated queries in the same context can use the cache.
+        {
+            Peer silent(false, Mode::timeout);
+            auto upstream_server = silent.server();
+            upstream_server.timeout_ms = 30000;
+            auto cancel_config = nd::default_config();
+            cancel_config.servers.push_back(upstream_server);
+            cancel_config.rules.front().server_id = upstream_server.id;
+            nd::Logger cancel_log;
+            nd::Router cancel_router(cancel_config, cancel_log);
+            auto operation = std::async(std::launch::async, [&] {
+                return cancel_router.route(nd::make_query("cancel.example"), upstream_server);
+            });
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (!silent.requests && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            check(silent.requests == 1, "Cancellation test reaches upstream");
+            cancel_router.cancel_pending();
+            check(operation.wait_for(std::chrono::seconds(1)) == std::future_status::ready,
+                  "Cancellation interrupts a thirty-second upstream timeout");
+            check(operation.get().error_code == "CANCELLED", "Cancellation has a distinct error");
+            silent.verify();
+            Peer recovered(false, Mode::good);
+            auto next_config = nd::default_config();
+            next_config.servers.push_back(recovered.server());
+            next_config.rules.front().server_id = 1;
+            cancel_router.reload(next_config);
+            cancel_router.resume();
+            const auto result =
+                cancel_router.route(nd::make_query("recovered.example"), recovered.server());
+            check(result.error_code.empty() && !result.packet.empty(),
+                  "Router resumes with a fresh token");
+            recovered.verify();
+        }
         {
             Peer context_peer(false, Mode::good, false, 0, 1500, 2);
             nd::Logger log;

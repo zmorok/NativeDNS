@@ -130,6 +130,9 @@ public:
             proxy_->stop();
         status_ = {};
     }
+    void cancel_pending() override {
+        router_->cancel_pending();
+    }
     void reload(Config config) override {
         router_->reload(std::move(config));
     }

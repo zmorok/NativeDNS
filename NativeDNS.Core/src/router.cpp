@@ -1,4 +1,5 @@
 #include <nativedns/router.hpp>
+#include <nativedns/detail/cancellation.hpp>
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -56,14 +57,34 @@ void Router::reload(Config config) const {
     validate(config);
     snapshot_.store(std::make_shared<Snapshot>(std::move(config)));
 }
+void Router::cancel_pending() const {
+    cancellation_.load()->request_stop();
+    std::lock_guard lock(transport_mutex_);
+    transports_.fill(nullptr);
+}
+void Router::resume() const {
+    if (cancellation_.load()->stop_requested()) {
+        cancellation_.store(std::make_shared<std::stop_source>());
+        reload(snapshot()->config);
+    }
+}
 Packet Router::exchange(const Packet& request, const Server& server) const {
+    detail::CancellationScope cancellation(detail::request_cancellation.stop_possible()
+                                               ? detail::request_cancellation
+                                               : cancellation_.load()->get_token());
+    detail::check_cancelled();
     const auto index = static_cast<size_t>(server.protocol);
     if (index >= transports_.size())
         throw Error("PROTOCOL", "Invalid DNS transport");
-    std::call_once(transport_once_[index], [this, index, &server] {
-        transports_[index] = make_transport(server.protocol);
-    });
-    return transports_[index]->exchange(request, server);
+    std::shared_ptr<IDnsTransport> transport;
+    {
+        std::lock_guard lock(transport_mutex_);
+        detail::check_cancelled();
+        if (!transports_[index])
+            transports_[index] = make_transport(server.protocol);
+        transport = transports_[index];
+    }
+    return transport->exchange(request, server);
 }
 std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot,
                                                         const Packet& request,
@@ -161,6 +182,8 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             }
             return {std::move(packet), candidate};
         } catch (const Error& error) {
+            if (error.code == "CANCELLED")
+                throw;
             last_code = error.code;
             last_message = error.what();
             unsigned failures = 0;
@@ -234,9 +257,11 @@ std::pair<Packet, uint32_t> Router::exchange_cached(const Snapshot& snapshot,
         if (!leader) {
             if (logger_.enabled(Level::debug))
                 logger_.write(Level::debug, "DNS_COALESCED", "server=" + primary.name);
-            if (!pending->changed.wait_for(
-                    lock, std::chrono::seconds(120), [&] { return pending->done; }))
-                throw Error("TIMEOUT", "Coalesced DNS request deadline exceeded");
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+            while (!pending->done)
+                if (detail::wait_until_change(pending->changed, lock, deadline) ==
+                    std::cv_status::timeout)
+                    throw Error("TIMEOUT", "Coalesced DNS request deadline exceeded");
             if (!pending->error_code.empty())
                 throw Error(pending->error_code, pending->error_message);
             return {age_dns_response(pending->packet, transaction_id, 0), pending->used_server_id};
@@ -304,6 +329,7 @@ RouteResult Router::route(const Packet& request, const Server& original) const {
 }
 RouteResult
 Router::route(const Packet& request, const Server& original, SnapshotPtr current) const {
+    detail::CancellationScope cancellation(cancellation_.load()->get_token());
     const auto& snapshot = *current;
     RouteResult result;
     Question question;

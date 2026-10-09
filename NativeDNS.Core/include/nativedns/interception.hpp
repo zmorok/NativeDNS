@@ -15,6 +15,7 @@ public:
     virtual ~IInterceptionProvider() = default;
     virtual void start() = 0;
     virtual void stop() = 0;
+    virtual void cancel_pending() = 0;
     virtual void reload(Config config) = 0;
     virtual InterceptionStatus status() const = 0;
 };
@@ -29,6 +30,7 @@ public:
     ~LocalProxy();
     void start() override;
     void stop() override;
+    void cancel_pending() override;
     void reload(Config config) override;
     InterceptionStatus status() const override;
 
@@ -49,6 +51,7 @@ public:
     ~WinDivertInterception();
     void start() override;
     void stop() override;
+    void cancel_pending() override;
     void reload(Config config) override;
     InterceptionStatus status() const override;
 

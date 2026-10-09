@@ -1,5 +1,11 @@
 # IPC protocol
 
+Stop and Restart cancel in-flight upstream work, including bootstrap, DNSCrypt
+certificate refresh and secure transfers. The command and log endpoints remain
+separate. Configuration reload is transactional: a rejected configuration leaves
+the validated routing snapshot and active listener in place. A restarted provider
+uses a fresh cancellation token and routing cache.
+
 NativeDNS uses a private local IPC protocol between GUI/tools and `NativeDNSCoreHost`.
 
 There is no TCP/HTTP control endpoint.

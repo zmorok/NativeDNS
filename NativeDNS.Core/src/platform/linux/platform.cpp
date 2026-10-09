@@ -1,4 +1,6 @@
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/cancellation.hpp>
+#include <poll.h>
 #include <nativedns/config.hpp>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -134,21 +136,23 @@ std::string system_summary() {
 }
 void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::time_point deadline) {
     const int socket = static_cast<int>(raw);
-    const auto left = std::chrono::duration_cast<std::chrono::microseconds>(
-        deadline - std::chrono::steady_clock::now());
-    if (left.count() <= 0)
-        throw Error("TIMEOUT", "Socket wait deadline exceeded");
-    timeval timeout{static_cast<long>(left.count() / 1000000),
-                    static_cast<long>(left.count() % 1000000)};
-    fd_set set;
-    FD_ZERO(&set);
-    FD_SET(socket, &set);
-    const int rc =
-        select(socket + 1, writing ? nullptr : &set, writing ? &set : nullptr, nullptr, &timeout);
-    if (rc == 0)
-        throw Error("TIMEOUT", "Socket wait timed out");
-    if (rc < 0)
-        throw Error("SOCKET", "Socket wait failed: " + std::string(std::strerror(errno)));
+    for (;;) {
+        detail::check_cancelled();
+        const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now());
+        if (left.count() <= 0)
+            throw Error("TIMEOUT", "Socket wait deadline exceeded");
+        pollfd descriptor{socket, static_cast<short>(writing ? POLLOUT : POLLIN), 0};
+        const int rc = poll(&descriptor, 1, static_cast<int>(std::min<int64_t>(left.count(), 100)));
+        if (rc == 0)
+            continue;
+        if (rc < 0 && errno == EINTR)
+            continue;
+        if (rc < 0)
+            throw Error("SOCKET", "Socket wait failed: " + std::string(std::strerror(errno)));
+        detail::check_cancelled();
+        return;
+    }
 }
 void configure_upstream_socket(std::intptr_t raw) {
 #ifdef SO_MARK
