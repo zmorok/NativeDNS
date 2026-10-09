@@ -472,7 +472,7 @@ struct WinDivertInterception::Impl {
                             continue;
                         }
                         if (destination_port == intercepted_tcp_port &&
-                            detail::is_network_upstream(true, source_port)) {
+                            detail::is_network_upstream(true, source_port, view.ipv6)) {
                             inject(packet, address);
                             continue;
                         }
@@ -507,7 +507,8 @@ struct WinDivertInterception::Impl {
                     }
                     const auto view = udp_view(packet);
                     const auto source_port = read16(packet.data() + view.udp);
-                    const bool upstream = detail::is_network_upstream(false, source_port);
+                    const bool upstream =
+                        detail::is_network_upstream(false, source_port, view.ipv6);
                     if (upstream) {
                         if (logger.enabled(Level::debug))
                             logger.write(Level::debug,
@@ -643,6 +644,10 @@ void WinDivertInterception::start() {
     p.error_message.clear();
     try {
         p.firewall.disable();
+        for (const auto& conflict : platform::interception_conflicts())
+            p.logger.write(conflict.suspected ? Level::errors_only : Level::normal,
+                           conflict.code,
+                           conflict.message);
         p.logger.write(Level::verbose,
                        "FIREWALL_STALE_CLEANUP",
                        "Removed any stale TCP interception firewall rule");

@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <tuple>
 
 namespace nd {
 namespace {
@@ -93,30 +94,30 @@ void transfer(
     }
 }
 std::mutex upstream_mutex;
-std::map<std::pair<bool, uint16_t>, size_t> upstream_sockets;
+std::map<std::tuple<bool, uint16_t, bool>, size_t> upstream_sockets;
 } // namespace
 namespace detail {
-NetworkUpstreamGuard::NetworkUpstreamGuard(bool tcp, uint16_t local_port)
-    : tcp_(tcp), local_port_(local_port) {
+NetworkUpstreamGuard::NetworkUpstreamGuard(bool tcp, uint16_t local_port, bool ipv6)
+    : tcp_(tcp), local_port_(local_port), ipv6_(ipv6) {
     const std::lock_guard lock(upstream_mutex);
-    ++upstream_sockets[{tcp_, local_port_}];
+    ++upstream_sockets[{tcp_, local_port_, ipv6_}];
 }
 NetworkUpstreamGuard::~NetworkUpstreamGuard() {
     const std::lock_guard lock(upstream_mutex);
-    const auto key = std::pair{tcp_, local_port_};
+    const auto key = std::tuple{tcp_, local_port_, ipv6_};
     const auto found = upstream_sockets.find(key);
     if (found != upstream_sockets.end() && !--found->second)
         upstream_sockets.erase(found);
 }
-bool is_network_upstream(bool tcp, uint16_t local_port) {
+bool is_network_upstream(bool tcp, uint16_t local_port, bool ipv6) {
     const std::lock_guard lock(upstream_mutex);
-    return upstream_sockets.contains({tcp, local_port});
+    return upstream_sockets.contains({tcp, local_port, ipv6});
 }
 } // namespace detail
 namespace {
 struct ConnectedSocket {
-    std::unique_ptr<Socket> socket;
     std::unique_ptr<detail::NetworkUpstreamGuard> upstream;
+    std::unique_ptr<Socket> socket;
 };
 ConnectedSocket connect_network(const Server& server, bool tcp, Clock::time_point deadline) {
     initialize();
@@ -136,6 +137,7 @@ ConnectedSocket connect_network(const Server& server, bool tcp, Clock::time_poin
         address_size = sizeof(*v6);
     } else
         throw Error("ENDPOINT", "DNS network transport requires a numeric IP");
+    std::unique_ptr<detail::NetworkUpstreamGuard> upstream;
     auto socket = std::make_unique<Socket>(::socket(
         address.ss_family, tcp ? SOCK_STREAM : SOCK_DGRAM, tcp ? IPPROTO_TCP : IPPROTO_UDP));
     platform::bind_upstream_interface(static_cast<std::intptr_t>(socket->value), server.route);
@@ -153,7 +155,8 @@ ConnectedSocket connect_network(const Server& server, bool tcp, Clock::time_poin
     const uint16_t local_port = ntohs(
         address.ss_family == AF_INET ? reinterpret_cast<const sockaddr_in*>(&local)->sin_port
                                      : reinterpret_cast<const sockaddr_in6*>(&local)->sin6_port);
-    auto upstream = std::make_unique<detail::NetworkUpstreamGuard>(tcp, local_port);
+    upstream = std::make_unique<detail::NetworkUpstreamGuard>(
+        tcp, local_port, address.ss_family == AF_INET6);
     if (connect(socket->value, reinterpret_cast<const sockaddr*>(&address), address_size) ==
         SOCKET_ERROR) {
         if (WSAGetLastError() != WSAEWOULDBLOCK)
@@ -167,7 +170,7 @@ ConnectedSocket connect_network(const Server& server, bool tcp, Clock::time_poin
         if (error)
             throw Error("SOCKET", "Connect failed: Winsock " + std::to_string(error));
     }
-    return {std::move(socket), std::move(upstream)};
+    return {std::move(upstream), std::move(socket)};
 }
 Packet
 exchange_tcp(ConnectedSocket& connection, const Packet& request, Clock::time_point deadline) {

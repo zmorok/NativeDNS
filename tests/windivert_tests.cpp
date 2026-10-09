@@ -295,6 +295,14 @@ int main() {
                   "protocol-specific upstream registration");
         }
         check(!nd::detail::is_network_upstream(false, 42424), "reference-counted upstream removal");
+        {
+            nd::detail::NetworkUpstreamGuard v6(false, 42424, true);
+            check(nd::detail::is_network_upstream(false, 42424, true) &&
+                      !nd::detail::is_network_upstream(false, 42424, false) &&
+                      !nd::detail::is_network_upstream(true, 42424, true),
+                  "Self-bypass registry separates address families and protocols");
+        }
+        check(!nd::detail::is_network_upstream(false, 42424, true), "IPv6 registration removed");
         fault_rollback("windivert.tcp_proxy");
         fault_rollback("windivert.load");
         fault_rollback("windivert.open");

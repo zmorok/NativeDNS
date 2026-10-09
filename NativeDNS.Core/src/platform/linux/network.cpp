@@ -8,6 +8,9 @@
 #include <algorithm>
 
 namespace nd::platform {
+std::vector<InterceptionConflict> interception_conflicts() {
+    return {};
+}
 void bind_upstream_interface(std::intptr_t raw, const NetworkRoute& route) {
     if (route.interface_id.empty())
         return;

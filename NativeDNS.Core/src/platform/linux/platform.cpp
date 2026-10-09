@@ -170,6 +170,13 @@ uint16_t prepare_upstream_socket(std::intptr_t raw, bool) {
     configure_upstream_socket(raw);
     return 0;
 }
+bool socket_is_ipv6(std::intptr_t raw) {
+    sockaddr_storage address{};
+    socklen_t size = sizeof(address);
+    if (getsockname(static_cast<int>(raw), reinterpret_cast<sockaddr*>(&address), &size) != 0)
+        throw Error("SOCKET", "Cannot inspect upstream address family");
+    return address.ss_family == AF_INET6;
+}
 int close_upstream_socket(std::intptr_t raw) noexcept {
     return ::close(static_cast<int>(raw)) == 0 ? 0 : 1;
 }

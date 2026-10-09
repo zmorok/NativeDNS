@@ -266,6 +266,17 @@ uint16_t prepare_upstream_socket(std::intptr_t raw, bool) {
                      ? reinterpret_cast<const sockaddr_in*>(&local)->sin_port
                      : reinterpret_cast<const sockaddr_in6*>(&local)->sin6_port);
 }
+bool socket_is_ipv6(std::intptr_t raw) {
+    WSAPROTOCOL_INFOW info{};
+    int size = sizeof(info);
+    if (getsockopt(static_cast<SOCKET>(raw),
+                   SOL_SOCKET,
+                   SO_PROTOCOL_INFOW,
+                   reinterpret_cast<char*>(&info),
+                   &size) == SOCKET_ERROR)
+        throw Error("SOCKET", "Cannot inspect upstream address family");
+    return info.iAddressFamily == AF_INET6;
+}
 int close_upstream_socket(std::intptr_t raw) noexcept {
     return closesocket(static_cast<SOCKET>(raw)) == 0 ? 0 : 1;
 }

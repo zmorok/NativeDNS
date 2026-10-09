@@ -1,5 +1,11 @@
 # Dependencies
 
+Windows interception startup inspects known YogaDNS/WinDivert driver services
+and NativeDNSCoreHost processes without stopping third-party services. Driver
+presence alone is reported separately from a suspected concurrent interceptor.
+Upstream self-bypass registrations are reference-counted by protocol, local
+port and IP family; sockets close before their registration is removed.
+
 `NativeDNS.Core` is Qt-independent.
 
 `NativeDNS.GUI` uses Qt 6 Widgets.

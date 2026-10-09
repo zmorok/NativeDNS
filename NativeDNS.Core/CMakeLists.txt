@@ -26,6 +26,7 @@ if(WIN32)
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/windows/platform.cpp
     src/platform/windows/network.cpp
+    src/platform/windows/interception_conflicts.cpp
     src/platform/windows/dns_transport.cpp
     src/platform/windows/local_proxy.cpp
     src/platform/windows/firewall.cpp

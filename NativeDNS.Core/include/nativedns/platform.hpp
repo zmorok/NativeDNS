@@ -44,6 +44,7 @@ void wait_socket(std::intptr_t socket,
                  std::chrono::steady_clock::time_point deadline);
 void configure_upstream_socket(std::intptr_t socket);
 uint16_t prepare_upstream_socket(std::intptr_t socket, bool tcp);
+bool socket_is_ipv6(std::intptr_t socket);
 int close_upstream_socket(std::intptr_t socket) noexcept;
 std::vector<std::string> resolve_host(const std::string& hostname);
 // Numeric OS-configured resolvers, without performing any DNS lookup.

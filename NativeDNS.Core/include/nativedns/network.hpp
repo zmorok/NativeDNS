@@ -53,6 +53,11 @@ private:
     std::jthread watcher_;
 };
 namespace platform {
+struct InterceptionConflict {
+    std::string code, message;
+    bool suspected = false;
+};
+std::vector<InterceptionConflict> interception_conflicts();
 std::vector<InterfaceInfo> enumerate_interfaces();
 void bind_upstream_interface(std::intptr_t socket, const NetworkRoute& route);
 } // namespace platform

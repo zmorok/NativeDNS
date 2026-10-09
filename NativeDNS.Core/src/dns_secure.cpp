@@ -83,7 +83,9 @@ private:
                 static_cast<std::intptr_t>(socket), purpose == CURLSOCKTYPE_IPCXN);
             if (port && !self.upstream_sockets.contains(socket))
                 self.upstream_sockets.emplace(
-                    socket, std::make_unique<detail::NetworkUpstreamGuard>(true, port));
+                    socket,
+                    std::make_unique<detail::NetworkUpstreamGuard>(
+                        true, port, platform::socket_is_ipv6(static_cast<std::intptr_t>(socket))));
             return CURL_SOCKOPT_OK;
         } catch (...) {
             return CURL_SOCKOPT_ERROR;
