@@ -10,4 +10,5 @@ bool runNativeDnsHelper(const QString& executable,
                         const QStringList& arguments,
                         bool elevated,
                         int* exitCode,
-                        QString* error);
+                        QString* error,
+                        int timeoutMs = -1);

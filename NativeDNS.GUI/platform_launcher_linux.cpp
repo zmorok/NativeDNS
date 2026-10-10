@@ -30,7 +30,8 @@ bool runNativeDnsHelper(const QString& executable,
                         const QStringList& arguments,
                         bool elevated,
                         int* exitCode,
-                        QString* error) {
+                        QString* error,
+                        int timeoutMs) {
     QString program = executable;
     QStringList args = arguments;
     if (elevated) {
@@ -51,7 +52,9 @@ bool runNativeDnsHelper(const QString& executable,
             *error = "Cannot start NativeDNS helper";
         return false;
     }
-    if (!process.waitForFinished(-1)) {
+    if (!process.waitForFinished(timeoutMs)) {
+        process.kill();
+        process.waitForFinished(5000);
         if (error)
             *error = "NativeDNS helper did not finish";
         return false;

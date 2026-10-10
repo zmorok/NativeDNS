@@ -21,6 +21,13 @@ uint16_t secure_random_u16();
 uint32_t secure_random_u32();
 uint64_t monotonic_millis();
 uint32_t process_id();
+struct ProcessIdentity {
+    uint32_t pid = 0;
+    uint64_t started = 0;
+};
+// Match the full executable path. The birth token prevents PID-reuse mistakes.
+std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable);
+void force_stop_process(const std::filesystem::path& executable, ProcessIdentity identity);
 std::filesystem::path executable_path();
 // Root of the staged application. On Windows executables live in the root;
 // Linux packages place them in <root>/bin.

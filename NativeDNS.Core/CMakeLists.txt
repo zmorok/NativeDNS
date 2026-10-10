@@ -25,6 +25,7 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
 if(WIN32)
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/windows/platform.cpp
+    src/platform/windows/process_control.cpp
     src/platform/windows/network.cpp
     src/platform/windows/network_policy.cpp
     src/platform/windows/interception_conflicts.cpp
@@ -40,6 +41,7 @@ if(WIN32)
 else()
   set(NATIVEDNS_CORE_PLATFORM_SOURCES
     src/platform/linux/platform.cpp
+    src/platform/linux/process_control.cpp
     src/platform/linux/network.cpp
     src/platform/linux/dns_transport.cpp
     src/platform/linux/local_proxy.cpp

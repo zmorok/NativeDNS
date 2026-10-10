@@ -76,6 +76,36 @@ private:
     }
 
 private slots:
+    void coreControlErrorActions() {
+        const QString diagnostics = "IPC_CONNECT: Win32=2\nPID=123; birth=456";
+        QPointer<QMessageBox> dialog = coreControlFailureDialog(nullptr, diagnostics);
+        QCOMPARE(dialog->icon(), QMessageBox::Critical);
+        QCOMPARE(dialog->buttons().size(), 2);
+        QVERIFY(dialog->informativeText().contains(diagnostics));
+        auto* close = dialog->findChild<QPushButton*>("closeControlError");
+        auto* terminate = dialog->findChild<QPushButton*>("terminateApplication");
+        QVERIFY(close && terminate);
+        QCOMPARE(dialog->defaultButton(), close);
+        QCOMPARE(dialog->escapeButton(), close);
+        QCOMPARE(dialog->buttonRole(terminate), QMessageBox::DestructiveRole);
+        QString action;
+        connect(dialog, &QMessageBox::buttonClicked, this, [&action](QAbstractButton* button) {
+            action = button->objectName();
+        });
+        dialog->show();
+        close->click();
+        QCOMPARE(action, QString("closeControlError"));
+        QTRY_VERIFY(dialog.isNull());
+
+        dialog = coreControlFailureDialog(nullptr, diagnostics);
+        connect(dialog, &QMessageBox::buttonClicked, this, [&action](QAbstractButton* button) {
+            action = button->objectName();
+        });
+        dialog->show();
+        dialog->findChild<QPushButton*>("terminateApplication")->click();
+        QCOMPARE(action, QString("terminateApplication"));
+        QTRY_VERIFY(dialog.isNull());
+    }
     void init() {
         commits_ = 0;
         acceptChanges_ = true;

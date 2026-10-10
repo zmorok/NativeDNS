@@ -36,6 +36,8 @@ namespace {
 
 int main(int argc, char** argv) {
     std::set_terminate(&gui_terminate);
+    // Outlive the window, QApplication and Qt's shutdown callbacks.
+    std::jthread exitDeadline;
     QApplication app(argc, argv);
     app.setApplicationName("NativeDNS");
     app.setApplicationVersion(QStringLiteral(NATIVEDNS_VERSION));
@@ -55,6 +57,8 @@ int main(int argc, char** argv) {
     }
 
     NativeDnsWindow window(background);
+    exitDeadline = nd::platform::watch_shutdown_deadline(
+        [signal = window.exitConfirmedSignal()] { return signal->load(); });
     singleInstance.setActivationHandler([&window] { window.showAndActivate(); });
 
     if (!background)

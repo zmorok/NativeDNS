@@ -43,6 +43,7 @@ int main(int argc, char** argv) {
         bool transparent = false;
         bool register_autostart = false;
         bool unregister_autostart = false;
+        nd::platform::ProcessIdentity force_target;
         uint16_t port = 0;
 
         for (int i = 1; i < argc; ++i) {
@@ -51,7 +52,17 @@ int main(int argc, char** argv) {
                 config_path = argv[++i];
             else if (arg == "--transparent")
                 transparent = true;
-            else if (arg == "--port" && i + 1 < argc) {
+            else if (arg == "--force-shutdown" && i + 2 < argc) {
+                const std::string pid = argv[++i], started = argv[++i];
+                const auto [pid_end, pid_error] =
+                    std::from_chars(pid.data(), pid.data() + pid.size(), force_target.pid);
+                const auto [start_end, start_error] = std::from_chars(
+                    started.data(), started.data() + started.size(), force_target.started);
+                if (pid_error != std::errc{} || pid_end != pid.data() + pid.size() ||
+                    start_error != std::errc{} || start_end != started.data() + started.size() ||
+                    !force_target.pid || !force_target.started)
+                    throw nd::Error("PROCESS_IDENTITY", "Invalid force-shutdown process identity");
+            } else if (arg == "--port" && i + 1 < argc) {
                 const std::string value = argv[++i];
                 unsigned parsed = 0;
                 const auto [end, error] =
@@ -79,6 +90,14 @@ int main(int argc, char** argv) {
 
         if (register_autostart && unregister_autostart)
             throw nd::Error("AUTOSTART", "Conflicting autostart operations");
+
+        if (force_target.pid) {
+            if (register_autostart || unregister_autostart || !config_path.empty() || transparent ||
+                port || !autostart_gui.empty())
+                throw nd::Error("PROCESS_IDENTITY", "Conflicting force-shutdown operations");
+            nd::platform::force_stop_process(nd::platform::executable_path(), force_target);
+            return 0;
+        }
 
         if (register_autostart) {
             nd::enable_autostart(nd::platform::executable_path(), autostart_config, autostart_gui);

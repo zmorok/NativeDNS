@@ -118,8 +118,27 @@ status responses, so a briefly responsive process cannot create an endless resta
 Explicit GUI exit cancels pending launches, sends Shutdown on the independent
 endpoint (with a command-endpoint fallback), and waits for the process-instance
 lock to be released. Disappearance of a pipe alone is not proof of termination.
-If shutdown cannot be confirmed, the GUI stays visible and reports the failure.
+If graceful shutdown fails, Exit falls back to OS process termination. The GUI
+checks the full CoreHost executable path and a process birth token, then uses a
+verified Windows process handle to prevent PID-reuse mistakes.
+An elevated `NativeDNSCoreHost --force-shutdown <pid> <birth-token>` helper is used
+when the GUI lacks permission. The helper accepts only its own executable path.
+The GUI exits only after process termination and release of the instance lock
+have been confirmed; cancellation of elevation or a failed termination leaves
+the GUI visible with an error.
+Shutdown runs on a dedicated GUI worker, independently of the shared DNS-test
+thread pool. Once CoreHost termination is confirmed, a separate Windows deadline
+also exits the GUI after 10 seconds if its event loop or Qt cleanup is stuck.
+
+Three consecutive failed status polls outside the startup grace period show an
+error window once per outage. It includes IPC errors, the independent shutdown
+channel probe, process identity, last successful status and OS information.
+`Terminate application` forces CoreHost shutdown and then exits the GUI; `Close`
+dismisses only the error window. A successful response resets the notification.
+CoreHost error status is also reported in this window.
 On Windows, a shutdown request starts an independent 10-second cleanup deadline;
 if cleanup hangs, CoreHost exits with code 12 and Windows releases its interception
-handles. Linux has no forced-exit fallback because nftables rules require explicit
-cleanup before the proxy exits.
+handles. Linux has no emergency OS termination fallback: killing the proxy before
+validated nftables cleanup can leave DNS redirected to a dead listener. Linux
+continues using the independent graceful shutdown endpoint and reports an explicit
+unsupported error if forced termination is needed.

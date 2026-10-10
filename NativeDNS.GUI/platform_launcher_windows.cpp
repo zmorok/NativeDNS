@@ -71,7 +71,8 @@ bool runNativeDnsHelper(const QString& executable,
                         const QStringList& arguments,
                         bool elevated,
                         int* exitCode,
-                        QString* error) {
+                        QString* error,
+                        int timeoutMs) {
     const auto params = joinArguments(arguments);
     const auto file = executable.toStdWString();
 
@@ -93,9 +94,14 @@ bool runNativeDnsHelper(const QString& executable,
         return false;
     }
 
-    const DWORD wait = WaitForSingleObject(info.hProcess, INFINITE);
+    const DWORD wait = WaitForSingleObject(
+        info.hProcess, timeoutMs < 0 ? INFINITE : static_cast<DWORD>(timeoutMs));
     if (wait != WAIT_OBJECT_0) {
-        const DWORD code = GetLastError();
+        const DWORD code = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : GetLastError();
+        if (wait == WAIT_TIMEOUT) {
+            TerminateProcess(info.hProcess, ERROR_TIMEOUT);
+            WaitForSingleObject(info.hProcess, 5000);
+        }
         CloseHandle(info.hProcess);
         if (error)
             *error = QString("Waiting for elevated helper failed: %1").arg(code);
