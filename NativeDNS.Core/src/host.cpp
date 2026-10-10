@@ -68,15 +68,22 @@ CoreHost::CoreHost(Config config,
                 throw Error("IPC_PROTOCOL", "Log IPC endpoint only accepts logs operation");
             return handle(op, payload);
         });
+    shutdown_ipc_ = std::make_unique<PipeServer>(
+        pipe_name_ == core_pipe_name ? core_shutdown_pipe_name : pipe_name_ + ".shutdown",
+        [this](IpcOperation op, const std::string& payload) {
+            if (op != IpcOperation::shutdown && op != IpcOperation::ping)
+                throw Error("IPC_PROTOCOL", "Shutdown endpoint only accepts shutdown and ping");
+            return handle(op, payload);
+        });
 }
 CoreHost::~CoreHost() {
     stop();
 }
 void CoreHost::start() {
-    std::lock_guard lock(mutex_);
+    std::unique_lock lock(mutex_);
     if (interception_->status().state != State::stopped)
         throw Error("LIFECYCLE", "Core is not stopped");
-    shutdown_requested_ = false;
+    *shutdown_requested_ = false;
     restart_requested_ = false;
     stopped_ = false;
     const char* stage = "interception";
@@ -94,19 +101,29 @@ void CoreHost::start() {
             }
         }
         stage = "command IPC";
+        lock.unlock();
+        std::lock_guard ipc_lock(ipc_lifecycle_mutex_);
         detail::fault_point("core.command_ipc");
-        logger_.write(
-            Level::verbose, "IPC_STARTING", "Starting command and live-log IPC endpoints");
+        logger_.write(Level::verbose,
+                      "IPC_STARTING",
+                      "Starting command, live-log and independent shutdown IPC endpoints");
         ipc_->start();
         stage = "log IPC";
         detail::fault_point("core.log_ipc");
         log_ipc_->start();
+        stage = "shutdown IPC";
+        detail::fault_point("core.shutdown_ipc");
+        shutdown_ipc_->start();
         const auto value = interception_->status();
         logger_.write(Level::normal,
                       "CORE_STARTED",
                       "Core host started; port=" + std::to_string(value.port) +
                           " transparent=" + (value.transparent ? "1" : "0"));
     } catch (...) {
+        request_shutdown();
+        if (lock.owns_lock())
+            lock.unlock();
+        std::lock_guard ipc_lock(ipc_lifecycle_mutex_);
         const auto failure = std::current_exception();
         try {
             std::rethrow_exception(failure);
@@ -119,6 +136,8 @@ void CoreHost::start() {
                           "CORE_START_FAILED",
                           std::string("stage=") + stage + " error=unknown");
         }
+        if (shutdown_ipc_)
+            shutdown_ipc_->stop();
         if (log_ipc_)
             log_ipc_->stop();
         if (ipc_)
@@ -136,17 +155,23 @@ void CoreHost::start() {
 void CoreHost::stop() {
     if (stopped_.exchange(true))
         return;
+    request_shutdown();
     logger_.write(Level::verbose, "CORE_STOPPING", "Core host shutdown started");
     if (interception_)
         interception_->cancel_pending();
-    if (log_ipc_)
-        log_ipc_->stop();
-    if (ipc_)
-        ipc_->stop();
+    {
+        std::lock_guard ipc_lock(ipc_lifecycle_mutex_);
+        if (log_ipc_)
+            log_ipc_->stop();
+        if (ipc_)
+            ipc_->stop();
+        if (shutdown_ipc_)
+            shutdown_ipc_->stop();
+    }
     std::lock_guard lock(mutex_);
     if (interception_)
         interception_->stop();
-    shutdown_requested_ = true;
+    *shutdown_requested_ = true;
     shutdown_cv_.notify_all();
     logger_.write(Level::normal, "CORE_STOPPED", "Core host stopped");
 }
@@ -155,8 +180,36 @@ void CoreHost::wait_for_shutdown() {
     auto previous_network = NetworkMonitor::shared().snapshot();
     for (;;) {
         if (shutdown_cv_.wait_for(
-                lock, std::chrono::milliseconds(500), [&] { return shutdown_requested_; }))
+                lock, std::chrono::milliseconds(500), [&] { return shutdown_requested(); }))
             return;
+        // Recover a failed accept loop without stopping DNS interception. Never
+        // join IPC workers while holding the mutex needed by their handlers.
+        lock.unlock();
+        {
+            std::lock_guard ipc_lock(ipc_lifecycle_mutex_);
+            if (shutdown_requested())
+                return;
+            const std::pair<const char*, PipeServer*> endpoints[] = {
+                {"command", ipc_.get()},
+                {"logs", log_ipc_.get()},
+                {"shutdown", shutdown_ipc_.get()}};
+            for (const auto& [name, endpoint] : endpoints) {
+                if (!endpoint->running()) {
+                    logger_.write(Level::errors_only,
+                                  "IPC_ENDPOINT_FAILED",
+                                  std::string(name) + ": " + endpoint->failure());
+                    try {
+                        endpoint->stop();
+                        endpoint->start();
+                        logger_.write(Level::normal, "IPC_ENDPOINT_RECOVERED", name);
+                    } catch (...) {
+                        request_shutdown();
+                        throw;
+                    }
+                }
+            }
+        }
+        lock.lock();
         const auto network = NetworkMonitor::shared().snapshot();
         if (network->generation != previous_network->generation) {
             logger_.write(Level::normal,
@@ -275,14 +328,10 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, "STOPPED"};
     }
     if (operation == IpcOperation::shutdown || operation == IpcOperation::restart) {
-        {
-            std::lock_guard lock(mutex_);
-            if (operation == IpcOperation::restart)
-                restart_requested_ = true;
-            shutdown_requested_ = true;
-            interception_->cancel_pending();
-        }
-        shutdown_cv_.notify_all();
+        // Exit must remain reachable even if a command/backend holds mutex_.
+        if (operation == IpcOperation::restart)
+            restart_requested_ = true;
+        request_shutdown();
         return {0, operation == IpcOperation::restart ? "RESTARTING" : "SHUTTING_DOWN"};
     }
     if (operation == IpcOperation::logs) {

@@ -83,6 +83,13 @@ void verify_abnormal_process_release(const std::string& name, nd::platform::Inst
 
 int main(int argc, char** argv) {
     try {
+#ifdef _WIN32
+        if (argc == 2 && std::string(argv[1]) == "--stuck-shutdown") {
+            auto deadline = nd::platform::watch_shutdown_deadline([] { return true; });
+            std::this_thread::sleep_for(std::chrono::seconds(30));
+            return 1;
+        }
+#endif
         if (argc == 3 && (std::string(argv[1]) == "--hold-lock" ||
                           std::string(argv[1]) == "--hold-machine-lock")) {
             nd::platform::ProcessInstanceLock held(argv[2],
@@ -111,6 +118,39 @@ int main(int argc, char** argv) {
         verify_abnormal_process_release(crash_name, nd::platform::InstanceScope::session);
         verify_abnormal_process_release(crash_name + ".Machine",
                                         nd::platform::InstanceScope::machine);
+#ifdef _WIN32
+        {
+            // Exercise the production deadline in a disposable process whose
+            // main thread simulates a permanently stuck backend stop/join.
+            auto command =
+                L"\"" + nd::platform::executable_path().wstring() + L"\" --stuck-shutdown";
+            STARTUPINFOW startup{};
+            startup.cb = sizeof(startup);
+            PROCESS_INFORMATION child{};
+            check(CreateProcessW(nullptr,
+                                 command.data(),
+                                 nullptr,
+                                 nullptr,
+                                 FALSE,
+                                 CREATE_NO_WINDOW,
+                                 nullptr,
+                                 nullptr,
+                                 &startup,
+                                 &child) != FALSE,
+                  "cannot launch shutdown deadline child");
+            CloseHandle(child.hThread);
+            const auto wait = WaitForSingleObject(child.hProcess, 13000);
+            DWORD exit_code = 0;
+            GetExitCodeProcess(child.hProcess, &exit_code);
+            if (wait != WAIT_OBJECT_0) {
+                TerminateProcess(child.hProcess, 99);
+                WaitForSingleObject(child.hProcess, 2000);
+            }
+            CloseHandle(child.hProcess);
+            check(wait == WAIT_OBJECT_0 && exit_code == 12,
+                  "shutdown deadline must exit even when backend cleanup is stuck");
+        }
+#endif
         std::cout << "Lifecycle instance-lock and crash-recovery tests passed\n";
         return 0;
     } catch (const std::exception& error) {

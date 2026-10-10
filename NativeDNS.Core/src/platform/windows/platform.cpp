@@ -13,6 +13,8 @@
 #include <set>
 #include <optional>
 #include <algorithm>
+#include <condition_variable>
+#include <cstdlib>
 
 namespace nd::platform {
 std::vector<std::string> system_dns_servers() {
@@ -131,6 +133,24 @@ uint64_t monotonic_millis() {
 }
 uint32_t process_id() {
     return GetCurrentProcessId();
+}
+std::jthread watch_shutdown_deadline(std::function<bool()> shutdown_requested) {
+    return std::jthread([requested = std::move(shutdown_requested)](std::stop_token stop) {
+        std::mutex wait_mutex;
+        std::condition_variable_any changed;
+        std::unique_lock lock(wait_mutex);
+        std::optional<std::chrono::steady_clock::time_point> shutdown_time;
+        while (!stop.stop_requested()) {
+            if (requested()) {
+                const auto now = std::chrono::steady_clock::now();
+                if (!shutdown_time)
+                    shutdown_time = now;
+                if (now - *shutdown_time >= std::chrono::seconds(10))
+                    std::_Exit(12);
+            }
+            changed.wait_for(lock, stop, std::chrono::milliseconds(100), [] { return false; });
+        }
+    });
 }
 std::filesystem::path executable_path() {
     std::vector<wchar_t> buffer(32768);

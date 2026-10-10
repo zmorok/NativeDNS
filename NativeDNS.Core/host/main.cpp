@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
             return 0;
         }
 
-        nd::platform::ProcessInstanceLock instanceLock("NativeDNS.CoreHost.Instance.v1",
+        nd::platform::ProcessInstanceLock instanceLock(nd::core_instance_name,
                                                        nd::platform::InstanceScope::machine);
         if (!instanceLock.acquired()) {
             std::cerr << "NativeDNSCoreHost is already running\n";
@@ -106,6 +106,8 @@ int main(int argc, char** argv) {
 
         for (;;) {
             auto config = nd::load_config(config_path);
+            // Outlive CoreHost and its file/transport destructors as well as stop().
+            std::jthread shutdown_deadline;
             nd::CoreHost host(std::move(config),
                               default_original(),
                               port,
@@ -113,9 +115,21 @@ int main(int argc, char** argv) {
                               transparent ? nd::InterceptionMode::transparent
                                           : nd::InterceptionMode::local_proxy,
                               config_path);
+            // Windows enforces the deadline independently of backend/IPC locks.
+            shutdown_deadline = nd::platform::watch_shutdown_deadline(
+                [signal = host.shutdown_signal()] { return signal->load(); });
             host.start();
-            host.wait_for_shutdown();
+            try {
+                host.wait_for_shutdown();
+            } catch (const std::exception& error) {
+                host.request_shutdown();
+                host.logger().write(nd::Level::errors_only, "CORE_RUNTIME_FAILED", error.what());
+                host.stop();
+                throw;
+            }
             const bool restart = host.restart_requested();
+            host.logger().write(
+                nd::Level::normal, "CORE_SHUTDOWN_REQUESTED", "Graceful shutdown requested");
             host.stop();
             if (!restart)
                 return 0;

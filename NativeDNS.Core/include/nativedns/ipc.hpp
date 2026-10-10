@@ -8,6 +8,7 @@
 #include <condition_variable>
 
 namespace nd {
+inline constexpr const char* core_instance_name = "NativeDNS.CoreHost.Instance.v1";
 enum class IpcOperation : uint16_t {
     ping = 1,
     status = 2,
@@ -35,6 +36,7 @@ public:
     bool running() const {
         return running_;
     }
+    std::string failure() const;
 
 private:
     void run();
@@ -44,7 +46,7 @@ private:
     void* startup_event_ = nullptr;
     std::jthread thread_;
     std::atomic_bool running_ = false;
-    std::mutex error_mutex_;
+    mutable std::mutex error_mutex_;
     std::string startup_error_;
     std::condition_variable startup_cv_;
     bool startup_ready_ = false;
@@ -57,8 +59,10 @@ IpcResponse pipe_request(const std::string& name,
 #ifdef _WIN32
 inline constexpr const char* core_pipe_name = R"(\\.\pipe\NativeDNS.Core.v1)";
 inline constexpr const char* core_log_pipe_name = R"(\\.\pipe\NativeDNS.Core.Logs.v1)";
+inline constexpr const char* core_shutdown_pipe_name = R"(\\.\pipe\NativeDNS.Core.Shutdown.v1)";
 #else
 inline constexpr const char* core_pipe_name = "/tmp/nativedns-core-v1.sock";
 inline constexpr const char* core_log_pipe_name = "/tmp/nativedns-core-logs-v1.sock";
+inline constexpr const char* core_shutdown_pipe_name = "/tmp/nativedns-core-shutdown-v1.sock";
 #endif
 } // namespace nd

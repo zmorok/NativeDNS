@@ -12,18 +12,22 @@ There is no TCP/HTTP control endpoint.
 
 ## Endpoints
 
-Two logical endpoints are used:
+Three logical endpoints are used:
 
-- command/lifecycle endpoint;
-- log endpoint.
+- command endpoint (including the existing lifecycle operations);
+- log endpoint;
+- independent shutdown endpoint (Ping and Shutdown only).
 
-Separate endpoints prevent a long log read from blocking lifecycle commands.
+Separate endpoints prevent log reads or busy command handlers from blocking Exit.
+Shutdown signals are published without taking backend/configuration locks. Both the
+command and shutdown endpoints accept Shutdown for compatibility with existing tools.
 
 ### Windows
 
 ```text
 \\.\pipe\NativeDNS.Core.v1
 \\.\pipe\NativeDNS.Core.Logs.v1
+\\.\pipe\NativeDNS.Core.Shutdown.v1
 ```
 
 Windows uses local Named Pipes with restricted local-user access.
@@ -33,6 +37,7 @@ Windows uses local Named Pipes with restricted local-user access.
 ```text
 /tmp/nativedns-core-v1.sock
 /tmp/nativedns-core-logs-v1.sock
+/tmp/nativedns-core-shutdown-v1.sock
 ```
 
 Linux uses Unix Domain Sockets.
@@ -100,4 +105,21 @@ CoreHost owns the long-running Router/interception state.
 
 A process-instance lock prevents multiple CoreHost instances from opening competing interception/IPC resources.
 
-Explicit GUI exit sends CoreHost shutdown and waits for termination according to the GUI lifecycle policy.
+Windows IPC reserves a listening pipe in addition to its 16 worker connections.
+Abandoned connections are isolated from the accept loop. CoreHost monitors its IPC
+listeners and restores failed endpoints without stopping interception, recording
+`IPC_ENDPOINT_FAILED` and `IPC_ENDPOINT_RECOVERED` diagnostics.
+
+The GUI distinguishes an unavailable control channel from an exited process using
+the CoreHost process-instance lock. It does not launch another CoreHost while that
+lock is held. Automatic restart attempts are reset after 30 seconds of healthy
+status responses, so a briefly responsive process cannot create an endless restart loop.
+
+Explicit GUI exit cancels pending launches, sends Shutdown on the independent
+endpoint (with a command-endpoint fallback), and waits for the process-instance
+lock to be released. Disappearance of a pipe alone is not proof of termination.
+If shutdown cannot be confirmed, the GUI stays visible and reports the failure.
+On Windows, a shutdown request starts an independent 10-second cleanup deadline;
+if cleanup hangs, CoreHost exits with code 12 and Windows releases its interception
+handles. Linux has no forced-exit fallback because nftables rules require explicit
+cleanup before the proxy exits.

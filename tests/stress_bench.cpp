@@ -185,6 +185,7 @@ int main(int argc, char** argv) {
         const auto port = proxy.status().port;
         const auto query = nd::make_query("stress.example");
         std::atomic_uint64_t successes = 0, failures = 0;
+        std::atomic_uint64_t udp_failures = 0, tcp_failures = 0;
         std::mutex latency_mutex;
         std::vector<uint64_t> latencies;
         latencies.reserve(1000000);
@@ -205,8 +206,10 @@ int main(int argc, char** argv) {
                         std::lock_guard lock(latency_mutex);
                         if (latencies.size() < 1000000)
                             latencies.push_back(micros);
-                    } else
+                    } else {
                         ++failures;
+                        ++(tcp ? tcp_failures : udp_failures);
+                    }
                     tcp = !tcp;
                 }
             });
@@ -223,12 +226,16 @@ int main(int argc, char** argv) {
         const auto after = resources();
         const double qps = static_cast<double>(successes.load()) / static_cast<double>(seconds);
         std::cout << "requests=" << successes.load() << " failures=" << failures.load()
-                  << " qps=" << qps << " p50_us=" << percentile(.50)
-                  << " p95_us=" << percentile(.95) << " p99_us=" << percentile(.99)
-                  << " memory_before=" << before.memory << " memory_after=" << after.memory
-                  << " handles_before=" << before.handles << " handles_after=" << after.handles
-                  << " threads_before=" << before.threads << " threads_after=" << after.threads
-                  << '\n';
+                  << " udp_failures=" << udp_failures.load()
+                  << " tcp_failures=" << tcp_failures.load() << " qps=" << qps
+                  << " p50_us=" << percentile(.50) << " p95_us=" << percentile(.95)
+                  << " p99_us=" << percentile(.99) << " memory_before=" << before.memory
+                  << " memory_after=" << after.memory << " handles_before=" << before.handles
+                  << " handles_after=" << after.handles << " threads_before=" << before.threads
+                  << " threads_after=" << after.threads << '\n';
+        if (failures.load())
+            for (const auto& event : logger.snapshot(nd::Level::errors_only))
+                std::cerr << event.code << ": " << event.message << '\n';
         if (failures.load() || successes.load() < clients ||
             after.memory > before.memory + 128ULL * 1024 * 1024 ||
             after.handles > before.handles + 32 || after.threads > before.threads + 2)

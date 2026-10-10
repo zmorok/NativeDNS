@@ -289,6 +289,12 @@ constexpr std::array translations{
     Translation{"Core: checking network...", "Ядро: проверка сети..."},
     Translation{"Core: restarting...", "Ядро: перезапуск..."},
     Translation{"Core: stopped", "Ядро: остановлено"},
+    Translation{"Core: control unavailable", "Ядро: управление недоступно"},
+    Translation{"CoreHost is running but its control channel is unavailable.",
+                "CoreHost работает, но канал управления недоступен."},
+    Translation{
+        "CoreHost did not exit. NativeDNS remains open so shutdown can be retried.",
+        "CoreHost не завершился. NativeDNS остаётся открытым для повторной попытки выхода."},
     Translation{"Core: waiting for network", "Ядро: ожидание сети"},
     Translation{"Offline", "Нет сети"},
     Translation{

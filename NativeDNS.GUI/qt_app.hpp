@@ -42,7 +42,7 @@ private:
     void importConfiguration();
     void exportConfiguration();
     void startCore(bool transparent = true, bool reportFailure = true);
-    void shutdownCoreForExit();
+    bool shutdownCoreForExit();
     bool waitForCoreShutdown(int timeoutMs);
     void exitApplication();
     void refreshStatus();
@@ -59,7 +59,7 @@ private:
     QAction* hideToTrayAction_ = nullptr;
     QPointer<UpdateDialog> updateDialog_;
     QTimer statusTimer_, logTimer_;
-    QElapsedTimer coreLaunchTimer_, networkProbeTimer_;
+    QElapsedTimer coreLaunchTimer_, networkProbeTimer_, coreHealthyTimer_;
     QString networkSignature_;
     uint64_t logSequence_ = 0;
     bool exiting_ = false;
@@ -72,11 +72,14 @@ private:
     bool reloadRejected_ = false;
     bool networkErrorLogged_ = false;
     bool coreShutdownAttempted_ = false;
+    bool coreControlErrorLogged_ = false;
     unsigned failedCorePolls_ = 0, automaticRestarts_ = 0;
     std::atomic_bool coreStartOperationPending_ = false;
     std::atomic_bool restartOperationPending_ = false;
-    std::shared_ptr<std::atomic_bool> coreStartCancelled_ =
-        std::make_shared<std::atomic_bool>(false);
+    struct CoreLaunchState {
+        std::atomic_bool cancelled = false, pending = false, issued = false;
+    };
+    std::shared_ptr<CoreLaunchState> coreLaunchState_ = std::make_shared<CoreLaunchState>();
     std::atomic_bool statusRefreshPending_ = false;
     std::atomic_bool logRefreshPending_ = false;
 };

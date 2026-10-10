@@ -1,6 +1,7 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/detail/ipc_wire.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <windows.h>
 #include <sddl.h>
 #include <algorithm>
@@ -11,6 +12,7 @@ namespace nd {
 namespace {
 constexpr uint32_t magic = 0x31444e4e, max_payload = 1024 * 1024;
 constexpr size_t header_size = 20;
+constexpr size_t max_workers = 16;
 std::string owner_name(const std::string& name) {
     uint64_t hash = 1469598103934665603ULL;
     for (const unsigned char value : name) {
@@ -225,25 +227,29 @@ void PipeServer::stop() {
 }
 void PipeServer::run() {
     PSECURITY_DESCRIPTOR descriptor = nullptr;
+    struct Worker {
+        std::jthread thread;
+        std::shared_ptr<std::atomic_bool> done;
+    };
+    // Keep workers alive until the stop event has been signalled on failure.
+    std::vector<Worker> workers;
     try {
         descriptor = current_user_descriptor();
         SECURITY_ATTRIBUTES attributes{sizeof(attributes), descriptor, FALSE};
-        struct Worker {
-            std::jthread thread;
-            std::shared_ptr<std::atomic_bool> done;
-        };
-        std::vector<Worker> workers;
         const auto reap_workers = [&](bool all = false) {
             std::erase_if(workers,
                           [&](const Worker& worker) { return all || worker.done->load(); });
         };
         bool startup_signaled = false;
         while (running_) {
+            reap_workers();
+            detail::fault_point("ipc.accept." + name_);
             HANDLE pipe = CreateNamedPipeW(widen(name_).c_str(),
                                            PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
                                                PIPE_REJECT_REMOTE_CLIENTS,
-                                           16,
+                                           // One listening instance in addition to busy workers.
+                                           static_cast<DWORD>(max_workers + 1),
                                            header_size + max_payload + 4,
                                            header_size + max_payload,
                                            0,
@@ -266,6 +272,10 @@ void PipeServer::run() {
             if (!ok && error != ERROR_IO_PENDING && error != ERROR_PIPE_CONNECTED) {
                 CloseHandle(connected);
                 CloseHandle(pipe);
+                // A short-lived client can close after CreateFile succeeds but
+                // before ConnectNamedPipe runs. It must not kill the listener.
+                if (error == ERROR_NO_DATA || error == ERROR_PIPE_NOT_CONNECTED)
+                    continue;
                 throw Error("IPC_IO", "ConnectNamedPipe: " + std::to_string(error));
             }
             if (error == ERROR_PIPE_CONNECTED)
@@ -281,7 +291,7 @@ void PipeServer::run() {
             }
             CloseHandle(connected);
             reap_workers();
-            if (workers.size() >= 16) {
+            if (workers.size() >= max_workers) {
                 DisconnectNamedPipe(pipe);
                 CloseHandle(pipe);
                 continue;
@@ -343,11 +353,17 @@ void PipeServer::run() {
             startup_error_ = error.what();
         }
         running_ = false;
+        SetEvent(static_cast<HANDLE>(native_stop_));
         if (startup_event_)
             SetEvent(static_cast<HANDLE>(startup_event_));
     }
+    workers.clear();
     if (descriptor)
         LocalFree(descriptor);
+}
+std::string PipeServer::failure() const {
+    std::lock_guard lock(error_mutex_);
+    return startup_error_;
 }
 IpcResponse pipe_request(const std::string& name,
                          IpcOperation operation,

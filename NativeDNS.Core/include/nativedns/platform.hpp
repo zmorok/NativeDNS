@@ -7,6 +7,8 @@
 #include <ctime>
 #include <memory>
 #include <vector>
+#include <functional>
+#include <thread>
 
 namespace nd::platform {
 
@@ -25,6 +27,9 @@ std::filesystem::path executable_path();
 std::filesystem::path application_root_directory();
 std::filesystem::path user_config_directory();
 bool is_elevated();
+// Windows can release interception handles by exiting after stuck cleanup.
+// Linux must finish nftables cleanup and currently has no forced-exit fallback.
+std::jthread watch_shutdown_deadline(std::function<bool()> shutdown_requested);
 std::string system_summary();
 
 enum class InstanceScope { session, machine };

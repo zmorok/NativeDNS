@@ -107,6 +107,10 @@ uint64_t monotonic_millis() {
 uint32_t process_id() {
     return static_cast<uint32_t>(::getpid());
 }
+std::jthread watch_shutdown_deadline(std::function<bool()>) {
+    // Exiting before nftables cleanup would leave DNS redirected to a dead proxy.
+    return {};
+}
 std::filesystem::path executable_path() {
     char buffer[PATH_MAX + 1]{};
     const ssize_t n = ::readlink("/proc/self/exe", buffer, PATH_MAX);

@@ -1846,6 +1846,8 @@ void NativeDnsWindow::exportConfiguration() {
 }
 
 void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
+    if (exiting_)
+        return;
     if (reportFailure)
         automaticRestarts_ = 0;
     if (coreLaunchPending_ && coreLaunchTimer_.isValid() && coreLaunchTimer_.elapsed() < 15000)
@@ -1866,13 +1868,14 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
     if (transparent)
         args << "--transparent";
     const auto configuration = configPath();
-    const auto cancellation = coreStartCancelled_;
-    cancellation->store(false);
+    const auto launchState = coreLaunchState_;
+    launchState->pending = true;
+    launchState->cancelled = false;
     if (!restartWhenNetworkReturns_)
         setStatusText(uiText("Core: starting..."));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start(
-        [self, helper, args, configuration, transparent, reportFailure, cancellation] {
+        [self, helper, args, configuration, transparent, reportFailure, launchState] {
             bool success = false, running = false;
             QString failure;
             try {
@@ -1898,7 +1901,20 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             } catch (const std::exception& error) {
                 failure = q(error.what());
             }
-            if (!success && failure.isEmpty() && !cancellation->load()) {
+            if (!success && failure.isEmpty() && !launchState->cancelled) {
+                // A missing/timed-out IPC endpoint does not mean its process
+                // has exited. Never repeatedly launch into a held singleton.
+                try {
+                    nd::platform::ProcessInstanceLock probe(nd::core_instance_name,
+                                                            nd::platform::InstanceScope::machine);
+                    if (!probe.acquired())
+                        failure =
+                            uiText("CoreHost is running but its control channel is unavailable.");
+                } catch (const std::exception& error) {
+                    failure = q(error.what());
+                }
+            }
+            if (!success && failure.isEmpty() && !launchState->cancelled) {
                 bool launched = false;
 #ifdef _WIN32
                 if (transparent) {
@@ -1909,19 +1925,21 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                 }
 #endif
                 QString launch_error;
-                if (!launched && !cancellation->load())
+                if (!launched && !launchState->cancelled)
                     launched = launchNativeDnsCore(helper, args, transparent, &launch_error);
                 success = launched;
-                if (!success && !cancellation->load())
+                launchState->issued = launched;
+                if (!success && !launchState->cancelled)
                     failure = launch_error;
             }
+            launchState->pending = false;
             QMetaObject::invokeMethod(
                 qApp,
-                [self, success, running, failure, reportFailure, cancellation] {
+                [self, success, running, failure, reportFailure, launchState] {
                     if (!self)
                         return;
                     self->coreStartOperationPending_ = false;
-                    if (cancellation->load())
+                    if (launchState->cancelled)
                         return;
                     self->restartWhenNetworkReturns_ = false;
                     if (!success) {
@@ -1949,12 +1967,9 @@ bool NativeDnsWindow::waitForCoreShutdown(int timeoutMs) {
     timer.start();
     while (timer.elapsed() < timeoutMs) {
         try {
-            const auto response =
-                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::status, {}, 100);
-            if (response.status)
-                return false;
-        } catch (const nd::Error& error) {
-            if (error.code == "IPC_CONNECT")
+            nd::platform::ProcessInstanceLock probe(nd::core_instance_name,
+                                                    nd::platform::InstanceScope::machine);
+            if (probe.acquired())
                 return true;
         } catch (...) {
             return false;
@@ -1964,56 +1979,87 @@ bool NativeDnsWindow::waitForCoreShutdown(int timeoutMs) {
     return false;
 }
 
-void NativeDnsWindow::shutdownCoreForExit() {
+bool NativeDnsWindow::shutdownCoreForExit() {
     if (coreShutdownAttempted_)
-        return;
-    coreShutdownAttempted_ = true;
-    coreStartCancelled_->store(true);
+        return true;
+    coreLaunchState_->cancelled = true;
 
     statusTimer_.stop();
     logTimer_.stop();
 
-    // If the user closes NativeDNS immediately after Start/UAC, wait briefly
-    // for the just-launched CoreHost pipe instead of orphaning that process.
-    if (coreLaunchPending_ && coreLaunchTimer_.isValid()) {
-        QElapsedTimer startupWait;
-        startupWait.start();
+    // Wait for the actual launch worker, not its queued GUI completion callback.
+    QElapsedTimer startupWait;
+    startupWait.start();
+    while (coreLaunchState_->pending && startupWait.elapsed() < 5000)
+        QThread::msleep(50);
+    if (coreLaunchState_->pending)
+        return false;
+    if (coreLaunchState_->issued) {
+        // Shell/task launch success can precede the process acquiring its lock.
+        // Do not mistake that interval for an already completed shutdown.
+        startupWait.restart();
+        bool appeared = false;
         while (startupWait.elapsed() < 5000) {
             try {
-                const auto response =
-                    nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::status, {}, 100);
-                if (!response.status)
-                    break;
-            } catch (const nd::Error& error) {
-                if (error.code != "IPC_CONNECT")
-                    break;
+                nd::platform::ProcessInstanceLock probe(nd::core_instance_name,
+                                                        nd::platform::InstanceScope::machine);
+                appeared = !probe.acquired();
             } catch (...) {
-                break;
+                return false;
             }
+            if (appeared)
+                break;
             QThread::msleep(50);
         }
+        if (!appeared)
+            return false;
+        coreLaunchState_->issued = false;
     }
     coreLaunchPending_ = false;
-
-    try {
-        const auto response =
-            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::shutdown, {}, 500);
-        if (!response.status)
-            (void)waitForCoreShutdown(4000);
-    } catch (...) {
-        // No CoreHost is a valid shutdown state. Actual process singleton
-        // enforcement prevents a failed IPC probe from spawning duplicates.
+    QElapsedTimer shutdownWait;
+    shutdownWait.start();
+    while (shutdownWait.elapsed() < 12000) {
+        if (waitForCoreShutdown(100)) {
+            coreShutdownAttempted_ = true;
+            return true;
+        }
+        // The shutdown endpoint stays responsive independently of commands/logs.
+        // The command fallback supports older CoreHost versions.
+        for (const auto* endpoint : {nd::core_shutdown_pipe_name, nd::core_pipe_name}) {
+            try {
+                if (!nd::pipe_request(endpoint, nd::IpcOperation::shutdown, {}, 300).status) {
+                    if (waitForCoreShutdown(11000)) {
+                        coreShutdownAttempted_ = true;
+                        return true;
+                    }
+                    return false;
+                }
+            } catch (...) {
+                // A listener can be starting/recovering; keep probing the process.
+            }
+        }
     }
+    return false;
 }
 
 void NativeDnsWindow::exitApplication() {
     if (exiting_)
         return;
     exiting_ = true;
+    if (!shutdownCoreForExit()) {
+        exiting_ = false;
+        statusTimer_.start();
+        logTimer_.start();
+        showAndActivate();
+        QMessageBox::critical(
+            this,
+            "NativeDNS",
+            uiText("CoreHost did not exit. NativeDNS remains open so shutdown can be retried."));
+        return;
+    }
     hide();
     if (tray_)
         tray_->hide();
-    shutdownCoreForExit();
     QCoreApplication::quit();
 }
 
@@ -2023,7 +2069,7 @@ void NativeDnsWindow::refreshStatus() {
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start([self] {
         QString status;
-        bool failed = false;
+        bool failed = false, processAlive = false;
         try {
             const auto response =
                 nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::status, {}, 100);
@@ -2032,13 +2078,24 @@ void NativeDnsWindow::refreshStatus() {
             status = q(response.payload);
         } catch (...) {
             failed = true;
+            try {
+                nd::platform::ProcessInstanceLock probe(nd::core_instance_name,
+                                                        nd::platform::InstanceScope::machine);
+                processAlive = !probe.acquired();
+            } catch (...) {
+                processAlive = true; // Do not launch if process absence cannot be established.
+            }
         }
         QMetaObject::invokeMethod(
             qApp,
-            [self, status = std::move(status), failed] {
+            [self, status = std::move(status), failed, processAlive] {
                 if (!self)
                     return;
                 self->statusRefreshPending_ = false;
+                if (self->exiting_)
+                    return;
+                if (failed)
+                    self->coreHealthyTimer_.invalidate();
                 const bool available = networkAvailable();
                 const bool networkReturned = available && !self->networkAvailable_;
                 const auto signature = networkSignature();
@@ -2056,14 +2113,31 @@ void NativeDnsWindow::refreshStatus() {
                     self->appendLocalLog(uiText("Internet connection restored."));
                 }
                 if (!failed) {
+                    self->coreLaunchState_->issued = false;
                     self->failedCorePolls_ = 0;
-                    if (status.startsWith("RUNNING"))
-                        self->automaticRestarts_ = 0;
+                    self->coreControlErrorLogged_ = false;
+                    if (status.startsWith("RUNNING")) {
+                        if (!self->coreHealthyTimer_.isValid())
+                            self->coreHealthyTimer_.start();
+                        if (self->coreHealthyTimer_.elapsed() >= 30000)
+                            self->automaticRestarts_ = 0;
+                    } else {
+                        self->coreHealthyTimer_.invalidate();
+                    }
                     self->coreLaunchPending_ = false;
                     self->restartWhenNetworkReturns_ = false;
                     self->setStatusText(friendlyCoreStatus(status) +
                                             (available ? QString{} : " | " + uiText("Offline")),
                                         status.startsWith("ERROR") || !available);
+                } else if (processAlive && !self->coreLaunchPending_) {
+                    self->coreHealthyTimer_.invalidate();
+                    self->setStatusText(uiText("Core: control unavailable"), true);
+                    if (++self->failedCorePolls_ >= 3 && !self->coreControlErrorLogged_) {
+                        self->coreControlErrorLogged_ = true;
+                        self->appendLocalLog(
+                            uiText("CoreHost is running but its control channel is unavailable."),
+                            true);
+                    }
                 } else if (self->coreStartOperationPending_) {
                     if (!self->restartWhenNetworkReturns_)
                         self->setStatusText(uiText("Core: checking network..."));
@@ -2071,6 +2145,9 @@ void NativeDnsWindow::refreshStatus() {
                            self->coreLaunchTimer_.elapsed() < 15000) {
                     self->setStatusText(uiText("Core: starting..."));
                 } else {
+                    self->coreHealthyTimer_.invalidate();
+                    if (!processAlive)
+                        self->coreLaunchState_->issued = false;
                     if (self->coreLaunchPending_)
                         self->appendLocalLog(
                             uiText("Core startup timed out. Check network and DNS configuration."),
@@ -2157,6 +2234,7 @@ void NativeDnsWindow::closeEvent(QCloseEvent* event) {
         return;
     }
 
-    event->accept();
+    // Keep the window alive when CoreHost shutdown cannot be confirmed.
+    event->ignore();
     exitApplication();
 }

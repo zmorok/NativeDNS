@@ -3,7 +3,7 @@
 #include <string_view>
 
 namespace nd::detail {
-void set_fault_stage_for_testing(std::string stage);
+void set_fault_stage_for_testing(std::string stage, bool once = false);
 void clear_fault_stage_for_testing();
 void fault_point(std::string_view stage);
 } // namespace nd::detail

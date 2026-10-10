@@ -1,4 +1,5 @@
 #include <nativedns/ipc.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/detail/ipc_wire.hpp>
 
@@ -185,6 +186,11 @@ PipeServer::PipeServer(std::string name, Handler handler)
     }
 }
 
+std::string PipeServer::failure() const {
+    std::lock_guard lock(error_mutex_);
+    return startup_error_;
+}
+
 PipeServer::~PipeServer() {
     stop();
 }
@@ -232,6 +238,11 @@ void PipeServer::stop() {
 }
 
 void PipeServer::run() {
+    struct Worker {
+        std::jthread thread;
+        std::shared_ptr<std::atomic_bool> done;
+    };
+    std::vector<Worker> workers;
     try {
         std::error_code error;
         std::filesystem::remove(name_, error);
@@ -275,16 +286,12 @@ void PipeServer::run() {
         }
         startup_cv_.notify_all();
 
-        struct Worker {
-            std::jthread thread;
-            std::shared_ptr<std::atomic_bool> done;
-        };
-        std::vector<Worker> workers;
         const auto reap_workers = [&](bool all = false) {
             std::erase_if(workers,
                           [&](const Worker& worker) { return all || worker.done->load(); });
         };
         while (running_) {
+            detail::fault_point("ipc.accept." + name_);
             pollfd item{listener.get(), POLLIN, 0};
             const int poll_result = poll(&item, 1, 100);
             if (poll_result < 0) {
@@ -364,7 +371,7 @@ void PipeServer::run() {
         running_ = false;
         startup_cv_.notify_all();
     }
-
+    workers.clear();
     std::error_code error;
     std::filesystem::remove(name_, error);
 }

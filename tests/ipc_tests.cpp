@@ -136,6 +136,71 @@ int main() {
         check(nd::pipe_request(name, nd::IpcOperation::ping).status == 0, "restart");
         server.stop();
         server.stop();
+#ifdef _WIN32
+        // A client disappearing between CreateFile and ConnectNamedPipe is a
+        // per-connection error, including under repeated GUI poll timeouts.
+        {
+            const auto churn_name = name + ".Churn";
+            nd::PipeServer churn(churn_name, [](nd::IpcOperation, const std::string&) {
+                return nd::IpcResponse{0, "alive"};
+            });
+            churn.start();
+            const auto native_name = nd::widen(churn_name);
+            for (unsigned i = 0; i < 1000; ++i) {
+                HANDLE client = INVALID_HANDLE_VALUE;
+                const auto connect_deadline = GetTickCount64() + 1000;
+                do {
+                    client = CreateFileW(native_name.c_str(),
+                                         GENERIC_READ | GENERIC_WRITE,
+                                         0,
+                                         nullptr,
+                                         OPEN_EXISTING,
+                                         0,
+                                         nullptr);
+                    if (client != INVALID_HANDLE_VALUE)
+                        break;
+                    Sleep(1);
+                } while (GetTickCount64() < connect_deadline);
+                check(client != INVALID_HANDLE_VALUE,
+                      "IPC listener survives abandoned connections");
+                CloseHandle(client);
+            }
+            check(nd::pipe_request(churn_name, nd::IpcOperation::ping, {}, 2000).payload == "alive",
+                  "IPC listener responds after connection churn");
+            churn.stop();
+        }
+        // Filling the worker limit must not destroy the listening endpoint.
+        // Keep all handlers busy until the accept loop has opened its next pipe.
+        {
+            std::atomic_uint entered = 0;
+            std::promise<void> release;
+            const auto released = release.get_future().share();
+            nd::PipeServer saturated(name + ".Saturated",
+                                     [&](nd::IpcOperation, const std::string&) {
+                                         ++entered;
+                                         released.wait_for(std::chrono::seconds(5));
+                                         return nd::IpcResponse{0, "ok"};
+                                     });
+            saturated.start();
+            std::vector<std::future<nd::IpcResponse>> saturated_clients;
+            for (unsigned i = 0; i < 16; ++i)
+                saturated_clients.push_back(std::async(std::launch::async, [&] {
+                    return nd::pipe_request(name + ".Saturated", nd::IpcOperation::ping, {}, 7000);
+                }));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (entered < 16 && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            release.set_value();
+            for (auto& client : saturated_clients)
+                check(client.get().payload == "ok", "saturated IPC handler completes");
+            check(entered == 16, "all IPC worker slots were occupied");
+            check(nd::pipe_request(name + ".Saturated", nd::IpcOperation::ping, {}, 1000).payload ==
+                      "ok",
+                  "IPC listener survives full worker capacity");
+            saturated.stop();
+        }
+#endif
         failed = false;
         try {
             (void)nd::pipe_request(name, nd::IpcOperation::ping, {}, 50);
@@ -150,7 +215,7 @@ int main() {
         rollback_original.name = "unused";
         rollback_original.ip = "127.0.0.1";
         rollback_original.port = 1;
-        for (const auto* stage : {"core.command_ipc", "core.log_ipc"}) {
+        for (const auto* stage : {"core.command_ipc", "core.log_ipc", "core.shutdown_ipc"}) {
             const auto retry_name = name + "." + stage;
             nd::CoreHost retrying(rollback_config, rollback_original, 0, retry_name);
             nd::detail::set_fault_stage_for_testing(stage);
@@ -372,7 +437,37 @@ int main() {
               "remote stop");
         check(nd::pipe_request(host_name, nd::IpcOperation::start).payload.starts_with("RUNNING"),
               "remote start");
+        local.port = host.status().port;
         auto waiter = std::async(std::launch::async, [&] { host.wait_for_shutdown(); });
+        struct ShutdownOnFailure {
+            nd::CoreHost& host;
+            ~ShutdownOnFailure() {
+                host.request_shutdown();
+            }
+        } shutdown_on_failure{host};
+        nd::detail::set_fault_stage_for_testing("ipc.accept." + host_name, true);
+        try {
+            (void)nd::pipe_request(host_name, nd::IpcOperation::ping, {}, 500);
+        } catch (const nd::Error&) {
+            // The injected accept failure may cancel this individual request.
+        }
+        const auto recovery_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        bool recovered = false;
+        while (!recovered && std::chrono::steady_clock::now() < recovery_deadline) {
+            const auto events = host.logger().snapshot(nd::Level::debug);
+            recovered = std::any_of(events.begin(), events.end(), [](const nd::LogEvent& event) {
+                return event.code == "IPC_ENDPOINT_RECOVERED";
+            });
+            if (!recovered)
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        nd::detail::clear_fault_stage_for_testing();
+        check(recovered, "CoreHost restores a failed IPC accept loop");
+        check(nd::pipe_request(host_name, nd::IpcOperation::status).payload.starts_with("RUNNING"),
+              "IPC recovery keeps the interception backend running");
+        check(host.status().port == local.port, "IPC recovery retains the DNS listener port");
+        check(nd::test_server(local, "example.com").success,
+              "DNS still resolves after IPC recovery");
         check(nd::pipe_request(host_name, nd::IpcOperation::restart).payload == "RESTARTING",
               "remote restart signal");
         check(waiter.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
@@ -380,15 +475,44 @@ int main() {
         waiter.get();
         host.stop();
         check(host.restart_requested(), "restart intent survives host stop");
+        host.start();
+        check(nd::pipe_request(host_name + ".shutdown", nd::IpcOperation::ping).status == 0,
+              "independent shutdown endpoint responds");
+        check(nd::pipe_request(host_name + ".shutdown", nd::IpcOperation::start).status != 0,
+              "shutdown endpoint rejects ordinary lifecycle commands");
+        check(nd::pipe_request(host_name, nd::IpcOperation::clear_display).status == 0,
+              "clear logs before filling command workers");
+        std::vector<std::future<void>> busy_commands;
+        for (unsigned i = 0; i < 16; ++i)
+            busy_commands.push_back(std::async(std::launch::async, [&] {
+                try {
+                    (void)nd::pipe_request(host_name, nd::IpcOperation::logs, "0\t1000\t0", 2000);
+                } catch (const nd::Error&) {
+                    // Shutdown may cancel these outstanding connections.
+                }
+            }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const auto independent_shutdown_start = std::chrono::steady_clock::now();
+        check(nd::pipe_request(host_name + ".shutdown", nd::IpcOperation::shutdown).payload ==
+                  "SHUTTING_DOWN",
+              "independent shutdown endpoint accepts exit");
+        check(std::chrono::steady_clock::now() - independent_shutdown_start <
+                  std::chrono::milliseconds(500),
+              "independent shutdown remains responsive with busy command workers");
+        check(host.shutdown_requested(), "shutdown signal is observable without a backend lock");
+        host.stop();
+        for (auto& command : busy_commands)
+            command.get();
         host.stop();
         if (diagnostic_log) {
             host.logger().flush_file();
             std::ifstream stream(*diagnostic_log, std::ios::binary);
             const std::string contents((std::istreambuf_iterator<char>(stream)), {});
             const auto first = contents.find("CORE_STOPPED");
-            check(first != std::string::npos &&
-                      contents.find("CORE_STOPPED", first + 1) == std::string::npos,
-                  "host stop is logged once");
+            const auto second = contents.find("CORE_STOPPED", first + 1);
+            check(first != std::string::npos && second != std::string::npos &&
+                      contents.find("CORE_STOPPED", second + 1) == std::string::npos,
+                  "host stop is logged once per start");
         }
         host.logger().configure_file(false, nd::Level::normal, {});
         if (diagnostic_log)

@@ -17,8 +17,18 @@ public:
     void start();
     void stop();
     void wait_for_shutdown();
+    void request_shutdown() {
+        *shutdown_requested_ = true;
+        shutdown_cv_.notify_all();
+    }
     bool restart_requested() const {
         return restart_requested_;
+    }
+    bool shutdown_requested() const {
+        return shutdown_requested_->load();
+    }
+    std::shared_ptr<const std::atomic_bool> shutdown_signal() const {
+        return shutdown_requested_;
     }
     InterceptionStatus status() const;
     Logger& logger() {
@@ -29,8 +39,10 @@ private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     mutable std::mutex mutex_;
     std::mutex reload_mutex_;
+    std::mutex ipc_lifecycle_mutex_;
     std::condition_variable shutdown_cv_;
-    bool shutdown_requested_ = false;
+    std::shared_ptr<std::atomic_bool> shutdown_requested_ =
+        std::make_shared<std::atomic_bool>(false);
     std::atomic_bool stopped_ = true;
     Config config_;
     Server original_;
@@ -46,6 +58,7 @@ private:
     std::unique_ptr<IInterceptionProvider> interception_;
     std::unique_ptr<PipeServer> ipc_;
     std::unique_ptr<PipeServer> log_ipc_;
+    std::unique_ptr<PipeServer> shutdown_ipc_;
     std::atomic_bool restart_requested_ = false;
 };
 } // namespace nd
