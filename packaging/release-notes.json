@@ -139,6 +139,16 @@
     "en": "Added Check update on start, enabled by default and remembered between launches. Background checks show a window only when a newer release is available.",
     "ru": "Добавлена опция Check update on start, включённая по умолчанию и сохраняемая между запусками. Фоновая проверка открывает окно только при наличии новой версии."
   },
+  "ddda7b06f179927bc7726b72bfa3eb0c85cd77e5": {
+    "category": "interception_corehost",
+    "en": "Fixed IPC listener failures under connection churn and load. CoreHost restores failed control channels without stopping DNS interception, uses an independent shutdown endpoint, and avoids repeated launches while an existing CoreHost remains alive.",
+    "ru": "Исправлены отказы IPC при частых подключениях и под нагрузкой. CoreHost восстанавливает каналы управления без остановки DNS-перехвата, использует отдельный канал завершения и предотвращает повторные запуски, пока существующий процесс остаётся активным."
+  },
+  "bd3071fee9020e1fdcf5f3ae1db72c3855a507d0": {
+    "category": "interception_corehost",
+    "en": "Added a control-loss error window with system diagnostics and Terminate application / Close actions. Windows Exit falls back to verified OS process termination when IPC shutdown fails, with independent CoreHost and GUI shutdown deadlines.",
+    "ru": "Добавлено окно потери управления ядром с системной диагностикой и кнопками «Завершить работу» / «Закрыть». В Windows при отказе штатного завершения через IPC Exit использует принудительную остановку проверенного процесса средствами ОС; для CoreHost и клиента действуют независимые сроки завершения."
+  },
   "39cdbad275a30052c5f203aefd28858173ff2e0d": {
     "category": "other",
     "en": "Added Enter to expand or collapse a log record, keeping only one record expanded. Enter inside details collapses them and returns selection to the record line.",

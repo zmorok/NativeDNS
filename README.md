@@ -13,10 +13,10 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 ## Download
 
-The Windows release packages for [v0.4.4](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.4):
+The Windows release packages for [v0.4.5](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.5):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.4/NativeDNS-0.4.4-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.4/NativeDNS-0.4.4-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.5/NativeDNS-0.4.5-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.5/NativeDNS-0.4.5-windows-x64-portable.zip)
 
 Linux packages are not part of this release. Linux interception still needs validation on a real privileged host.
 
