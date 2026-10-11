@@ -1123,6 +1123,76 @@ private slots:
         QTest::keyClick(tree, Qt::Key_Return);
         QVERIFY(tree->topLevelItem(0)->isExpanded());
     }
+    void logDetailsRevealBottom_data() {
+        QTest::addColumn<int>("key");
+        QTest::addColumn<int>("row");
+        QTest::addColumn<bool>("oversized");
+        for (const auto key : {0, int(Qt::Key_Right), int(Qt::Key_Return), int(Qt::Key_Enter)}) {
+            const auto prefix = QByteArray::number(key);
+            QTest::newRow((prefix + "-already visible").constData()) << key << 0 << false;
+            QTest::newRow((prefix + "-middle").constData()) << key << 50 << false;
+            QTest::newRow((prefix + "-last").constData()) << key << 99 << false;
+            QTest::newRow((prefix + "-oversized").constData()) << key << 50 << true;
+        }
+    }
+    void logDetailsRevealBottom() {
+        QFETCH(int, key);
+        QFETCH(int, row);
+        QFETCH(bool, oversized);
+        LogDisplay display;
+        display.setView(LogView::details);
+        display.resize(700, 300);
+        for (int i = 0; i < 100; ++i) {
+            auto value = record(QString("row %1").arg(i));
+            if (i == row && oversized)
+                value.message = "server=Test, rule=Default, time=1 ms, " +
+                                QString("Additional detail\n").repeated(40);
+            display.appendRecord(value);
+        }
+        display.show();
+        QCoreApplication::processEvents();
+        auto* tree = display.findChild<QTreeWidget*>("logDetailsTree");
+        auto* item = tree->topLevelItem(row);
+        auto* scroll = tree->verticalScrollBar();
+        tree->setFocus();
+        tree->setCurrentItem(item);
+        tree->scrollToItem(item, row == 0 ? QAbstractItemView::PositionAtTop
+                                         : QAbstractItemView::PositionAtBottom);
+        tree->doItemsLayout();
+        const int previousPosition = scroll->value();
+        if (key) {
+            QTest::keyClick(tree, Qt::Key(key));
+        } else {
+            const auto rect = tree->visualItemRect(item);
+            QTest::mouseClick(tree->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              QPoint(rect.left() - tree->indentation() / 2, rect.center().y()));
+        }
+        QVERIFY(item->isExpanded());
+        auto verifyBottom = [&] {
+            const auto rect = tree->visualItemRect(item->child(0));
+            QVERIFY(rect.bottom() <= tree->viewport()->rect().bottom());
+            QVERIFY(rect.bottom() >= 0);
+            if (oversized)
+                QVERIFY(rect.height() > tree->viewport()->height());
+            if (row == 0) {
+                QCOMPARE(scroll->value(), previousPosition);
+                QVERIFY(rect.top() >= 0);
+            } else {
+                QVERIFY(scroll->value() > previousPosition);
+                if (row < 99)
+                    QVERIFY(scroll->value() < scroll->maximum());
+            }
+        };
+        verifyBottom();
+        QCoreApplication::processEvents();
+        verifyBottom();
+        // Collapsing oversized details must still return to the selected record line.
+        QTest::keyClick(tree, Qt::Key_Return);
+        QVERIFY(!item->isExpanded());
+        const auto collapsed = tree->visualItemRect(item);
+        QVERIFY(collapsed.top() >= 0);
+        QVERIFY(collapsed.bottom() <= tree->viewport()->rect().bottom());
+    }
     void immediateAutoScroll_data() {
         logViews_data();
     }

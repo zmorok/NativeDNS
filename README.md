@@ -57,6 +57,7 @@ The live log supports compound display filters and saved filter management with 
 `Log > View` selects a persistent log view: short line, a line with expandable details, or table.
 In the line with details view, Enter toggles the selected record; opening another record collapses
 the previous one. Enter on its details collapses them and returns selection to the record line.
+Opening a record scrolls down when necessary to reveal the bottom of its details.
 All views retain the same filters and access to the original
 record. `Log > Details` controls verbosity independently.
 `Log > Show only action...` filters Process, Block and Bypass independently; multiple actions can

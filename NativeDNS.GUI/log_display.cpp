@@ -151,6 +151,7 @@ LogDisplay::LogDisplay(QWidget* parent)
     tree_->setHeaderHidden(true);
     tree_->setColumnCount(1);
     tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    tree_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(true);
     tree_->header()->setSectionResizeMode(QHeaderView::Stretch);
@@ -164,6 +165,14 @@ LogDisplay::LogDisplay(QWidget* parent)
         }
         tree_->doItemsLayout();
         tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+        if (item->childCount() > 0) {
+            const auto details = tree_->visualItemRect(item->child(item->childCount() - 1));
+            const int overflow = details.bottom() - tree_->viewport()->rect().bottom();
+            if (overflow > 0) {
+                auto* scroll = tree_->verticalScrollBar();
+                scroll->setValue(scroll->value() + overflow);
+            }
+        }
     });
     connect(tree_, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* item) {
         if (auto* current = tree_->currentItem(); current && current->parent() == item) {
@@ -234,8 +243,10 @@ bool LogDisplay::eventFilter(QObject* watched, QEvent* event) {
                         item = item->parent();
                     tree_->setCurrentItem(item);
                     item->setExpanded(!item->isExpanded());
-                    tree_->doItemsLayout();
-                    tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+                    if (!item->isExpanded()) {
+                        tree_->doItemsLayout();
+                        tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
+                    }
                 }
             }
             key->accept();
