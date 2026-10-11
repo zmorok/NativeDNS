@@ -358,6 +358,10 @@ LogPanel::LogPanel(QWidget* parent, QSettings* settings)
     commandsView_ = commands == "only"   ? LogCommandsView::only
                     : commands == "none" ? LogCommandsView::without_commands
                                          : LogCommandsView::with_records;
+    const auto errors = settings_->value("ui/logErrors", "with").toString();
+    errorsView_ = errors == "only"   ? LogErrorsView::only
+                  : errors == "none" ? LogErrorsView::without_errors
+                                     : LogErrorsView::with_records;
     auto* bar = new QHBoxLayout;
     bar->setSpacing(3);
     bar->addWidget(bookmark_);
@@ -457,6 +461,9 @@ void LogPanel::renderRecord(const LogRecord& record) {
 }
 bool LogPanel::matches(const LogRecord& record) const {
     if (filtersShown_ && !filter_.matches(record))
+        return false;
+    if ((errorsView_ == LogErrorsView::only && !record.error) ||
+        (errorsView_ == LogErrorsView::without_errors && record.error))
         return false;
     if (isTechnicalLogRecord(record))
         return commandsView_ != LogCommandsView::without_commands;
@@ -627,6 +634,46 @@ void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu)
                                               : LogCommandsView::without_commands);
                 refresh();
             });
+}
+void addLogErrorFilterActions(QMenu* menu, LogPanel& panel) {
+    auto* group = new QActionGroup(menu);
+    group->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    for (const auto* key : {"Only", "With"}) {
+        auto* action = menu->addAction(uiText(key));
+        action->setProperty("uiTextKey", QString::fromUtf8(key));
+        action->setData(QString::fromUtf8(key) == "Only"
+                            ? static_cast<int>(LogErrorsView::only)
+                            : static_cast<int>(LogErrorsView::with_records));
+        action->setCheckable(true);
+        group->addAction(action);
+    }
+    const auto refresh = [group, &panel] {
+        for (auto* action : group->actions())
+            action->setChecked(action->data().toInt() == static_cast<int>(panel.errorsView()));
+    };
+    refresh();
+    QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
+    for (auto* action : group->actions())
+        QObject::connect(
+            action, &QAction::triggered, &panel, [&panel, action, refresh](bool checked) {
+                panel.setErrorsView(checked ? static_cast<LogErrorsView>(action->data().toInt())
+                                            : LogErrorsView::without_errors);
+                refresh();
+            });
+}
+bool LogPanel::setErrorsView(LogErrorsView view) {
+    settings_->setValue("ui/logErrors",
+                        view == LogErrorsView::only             ? "only"
+                        : view == LogErrorsView::without_errors ? "none"
+                                                                : "with");
+    settings_->sync();
+    if (settings_->status() != QSettings::NoError) {
+        QMessageBox::warning(this, "NativeDNS", uiText("Cannot save log errors view."));
+        return false;
+    }
+    errorsView_ = view;
+    rebuild();
+    return true;
 }
 bool LogPanel::setCommandsView(LogCommandsView view) {
     settings_->setValue("ui/logCommands",

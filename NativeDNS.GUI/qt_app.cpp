@@ -1424,6 +1424,9 @@ void NativeDnsWindow::buildUi() {
     auto* commands = addSubMenu(logMenu, "Show only commands...");
     commands->setObjectName("logCommandsFilterMenu");
     addLogCommandFilterActions(commands, *log_, actions);
+    auto* errors = addSubMenu(logMenu, "Show only errors...");
+    errors->setObjectName("logErrorsFilterMenu");
+    addLogErrorFilterActions(errors, *log_);
     logMenu->addSeparator();
     auto* fileEnabled = addAction(logMenu, "Write diagnostic file");
     fileEnabled->setCheckable(true);

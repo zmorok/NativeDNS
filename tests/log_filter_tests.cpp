@@ -744,6 +744,108 @@ private slots:
         with->trigger();
         QCOMPARE(display->recordCount(), 2000);
     }
+    void errorSelection_data() {
+        logViews_data();
+    }
+    void errorSelection() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("settings.ini"), QSettings::IniFormat);
+        LogPanel panel(nullptr, &settings);
+        QVERIFY(panel.setLogView(static_cast<LogView>(mode)));
+        QMenu actionsMenu, commandsMenu, errorsMenu;
+        addLogActionFilterActions(&actionsMenu, panel);
+        addLogCommandFilterActions(&commandsMenu, panel, &actionsMenu);
+        addLogErrorFilterActions(&errorsMenu, panel);
+        QCOMPARE(errorsMenu.actions().size(), 2);
+        auto* only = errorsMenu.actions()[0];
+        auto* with = errorsMenu.actions()[1];
+        QCOMPARE(only->text(), uiText("Only"));
+        QCOMPARE(with->text(), uiText("With"));
+        QVERIFY(with->isChecked() && !only->isChecked());
+        auto blocked = record("blocked");
+        blocked.action = "block";
+        auto blockError = record("block failed", true);
+        blockError.action = "block";
+        LogRecord technical;
+        technical.code = "CORE_STARTED";
+        technical.message = "Core started";
+        auto coreError = technical;
+        coreError.code = "CORE_START_FAILED";
+        coreError.message = "Core failed";
+        coreError.error = true;
+        panel.appendRecords({record("processed"), record("query failed", true), blocked,
+                             blockError, technical, coreError});
+        auto* display = panel.findChild<LogDisplay*>();
+        QCOMPARE(display->recordCount(), 6);
+        only->trigger();
+        QVERIFY(only->isChecked() && !with->isChecked());
+        QCOMPARE(display->recordCount(), 3);
+        QCOMPARE(settings.value("ui/logErrors").toString(), "only");
+        LogPanel onlyReopened(nullptr, &settings);
+        QCOMPARE(onlyReopened.errorsView(), LogErrorsView::only);
+        only->trigger(); // Reclicking Only hides errors.
+        QVERIFY(!only->isChecked() && !with->isChecked());
+        QCOMPARE(panel.errorsView(), LogErrorsView::without_errors);
+        QCOMPARE(display->recordCount(), 3);
+        QCOMPARE(settings.value("ui/logErrors").toString(), "none");
+        LogPanel hiddenReopened(nullptr, &settings);
+        QCOMPARE(hiddenReopened.errorsView(), LogErrorsView::without_errors);
+        QMenu restoredErrors;
+        addLogErrorFilterActions(&restoredErrors, hiddenReopened);
+        QVERIFY(!restoredErrors.actions()[0]->isChecked());
+        QVERIFY(!restoredErrors.actions()[1]->isChecked());
+        with->trigger();
+        QVERIFY(with->isChecked() && !only->isChecked());
+        QCOMPARE(display->recordCount(), 6);
+        LogPanel withReopened(nullptr, &settings);
+        QCOMPARE(withReopened.errorsView(), LogErrorsView::with_records);
+        with->trigger(); // Reclicking With also hides errors.
+        QCOMPARE(display->recordCount(), 3);
+        with->trigger();
+        actionsMenu.actions()[2]->trigger(); // Process + technical events.
+        QCOMPARE(display->recordCount(), 4); // With must not add the excluded Block error.
+        only->trigger();
+        QCOMPARE(display->recordCount(), 2);
+        commandsMenu.actions()[1]->trigger(); // Hide technical events.
+        QCOMPARE(display->recordCount(), 1);
+        with->trigger();
+        QCOMPARE(display->recordCount(), 2); // Still excludes both Block and CoreHost errors.
+        commandsMenu.actions()[0]->trigger(); // Technical events only.
+        QCOMPARE(display->recordCount(), 2);
+        only->trigger();
+        QCOMPARE(display->recordCount(), 1);
+        commandsMenu.actions()[1]->trigger(); // Restore technical events alongside Process.
+        with->trigger();
+        QCOMPARE(display->recordCount(), 4);
+        auto* input = panel.findChild<QLineEdit*>("logFilterInput");
+        input->setText("err=\"DNS_TIMEOUT\"");
+        QVERIFY(panel.applyFilter());
+        QCOMPARE(display->recordCount(), 1);
+        only->trigger();
+        QCOMPARE(display->recordCount(), 1);
+        only->trigger();
+        QCOMPARE(display->recordCount(), 0);
+        input->clear();
+        QVERIFY(panel.applyFilter());
+        only->trigger();
+        panel.appendRecords({record("new success"), record("new failure", true), blockError,
+                             coreError});
+        QCOMPARE(display->recordCount(), 4); // Only matching new errors are appended.
+        panel.clear();
+        QVERIFY(panel.setShownActions({}));
+        QList<LogRecord> events;
+        for (int i = 0; i < 2002; ++i)
+            events << record("query", i % 2 != 0);
+        panel.appendRecords(events);
+        QCOMPARE(display->recordCount(), 1000);
+        panel.appendRecords({record("success"), record("success")});
+        QCOMPARE(display->recordCount(), 999);
+        with->trigger();
+        QCOMPARE(display->recordCount(), 2000);
+        with->trigger();
+        QCOMPARE(display->recordCount(), 1001);
+    }
     void filterVisibility_data() {
         logViews_data();
     }

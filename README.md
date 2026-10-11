@@ -49,7 +49,7 @@ The GUI provides persistent light/dark themes and English/Russian interface lang
 located between `File` and `Configuration`. `View > Show...` toggles Filters and Selected record;
 both are shown by default and their visibility is remembered. Hiding Filters temporarily disables
 the text filter, and showing it restores the entered expression and applies it again.
-The action and command filters in `Log` remain independent. Hiding Selected record clears its
+The action, command and error filters in `Log` remain independent. Hiding Selected record clears its
 details and selection; log records can still be selected and copied. Showing it starts collapsed
 with empty details until a new record is selected.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
@@ -70,6 +70,10 @@ Only and With are mutually exclusive. Clicking the active item clears its check 
 technical events while keeping DNS records subject to the action filter.
 The mode is remembered, including the state with neither item selected. The text filter and
 verbosity level continue to apply in every mode.
+`Log > Show only errors...` selects Only (errors only) or With (errors alongside other records,
+the default). Clicking the active item clears its check mark and hides errors. The two items
+are mutually exclusive, and all three states are remembered. Errors remain subject to the
+action, command and text filters in every mode; With does not add errors excluded by those filters.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
 Release notes support categories, including packet interception and CoreHost changes separately
 from other changes; descriptions and category headings follow the selected interface language.

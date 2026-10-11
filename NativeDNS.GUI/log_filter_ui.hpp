@@ -31,6 +31,7 @@ private:
 };
 
 enum class LogCommandsView { with_records, only, without_commands };
+enum class LogErrorsView { with_records, only, without_errors };
 
 class LogPanel final : public QWidget {
 public:
@@ -62,6 +63,10 @@ public:
         return commandsView_;
     }
     bool setCommandsView(LogCommandsView view);
+    LogErrorsView errorsView() const {
+        return errorsView_;
+    }
+    bool setErrorsView(LogErrorsView view);
     const QList<SavedLogFilter>& savedFilters() const {
         return saved_;
     }
@@ -96,6 +101,7 @@ private:
     LogFilter filter_;
     QSet<QString> shownActions_;
     LogCommandsView commandsView_ = LogCommandsView::with_records;
+    LogErrorsView errorsView_ = LogErrorsView::with_records;
     std::deque<LogRecord> records_;
     int visible_ = 0;
     bool filtersShown_ = true;
@@ -105,4 +111,5 @@ void showLogFilterHelp(QWidget* parent);
 void addLogViewActions(QMenu* menu, LogPanel& panel);
 void addLogActionFilterActions(QMenu* menu, LogPanel& panel);
 void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu = nullptr);
+void addLogErrorFilterActions(QMenu* menu, LogPanel& panel);
 void addLogVisibilityActions(QMenu* menu, LogPanel& panel);
