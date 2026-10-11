@@ -80,8 +80,10 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(3300));
         char idle_byte = 0;
         DWORD idle_read = 0;
-        check(!ReadFile(idle, &idle_byte, 1, &idle_read, nullptr) &&
-                  GetLastError() == ERROR_BROKEN_PIPE,
+        const bool idle_failed = !ReadFile(idle, &idle_byte, 1, &idle_read, nullptr);
+        const auto idle_error = GetLastError();
+        check(idle_failed && (idle_error == ERROR_BROKEN_PIPE ||
+                              idle_error == ERROR_PIPE_NOT_CONNECTED),
               "abandoned IPC client expires without occupying worker forever");
         CloseHandle(idle);
 #endif
@@ -137,6 +139,77 @@ int main() {
         server.stop();
         server.stop();
 #ifdef _WIN32
+        // A complete response must survive the smaller kernel buffers.
+        {
+            const std::string large_payload(1024 * 1024, 'x');
+            nd::PipeServer large(name + ".Large", [&](nd::IpcOperation, const std::string&) {
+                return nd::IpcResponse{0, large_payload};
+            });
+            large.start();
+            check(nd::pipe_request(name + ".Large", nd::IpcOperation::logs, {}, 3000).payload ==
+                      large_payload,
+                  "full-size response is delivered before disconnect");
+            large.stop();
+        }
+        // Clients retaining their handles after a reply or not reading it must
+        // release their worker slots within a bounded time.
+        for (const bool read_response : {true, false}) {
+            const auto retained_name = name + (read_response ? ".Retained" : ".NotReading");
+            nd::PipeServer retained(retained_name, [=](nd::IpcOperation, const std::string&) {
+                return nd::IpcResponse{0, read_response ? "ok" : std::string(1024 * 1024, 'x')};
+            });
+            retained.start();
+            std::vector<HANDLE> held;
+            struct CloseClients {
+                std::vector<HANDLE>& handles;
+                ~CloseClients() {
+                    for (const auto handle : handles)
+                        CloseHandle(handle);
+                }
+            } close_clients{held};
+            const auto native_name = nd::widen(retained_name);
+            const uint8_t ping[]{'N', 'N', 'D', '1', 1, 0, 1, 0,
+                                  1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            for (unsigned i = 0; i < 16; ++i) {
+                HANDLE client = INVALID_HANDLE_VALUE;
+                const auto deadline = GetTickCount64() + 1000;
+                do {
+                    client = CreateFileW(native_name.c_str(), GENERIC_READ | GENERIC_WRITE, 0,
+                                         nullptr, OPEN_EXISTING, 0, nullptr);
+                    if (client == INVALID_HANDLE_VALUE)
+                        Sleep(1);
+                } while (client == INVALID_HANDLE_VALUE && GetTickCount64() < deadline);
+                check(client != INVALID_HANDLE_VALUE, "retained client connects");
+                held.push_back(client);
+                DWORD written = 0;
+                check(WriteFile(client, ping, sizeof(ping), &written, nullptr) &&
+                          written == sizeof(ping), "raw ping is written");
+                if (read_response) {
+                    uint8_t reply[26]{};
+                    DWORD total = 0;
+                    while (total < sizeof(reply)) {
+                        DWORD amount = 0;
+                        check(ReadFile(client, reply + total,
+                                       static_cast<DWORD>(sizeof(reply)) - total, &amount, nullptr) &&
+                                  amount != 0, "retained client reads response");
+                        total += amount;
+                    }
+                    check(reply[24] == 'o' && reply[25] == 'k', "retained reply payload");
+                }
+            }
+            // Force another accept while the previous client handles stay open.
+            try {
+                (void)nd::pipe_request(retained_name, nd::IpcOperation::ping, {}, 100);
+            } catch (const nd::Error&) {
+                // Overload may reject the request; it must preserve the endpoint.
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            check(retained.running(), "retained client handles cannot kill IPC listener");
+            std::this_thread::sleep_for(std::chrono::milliseconds(3300));
+            check(nd::pipe_request(retained_name, nd::IpcOperation::ping, {}, 2000).status == 0,
+                  "expired clients release worker slots and pipe instances");
+            retained.stop();
+        }
         // A client disappearing between CreateFile and ConnectNamedPipe is a
         // per-connection error, including under repeated GUI poll timeouts.
         {

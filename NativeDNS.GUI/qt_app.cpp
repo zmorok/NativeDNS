@@ -76,6 +76,12 @@
 namespace {
 constexpr auto repositoryUrl = "https://github.com/zmorok/NativeDNS";
 constexpr int ruleIdRole = Qt::UserRole + 1;
+// Local IPC still needs scheduler time during adapter changes or system load.
+// Polls run off the UI thread and have at most one outstanding request each.
+constexpr uint32_t corePollTimeoutMs = 1500;
+nd::IpcResponse readCoreStatus(const std::string& endpoint = nd::core_pipe_name) {
+    return nd::pipe_request(endpoint, nd::IpcOperation::status, {}, corePollTimeoutMs);
+}
 
 QString coreHostExecutable() {
     return QCoreApplication::applicationDirPath() +
@@ -1911,8 +1917,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             bool success = false, running = false;
             QString failure;
             try {
-                const auto response =
-                    nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::status, {}, 150);
+                const auto response = readCoreStatus();
                 if (response.status)
                     throw std::runtime_error(response.payload);
                 if (response.payload.rfind("RUNNING", 0) == 0 ||
@@ -2214,8 +2219,7 @@ void NativeDnsWindow::refreshStatus() {
         QString status, diagnostics;
         bool failed = false, processAlive = false;
         try {
-            const auto response =
-                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::status, {}, 100);
+            const auto response = readCoreStatus();
             if (response.status)
                 throw std::runtime_error(response.payload);
             status = q(response.payload);
@@ -2236,7 +2240,7 @@ void NativeDnsWindow::refreshStatus() {
                            (processAlive ? uiText("Held") : uiText("Released"));
             try {
                 const auto response =
-                    nd::pipe_request(nd::core_shutdown_pipe_name, nd::IpcOperation::ping, {}, 150);
+                    nd::pipe_request(nd::core_shutdown_pipe_name, nd::IpcOperation::ping, {}, 1000);
                 diagnostics += "\n" + q(nd::core_shutdown_pipe_name) + ": " +
                                (response.status ? q(response.payload) : "OK");
             } catch (const std::exception& shutdownError) {
@@ -2265,8 +2269,11 @@ void NativeDnsWindow::refreshStatus() {
                 self->statusRefreshPending_ = false;
                 if (self->exiting_)
                     return;
-                if (failed)
+                if (failed) {
                     self->coreHealthyTimer_.invalidate();
+                    if (!self->coreFailureTimer_.isValid())
+                        self->coreFailureTimer_.start();
+                }
                 const bool available = networkAvailable();
                 const bool networkReturned = available && !self->networkAvailable_;
                 const auto signature = networkSignature();
@@ -2286,11 +2293,11 @@ void NativeDnsWindow::refreshStatus() {
                 if (!failed) {
                     self->coreLaunchState_->issued = false;
                     self->failedCorePolls_ = 0;
+                    self->coreFailureTimer_.invalidate();
                     self->lastCoreStatus_ = status;
                     self->lastCoreContact_ =
                         QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
                     if (!status.startsWith("ERROR")) {
-                        self->coreControlErrorLogged_ = false;
                         if (self->coreControlDialog_)
                             self->coreControlDialog_->close();
                     } else {
@@ -2299,8 +2306,10 @@ void NativeDnsWindow::refreshStatus() {
                     if (status.startsWith("RUNNING")) {
                         if (!self->coreHealthyTimer_.isValid())
                             self->coreHealthyTimer_.start();
-                        if (self->coreHealthyTimer_.elapsed() >= 30000)
+                        if (self->coreHealthyTimer_.elapsed() >= 30000) {
                             self->automaticRestarts_ = 0;
+                            self->coreControlErrorLogged_ = false;
+                        }
                     } else {
                         self->coreHealthyTimer_.invalidate();
                     }
@@ -2312,7 +2321,8 @@ void NativeDnsWindow::refreshStatus() {
                 } else if (processAlive && !self->coreLaunchPending_) {
                     self->coreHealthyTimer_.invalidate();
                     self->setStatusText(uiText("Core: control unavailable"), true);
-                    if (++self->failedCorePolls_ >= 3)
+                    if (++self->failedCorePolls_ >= 3 &&
+                        self->coreFailureTimer_.elapsed() >= 10000)
                         self->showCoreControlFailure(diagnostics);
                 } else if (self->coreStartOperationPending_) {
                     if (!self->restartWhenNetworkReturns_)
@@ -2360,10 +2370,12 @@ void NativeDnsWindow::refreshLogs() {
         QString payload;
         try {
             auto response = nd::pipe_request(
-                nd::core_log_pipe_name, nd::IpcOperation::logs, request + "\tstructured", 120);
+                nd::core_log_pipe_name, nd::IpcOperation::logs, request + "\tstructured",
+                corePollTimeoutMs);
             if (response.status)
                 response =
-                    nd::pipe_request(nd::core_log_pipe_name, nd::IpcOperation::logs, request, 120);
+                    nd::pipe_request(nd::core_log_pipe_name, nd::IpcOperation::logs, request,
+                                     corePollTimeoutMs);
             if (!response.status)
                 payload = q(response.payload);
         } catch (...) {

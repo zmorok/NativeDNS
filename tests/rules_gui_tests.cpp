@@ -76,6 +76,23 @@ private:
     }
 
 private slots:
+    void statusPollingToleratesSchedulerDelay() {
+#ifdef _WIN32
+        const auto endpoint = std::string(R"(\\.\pipe\NativeDNS.GuiPollTest.)") +
+                              std::to_string(nd::platform::process_id());
+#else
+        const auto endpoint = std::string("/tmp/nativedns-gui-poll-") +
+                              std::to_string(nd::platform::process_id()) + ".sock";
+#endif
+        nd::PipeServer delayed(endpoint, [](nd::IpcOperation, const std::string&) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            return nd::IpcResponse{0, "RUNNING"};
+        });
+        delayed.start();
+        QCOMPARE(readCoreStatus(endpoint).payload, std::string("RUNNING"));
+        delayed.stop();
+    }
+
     void coreControlErrorActions() {
         const QString diagnostics = "IPC_CONNECT: Win32=2\nPID=123; birth=456";
         QPointer<QMessageBox> dialog = coreControlFailureDialog(nullptr, diagnostics);

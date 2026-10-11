@@ -66,7 +66,7 @@ private:
     QPointer<QMessageBox> coreControlDialog_;
     QString lastCoreStatus_, lastCoreContact_;
     QTimer statusTimer_, logTimer_;
-    QElapsedTimer coreLaunchTimer_, networkProbeTimer_, coreHealthyTimer_;
+    QElapsedTimer coreLaunchTimer_, networkProbeTimer_, coreHealthyTimer_, coreFailureTimer_;
     QString networkSignature_;
     uint64_t logSequence_ = 0;
     bool exiting_ = false;

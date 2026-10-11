@@ -106,6 +106,14 @@ CoreHost owns the long-running Router/interception state.
 A process-instance lock prevents multiple CoreHost instances from opening competing interception/IPC resources.
 
 Windows IPC reserves a listening pipe in addition to its 16 worker connections.
+Workers reuse a fixed thread pool and each pipe uses 16 KiB kernel buffers while
+retaining the 1 MiB protocol payload limit. Request reads, response writes and
+waiting for the client to close after a response each have a three-second deadline.
+The server then disconnects the instance and releases its resources even if a
+client retains its handle. A client must read its response and close the connection;
+each connection carries one request. When all workers are busy,
+the listener waits for capacity without repeatedly accepting and dropping clients;
+this wait is interruptible during shutdown.
 Abandoned connections are isolated from the accept loop. CoreHost monitors its IPC
 listeners and restores failed endpoints without stopping interception, recording
 `IPC_ENDPOINT_FAILED` and `IPC_ENDPOINT_RECOVERED` diagnostics.
@@ -130,11 +138,19 @@ Shutdown runs on a dedicated GUI worker, independently of the shared DNS-test
 thread pool. Once CoreHost termination is confirmed, a separate Windows deadline
 also exits the GUI after 10 seconds if its event loop or Qt cleanup is stuck.
 
-Three consecutive failed status polls outside the startup grace period show an
-error window once per outage. It includes IPC errors, the independent shutdown
-channel probe, process identity, last successful status and OS information.
+GUI status and log polls allow 1.5 seconds per request; the independent diagnostic
+Ping allows one second. Each poll type has at most one outstanding request.
+For a running process, at least three consecutive failed status polls spanning
+ten seconds outside the startup grace period show an error window. A successful
+status immediately restores the display; notifications are rearmed only after
+30 seconds of continuously healthy RUNNING responses to avoid repeated windows
+during a flapping connection. An exited process still follows the restart policy.
+The window includes IPC errors, the independent shutdown channel probe, process
+identity, last successful status and OS information.
 `Terminate application` forces CoreHost shutdown and then exits the GUI; `Close`
-dismisses only the error window. A successful response resets the notification.
+dismisses only the error window. Windows client timeout errors include the transfer stage,
+elapsed time and request deadline to distinguish connection pressure from a
+missing or partial response.
 CoreHost error status is also reported in this window.
 On Windows, a shutdown request starts an independent 10-second cleanup deadline;
 if cleanup hangs, CoreHost exits with code 12 and Windows releases its interception
