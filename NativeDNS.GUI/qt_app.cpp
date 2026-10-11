@@ -30,6 +30,7 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenuBar>
 #include <QMenu>
@@ -880,10 +881,78 @@ bool editRule(QWidget* parent, nd::Config& config, nd::Rule& rule) {
     return true;
 }
 
+class CenteredCheckDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter* painter,
+               const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        QStyleOptionViewItem item(option);
+        initStyleOption(&item, index);
+        auto* style = item.widget ? item.widget->style() : QApplication::style();
+        const auto indicatorRect = checkRect(item);
+        item.features &= ~QStyleOptionViewItem::HasCheckIndicator;
+        style->drawControl(QStyle::CE_ItemViewItem, &item, painter, item.widget);
+
+        if (indicatorRect.isValid()) {
+            item.rect = indicatorRect;
+            if (!(index.flags() & Qt::ItemIsUserCheckable))
+                item.state &= ~QStyle::State_Enabled;
+            item.state &= ~(QStyle::State_HasFocus | QStyle::State_On | QStyle::State_Off |
+                            QStyle::State_NoChange);
+            item.state |= item.checkState == Qt::Checked ? QStyle::State_On : QStyle::State_Off;
+            style->drawPrimitive(QStyle::PE_IndicatorItemViewItemCheck, &item, painter, item.widget);
+        }
+    }
+
+    bool editorEvent(QEvent* event,
+                     QAbstractItemModel* model,
+                     const QStyleOptionViewItem& option,
+                     const QModelIndex& index) override {
+        if (!(index.flags() & Qt::ItemIsUserCheckable) ||
+            !(index.flags() & Qt::ItemIsEnabled) || !(option.state & QStyle::State_Enabled))
+            return false;
+        if (event->type() == QEvent::MouseButtonPress ||
+            event->type() == QEvent::MouseButtonRelease ||
+            event->type() == QEvent::MouseButtonDblClick) {
+            const auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() != Qt::LeftButton ||
+                !option.rect.contains(mouse->position().toPoint()))
+                return false;
+            if (event->type() != QEvent::MouseButtonRelease)
+                return true;
+        } else if (event->type() == QEvent::KeyPress) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() != Qt::Key_Space && key->key() != Qt::Key_Select)
+                return false;
+            if (key->isAutoRepeat())
+                return true;
+        } else
+            return false;
+        const auto state = index.data(Qt::CheckStateRole).toInt() == Qt::Checked
+                               ? Qt::Unchecked
+                               : Qt::Checked;
+        return model->setData(index, state, Qt::CheckStateRole);
+    }
+
+private:
+    static QRect checkRect(const QStyleOptionViewItem& item) {
+        auto* style = item.widget ? item.widget->style() : QApplication::style();
+        auto rect = style->subElementRect(QStyle::SE_ItemViewItemCheckIndicator, &item, item.widget);
+        rect.moveCenter(item.rect.center());
+        return rect;
+    }
+};
+
 class RulesTableModel final : public QAbstractTableModel {
 public:
-    RulesTableModel(const nd::Config& current, const nd::Config& original, QObject* parent)
-        : QAbstractTableModel(parent), current_(current), original_(original) {
+    RulesTableModel(const nd::Config& current,
+                    const nd::Config& original,
+                    std::function<bool(uint32_t, bool)> enabledChanged,
+                    QObject* parent)
+        : QAbstractTableModel(parent), current_(current), original_(original),
+          enabledChanged_(std::move(enabledChanged)) {
         rebuildIndexes();
     }
 
@@ -917,9 +986,13 @@ public:
         }
         if (role == Qt::ToolTipRole && index.column() == 2)
             return joinPatterns(rule.patterns);
+        if (role == Qt::ToolTipRole && index.column() == 0 && rule.is_default)
+            return uiText("Default rule must remain enabled.");
+        if (role == Qt::CheckStateRole && index.column() == 0)
+            return rule.enabled ? Qt::Checked : Qt::Unchecked;
         if (role == Qt::DisplayRole) {
             if (index.column() == 0)
-                return rule.enabled ? QStringLiteral("✓") : QString{};
+                return {};
             if (index.column() == 1)
                 return q(rule.name);
             if (index.column() == 2)
@@ -948,6 +1021,8 @@ public:
         if (!index.isValid())
             return Qt::NoItemFlags;
         auto result = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+        if (index.column() == 0 && !current_.rules[static_cast<size_t>(index.row())].is_default)
+            result |= Qt::ItemIsUserCheckable;
         if (index.column() == 3)
             result |= Qt::ItemIsEditable;
         if (index.column() == 4) {
@@ -956,6 +1031,17 @@ public:
                 result |= Qt::ItemIsEditable;
         }
         return result;
+    }
+    bool setData(const QModelIndex& index, const QVariant& value, int role) override {
+        if (role != Qt::CheckStateRole || !index.isValid() || index.column() != 0 ||
+            index.row() < 0 || static_cast<size_t>(index.row()) >= current_.rules.size() ||
+            !(flags(index) & Qt::ItemIsUserCheckable))
+            return false;
+        const int state = value.toInt();
+        if (state != Qt::Checked && state != Qt::Unchecked)
+            return false;
+        return enabledChanged_(current_.rules[static_cast<size_t>(index.row())].id,
+                               state == Qt::Checked);
     }
     void refresh() {
         beginResetModel();
@@ -1006,6 +1092,7 @@ private:
     }
     const nd::Config& current_;
     const nd::Config& original_;
+    std::function<bool(uint32_t, bool)> enabledChanged_;
     std::unordered_map<uint32_t, const nd::Rule*> original_rules_;
     std::unordered_map<uint32_t, size_t> original_rows_;
     std::unordered_map<uint32_t, QString> server_names_;
@@ -1036,7 +1123,12 @@ public:
         : QDialog(parent), target_(config), changed_(std::move(changed)) {
         setWindowTitle(uiText("Rules"));
         resize(880, 480);
-        model_ = new RulesTableModel(working_, original_, this);
+        model_ = new RulesTableModel(
+            working_, original_,
+            [this](uint32_t id, bool enabled) {
+                return updateRules({id}, [enabled](nd::Rule& rule) { rule.enabled = enabled; });
+            },
+            this);
         table_ = new RulesTableView(this);
         table_->setModel(model_);
         new BoundedTableHeader(table_, {75, 140, 180, 100, 100}, 1, 2, 3);
@@ -1044,6 +1136,8 @@ public:
         table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
         table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
         configureFixedTableRows(table_);
+
+        table_->setItemDelegateForColumn(0, new CenteredCheckDelegate(table_));
 
         auto* up = new QPushButton(uiText("Up"));
         auto* down = new QPushButton(uiText("Down"));
@@ -1180,7 +1274,7 @@ public:
                 table_->edit(index);
         });
         connect(table_, &QTableView::doubleClicked, this, [edit](const QModelIndex& index) {
-            if (index.column() < 3)
+            if (index.column() > 0 && index.column() < 3)
                 edit->click();
         });
     }
@@ -1235,7 +1329,7 @@ private:
             ids.insert(clicked.data(ruleIdRole).toUInt());
         return ids;
     }
-    void updateRules(const std::unordered_set<uint32_t>& ids,
+    bool updateRules(const std::unordered_set<uint32_t>& ids,
                      const std::function<void(nd::Rule&)>& update) {
         try {
             auto next = working_;
@@ -1243,14 +1337,16 @@ private:
                 if (ids.contains(rule.id))
                     update(rule);
             if (next == working_)
-                return;
+                return true;
             // Validate and publish the whole batch once, including for large rule lists.
             nd::validate(next);
             working_ = std::move(next);
             model_->refreshRuleData();
+            return true;
         } catch (const std::exception& e) {
             QMessageBox::critical(this, "NativeDNS", e.what());
             model_->refreshRuleData();
+            return false;
         }
     }
     void move(int direction) {

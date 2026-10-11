@@ -247,6 +247,7 @@ constexpr std::array translations{
     Translation{"Clone", "Копировать"},
     Translation{"New Rule", "Новое правило"},
     Translation{"Default rule cannot be removed.", "Правило по умолчанию нельзя удалить."},
+    Translation{"Default rule must remain enabled.", "Правило Default должно оставаться включённым."},
     Translation{"&File", "&Файл"},
     Translation{"New Configuration", "Новая конфигурация"},
     Translation{"Import Configuration", "Импорт конфигурации"},

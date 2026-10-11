@@ -163,6 +163,82 @@ private slots:
         table_ = nullptr;
         QCoreApplication::processEvents();
     }
+    void enabledCheckboxes_data() {
+        QTest::addColumn<bool>("save");
+        QTest::newRow("save") << true;
+        QTest::newRow("discard") << false;
+    }
+    void enabledCheckboxes() {
+        QFETCH(bool, save);
+        const auto before = config_;
+        for (int row = 0; row < table_->model()->rowCount() - 1; ++row) {
+            const auto index = table_->model()->index(row, 0);
+            const auto initial = config_.rules[static_cast<size_t>(row)].enabled
+                                     ? Qt::Checked
+                                     : Qt::Unchecked;
+            const auto toggled = initial == Qt::Checked ? Qt::Unchecked : Qt::Checked;
+            QVERIFY(index.data(Qt::DisplayRole).toString().isEmpty());
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(initial));
+            QVERIFY(index.flags() & Qt::ItemIsUserCheckable);
+            const auto rect = table_->visualRect(index);
+            QTest::mouseClick(table_->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              QPoint(rect.left() + 3, rect.center().y()));
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(toggled));
+            click(row, 0);
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(initial));
+            QTest::mouseClick(table_->viewport(), Qt::LeftButton, Qt::NoModifier,
+                              QPoint(rect.right() - 3, rect.center().y()));
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(toggled));
+            table_->setCurrentIndex(index);
+            table_->setFocus();
+            QTest::keyClick(table_, Qt::Key_Space);
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(initial));
+            QTest::keyClick(table_, Qt::Key_Space);
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(toggled));
+            QKeyEvent repeated(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier, {}, true);
+            QApplication::sendEvent(table_, &repeated);
+            QCOMPARE(index.data(Qt::CheckStateRole).toInt(), int(toggled));
+            QVERIFY(editors().isEmpty());
+        }
+        const int last = table_->model()->rowCount() - 1;
+        const auto defaultIndex = table_->model()->index(last, 0);
+        QVERIFY(!defaultIndex.flags().testFlag(Qt::ItemIsUserCheckable));
+        click(last, 0);
+        QTest::keyClick(table_, Qt::Key_Space);
+        QCOMPARE(defaultIndex.data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+        QVERIFY(!table_->model()->setData(defaultIndex, Qt::Unchecked, Qt::CheckStateRole));
+        QCOMPARE(config_, before);
+        QTest::mouseClick(button(save ? "OK" : "Close"), Qt::LeftButton);
+        QCOMPARE(commits_, save ? 1 : 0);
+        auto expected = before;
+        if (save)
+            for (auto& rule : expected.rules)
+                if (!rule.is_default)
+                    rule.enabled = !rule.enabled;
+        QCOMPARE(config_, expected);
+        nd::validate(config_);
+    }
+    void checkboxChangesOnlyClickedRuleAndSurvivesFailedCommit() {
+        const auto before = config_;
+        click(0, 1);
+        click(2, 1, Qt::ControlModifier);
+        QCOMPARE(selectedRows(), QList<int>({0, 2}));
+        click(0, 0);
+        QCOMPARE(table_->model()->index(0, 0).data(Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
+        QCOMPARE(table_->model()->index(2, 0).data(Qt::CheckStateRole).toInt(), int(Qt::Checked));
+        acceptChanges_ = false;
+        QTest::mouseClick(button("OK"), Qt::LeftButton);
+        QCOMPARE(config_, before);
+        QCOMPARE(commits_, 1);
+        QVERIFY(dialog_->isVisible());
+        QCOMPARE(table_->model()->index(0, 0).data(Qt::CheckStateRole).toInt(), int(Qt::Unchecked));
+        acceptChanges_ = true;
+        QTest::mouseClick(button("OK"), Qt::LeftButton);
+        QCOMPARE(commits_, 2);
+        auto expected = before;
+        expected.rules[0].enabled = false;
+        QCOMPARE(config_, expected);
+    }
     void ctrlShiftSelectionAndPopup() {
         click(0, 1);
         click(2, 3, Qt::ControlModifier);

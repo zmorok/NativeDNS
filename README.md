@@ -53,6 +53,8 @@ The action, command and error filters in `Log` remain independent. Hiding Select
 details and selection; log records can still be selected and copied. Showing it starts collapsed
 with empty details until a new record is selected.
 The DNS Servers dialog can test one or all configured servers and displays each result and RTT.
+Rules have centered Qt checkboxes: click anywhere in the Enabled cell or press Space to toggle that
+rule. Changes are applied with OK; closing the dialog discards them. Default always remains enabled.
 The live log supports compound display filters and saved filter management with import/export.
 `Log > View` selects a persistent log view: short line, a line with expandable details, or table.
 In the line with details view, Enter toggles the selected record; opening another record collapses
