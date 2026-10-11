@@ -149,6 +149,26 @@
     "en": "Added a control-loss error window with system diagnostics and Terminate application / Close actions. Windows Exit falls back to verified OS process termination when IPC shutdown fails, with independent CoreHost and GUI shutdown deadlines.",
     "ru": "Добавлено окно потери управления ядром с системной диагностикой и кнопками «Завершить работу» / «Закрыть». В Windows при отказе штатного завершения через IPC Exit использует принудительную остановку проверенного процесса средствами ОС; для CoreHost и клиента действуют независимые сроки завершения."
   },
+  "0729f5397e939a499cee73feb18f2a8cefaa3e28": {
+    "category": "interception_corehost",
+    "en": "Stabilized Windows CoreHost IPC under load with reusable workers, bounded waits and resource cleanup. Improved timeout diagnostics and reduced control-loss alerts during transient delays.",
+    "ru": "Повышена устойчивость IPC CoreHost в Windows под нагрузкой: добавлены переиспользуемые рабочие потоки, ограниченные ожидания и освобождение ресурсов. Улучшена диагностика тайм-аутов и сокращены уведомления о потере управления при кратковременных задержках."
+  },
+  "93bc97de9eb0f9660d529bcb342c827d86541e56": {
+    "category": "other",
+    "en": "Added persistent Only and With error filters to the Log menu. Errors respect action, command and text filters; unchecking the active mode hides errors.",
+    "ru": "В меню Log добавлены сохраняемые режимы ошибок Only и With. Ошибки учитывают фильтры действий, команд и текста; снятие активной галочки скрывает ошибки."
+  },
+  "0ab003d5f59c5668bcfe4502f4bf22da5814c8ba": {
+    "category": "other",
+    "en": "Opening a log record now scrolls down when needed to reveal the bottom of its details, including details taller than the viewport.",
+    "ru": "При раскрытии записи журнала список при необходимости прокручивается до нижней границы подробностей, в том числе если они выше видимой области."
+  },
+  "2e12ba48466f40309d1a28c8acc949ea28158d4f": {
+    "category": "other",
+    "en": "Removed the first-opening delay in Rules by replacing text checkmarks with centered Qt checkboxes. Click anywhere in an Enabled cell or press Space to toggle that rule; OK applies changes, while Default always remains enabled.",
+    "ru": "Устранена задержка первого открытия Rules: текстовые галочки заменены центрированными чекбоксами Qt. Нажатие в любом месте ячейки Enabled или пробела переключает правило; OK применяет изменения, а Default всегда остаётся включённым."
+  },
   "39cdbad275a30052c5f203aefd28858173ff2e0d": {
     "category": "other",
     "en": "Added Enter to expand or collapse a log record, keeping only one record expanded. Enter inside details collapses them and returns selection to the record line.",
