@@ -35,7 +35,7 @@ std::vector<InterceptionConflict> interception_conflicts() {
         if (Process32FirstW(processes, &entry))
             do {
                 const auto name = normalized(entry.szExeFile);
-                if (name == L"nativednscorehost.exe" &&
+                if ((name == L"nativednscorehost.exe" || name == L"nativedns.corehost.exe") &&
                     entry.th32ProcessID != GetCurrentProcessId())
                     result.push_back({"INTERCEPT_CONFLICT",
                                       "Another NativeDNSCoreHost process is present",
@@ -70,7 +70,7 @@ std::vector<InterceptionConflict> interception_conflicts() {
         const bool queried =
             required && QueryServiceConfigW(service.value, config, required, &required);
         const auto expected =
-            normalized((executable_path().parent_path() / L"WinDivert64.sys").wstring());
+            normalized((windivert_directory() / L"WinDivert64.sys").wstring());
         if (!queried || !config->lpBinaryPathName ||
             normalized(config->lpBinaryPathName) != expected)
             result.push_back(

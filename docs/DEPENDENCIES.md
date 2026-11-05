@@ -44,7 +44,7 @@ Windows:
 
 - official MSVC x64 prebuilt package;
 - the **dynamic v143** library is linked so its CRT matches Qt/NativeDNS;
-- `libsodium.dll` is deployed beside affected executables.
+- `libsodium.dll` is shared under `app/lib` in the Windows package; development builds copy it beside affected executables.
 
 Linux:
 
@@ -64,7 +64,7 @@ WinDivert installs its kernel service on demand. During shutdown NativeDNS close
 
 ## Qt 6 Widgets
 
-GUI only.
+Qt Widgets belongs to the GUI. The Windows diagnostic collector uses Qt Core/Network at the application layer, plus the existing Core APIs and libcurl.
 
 Qt must not become a dependency of:
 

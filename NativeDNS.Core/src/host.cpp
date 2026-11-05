@@ -322,20 +322,31 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, "NativeDNS Core API 1"};
     if (operation == IpcOperation::reload_config) {
         std::lock_guard reload_lock(reload_mutex_);
-        if (!payload.empty() &&
-            (payload.size() != 64 || !std::all_of(payload.begin(), payload.end(), [](char c) {
+        auto expected = payload;
+        bool diagnostic = diagnostic_logging_;
+        const auto separator = expected.find('\t');
+        if (separator != std::string::npos) {
+            const auto profile = expected.substr(separator + 1);
+            if (profile != "diagnostics=0" && profile != "diagnostics=1")
+                throw Error("IPC_PROTOCOL", "Invalid capture profile");
+            diagnostic = profile == "diagnostics=1";
+            expected.resize(separator);
+            if (expected.empty()) throw Error("IPC_PROTOCOL", "Capture profile requires a configuration ID");
+        }
+        if (!expected.empty() &&
+            (expected.size() != 64 || !std::all_of(expected.begin(), expected.end(), [](char c) {
                 return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
             })))
             throw Error("IPC_PROTOCOL", "Reload payload must be an empty string or a SHA-256 config ID");
         if (config_path_.empty())
             throw Error("CONFIG_IO", "CoreHost has no configuration path to reload");
         auto next = load_config(config_path_);
-        if (diagnostic_logging_) enable_diagnostic_logging(next);
+        if (diagnostic) enable_diagnostic_logging(next);
         const auto next_id = configuration_fingerprint(next);
-        if (!payload.empty() && payload != next_id) {
+        if (!expected.empty() && expected != next_id) {
             const auto message = "CoreHost configuration does not match the GUI: path=\"" +
                 platform::path_to_utf8(std::filesystem::absolute(config_path_)) +
-                "\" expected=" + payload + " saved=" + next_id +
+                "\" expected=" + expected + " saved=" + next_id +
                 ". Check the running CoreHost and the imported configuration file.";
             logger_.write(Level::errors_only, "CONFIG_MISMATCH", message);
             throw Error("CONFIG_MISMATCH", message);
@@ -345,6 +356,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         {
             std::lock_guard lock(mutex_);
             interception_->reload(next);
+            diagnostic_logging_ = diagnostic;
             config_ = std::move(next);
             logger_.set_display_level(config_.logging.screen);
             const bool prepared = interception_->status().state == State::running && prepare_network();

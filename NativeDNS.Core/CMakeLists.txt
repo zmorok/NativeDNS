@@ -94,7 +94,7 @@ target_compile_definitions(NativeDNS.CoreHost PRIVATE NATIVEDNS_DIAGNOSTIC_DEFAU
 target_link_libraries(NativeDNS.CoreHost PRIVATE NativeDNS.Core.Internal)
 set_target_properties(NativeDNS.CoreHost PROPERTIES OUTPUT_NAME NativeDNSCoreHost)
 if(WIN32)
-  set_target_properties(NativeDNS.CoreHost PROPERTIES WIN32_EXECUTABLE TRUE)
+  set_target_properties(NativeDNS.CoreHost PROPERTIES OUTPUT_NAME NativeDNS.CoreHost WIN32_EXECUTABLE TRUE)
   if(MSVC)
     target_link_options(NativeDNS.CoreHost PRIVATE /ENTRY:mainCRTStartup)
   endif()

@@ -126,6 +126,11 @@ std::filesystem::path application_root_directory() {
     const auto directory = executable_path().parent_path();
     return directory.filename() == "bin" ? directory.parent_path() : directory;
 }
+std::filesystem::path application_binary_directory() { return executable_path().parent_path(); }
+std::filesystem::path gui_entrypoint() { return application_binary_directory() / "NativeDNS"; }
+std::filesystem::path core_host_executable() { return application_binary_directory() / "NativeDNSCoreHost"; }
+std::filesystem::path windivert_directory() { return application_binary_directory(); }
+void initialize_application_paths() {}
 std::filesystem::path user_config_directory() {
     if (const char* xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
         return std::filesystem::path(xdg) / "nativedns";

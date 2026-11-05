@@ -69,16 +69,26 @@ add_subdirectory(NativeDNS.Core)
 if(NATIVEDNS_BUILD_GUI)
   add_subdirectory(NativeDNS.GUI)
 endif()
-if(NATIVEDNS_BUILD_TOOLS)
+set(NATIVEDNS_INCLUDE_CLI ${NATIVEDNS_BUILD_TOOLS})
+# The Windows diagnostic collector uses the same bounded CLI commands as
+# manual inspection; its internal worker is part of the GUI runtime package.
+if(WIN32 AND NATIVEDNS_BUILD_GUI)
+  set(NATIVEDNS_INCLUDE_CLI ON)
+endif()
+if(NATIVEDNS_INCLUDE_CLI)
   add_subdirectory(tools)
+endif()
+if(WIN32 AND NATIVEDNS_BUILD_GUI)
+  add_subdirectory(launcher)
+  add_subdirectory(diagnostics)
 endif()
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
 if(WIN32)
-  set(NATIVEDNS_RUNTIME_DEST ".")
-  set(NATIVEDNS_TOOLS_DEST "tools")
+  set(NATIVEDNS_RUNTIME_DEST "app/bin")
+  set(NATIVEDNS_TOOLS_DEST "app/bin")
 else()
   set(NATIVEDNS_RUNTIME_DEST "bin")
   set(NATIVEDNS_TOOLS_DEST "bin")
@@ -88,7 +98,7 @@ if(NATIVEDNS_BUILD_GUI)
   install(TARGETS NativeDNS.GUI RUNTIME DESTINATION ${NATIVEDNS_RUNTIME_DEST} COMPONENT Runtime)
 endif()
 install(TARGETS NativeDNS.CoreHost RUNTIME DESTINATION ${NATIVEDNS_RUNTIME_DEST} COMPONENT Runtime)
-if(NATIVEDNS_BUILD_TOOLS)
+if(NATIVEDNS_INCLUDE_CLI)
   install(TARGETS nativednsctl RUNTIME DESTINATION ${NATIVEDNS_TOOLS_DEST} COMPONENT Tools)
 endif()
 
@@ -96,26 +106,23 @@ if(WIN32)
   install(FILES
     "${NATIVEDNS_WINDIVERT_ROOT}/x64/WinDivert.dll"
     "${NATIVEDNS_WINDIVERT_ROOT}/x64/WinDivert64.sys"
-    DESTINATION . COMPONENT Runtime)
+    DESTINATION app/drivers/windivert COMPONENT Runtime)
   install(FILES "${NATIVEDNS_WINDIVERT_ROOT}/LICENSE" DESTINATION licenses RENAME WinDivert.txt COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/diagnose-service.ps1" DESTINATION . COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/run-diagnostics.bat" DESTINATION . COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/start-diagnostic-mode.bat" DESTINATION . COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/enable-diagnostics.ps1" DESTINATION . COMPONENT Runtime)
-
-  # libsodium is linked dynamically on Windows so it uses the same dynamic
-  # MSVC CRT as Qt and NativeDNS. The CLI lives in tools/, so it needs its own
-  # adjacent copy for normal Windows DLL search semantics.
-  install(IMPORTED_RUNTIME_ARTIFACTS Sodium.Shared RUNTIME DESTINATION . COMPONENT Runtime)
-  if(NATIVEDNS_BUILD_TOOLS)
-    install(IMPORTED_RUNTIME_ARTIFACTS Sodium.Shared RUNTIME DESTINATION tools COMPONENT Tools)
-  endif()
+  install(IMPORTED_RUNTIME_ARTIFACTS Sodium.Shared RUNTIME DESTINATION app/lib COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/packaging/windows/qt.conf" DESTINATION app/bin COMPONENT Runtime)
+  install(DIRECTORY DESTINATION logs COMPONENT Runtime)
 endif()
 
-install(FILES
-  "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md"
-  "${CMAKE_SOURCE_DIR}/README.md"
-  DESTINATION . COMPONENT Runtime)
+if(WIN32)
+  file(READ "${CMAKE_SOURCE_DIR}/README.md" packaged_readme)
+  string(REPLACE "(docs/" "(" packaged_readme "${packaged_readme}")
+  string(REPLACE "(examples/" "(../examples/" packaged_readme "${packaged_readme}")
+  file(WRITE "${CMAKE_BINARY_DIR}/packaged-README.md" "${packaged_readme}")
+  install(FILES "${CMAKE_BINARY_DIR}/packaged-README.md" DESTINATION docs RENAME README.md COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" DESTINATION licenses COMPONENT Runtime)
+else()
+  install(FILES "${CMAKE_SOURCE_DIR}/README.md" "${CMAKE_SOURCE_DIR}/THIRD_PARTY_NOTICES.md" DESTINATION . COMPONENT Runtime)
+endif()
 if(WIN32)
   install(FILES
     "${CMAKE_SOURCE_DIR}/third_party/licenses/curl.txt"

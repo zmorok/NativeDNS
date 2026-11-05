@@ -2,40 +2,30 @@
 param([Parameter(Mandatory)][string]$PackageDirectory)
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
-$application = Join-Path $package 'NativeDNS.exe'
-$control = Join-Path $package 'tools\nativednsctl.exe'
-$config = Join-Path $package 'NativeDNS.xml'
-
-& $control rules list $config | Out-Host
-if ($LASTEXITCODE -ne 0) { throw 'Packaged CLI could not parse NativeDNS.xml' }
-
-if (-not ('NativeDnsSmokeWindow' -as [type])) {
-    Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class NativeDnsSmokeWindow {
-    [DllImport("user32.dll")]
-    public static extern bool PostMessage(IntPtr window, uint message, IntPtr wparam, IntPtr lparam);
+# Initializes Qt/platform paths without acquiring the GUI singleton, opening
+# windows, touching autostart or starting interception.
+function Test-Entry([string]$Executable, [string]$Arguments, [string]$Expected) {
+    $info = [Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = Join-Path $package $Executable
+    $info.Arguments = $Arguments
+    $info.WorkingDirectory = [IO.Path]::GetTempPath()
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $info
+    try {
+        [void]$process.Start()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit(15000)) { $process.Kill(); throw "Package entry timed out: $Executable" }
+        $text = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0 -or $text -notmatch $Expected) { throw "Package entry failed: $Executable exit=$($process.ExitCode) $text" }
+        Write-Output $text.Trim()
+    } finally { $process.Dispose() }
 }
-'@
-}
-
-$process = Start-Process -FilePath $application -WorkingDirectory $package -PassThru
-try {
-    $window = [IntPtr]::Zero
-    for ($attempt = 0; $attempt -lt 50; $attempt++) {
-        Start-Sleep -Milliseconds 100
-        $process.Refresh()
-        if ($process.HasExited) { throw "Packaged GUI exited early with $($process.ExitCode)" }
-        if ($process.MainWindowHandle -ne [IntPtr]::Zero) { $window = $process.MainWindowHandle; break }
-    }
-    if ($window -eq [IntPtr]::Zero) { throw 'Packaged GUI did not create its main Win32 window' }
-    # WM_COMMAND / File > Exit. This exercises the same shutdown path as the menu.
-    if (-not [NativeDnsSmokeWindow]::PostMessage($window,0x0111,[IntPtr]104,[IntPtr]::Zero)) { throw 'Could not post GUI Exit command' }
-    if (-not $process.WaitForExit(5000)) { throw 'Packaged GUI did not exit within five seconds' }
-    if ($process.ExitCode -ne 0) { throw "Packaged GUI returned $($process.ExitCode)" }
-    Write-Output 'Portable GUI/CLI smoke test passed.'
-}
-finally {
-    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
-}
+Test-Entry 'NativeDNS.exe' '--layout-check --quiet' 'diagnostics=0'
+Test-Entry 'NativeDNS.Debug.exe' '--layout-check --quiet' 'diagnostics=1'
+Test-Entry 'NativeDNS.exe' '--core-host --layout-check --quiet' 'driver=.*app[/\\]drivers[/\\]windivert'
+Write-Output 'Portable GUI normal/Debug and CoreHost module loading: PASS'

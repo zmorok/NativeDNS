@@ -29,6 +29,49 @@ NativeDNS.Core
       `-- linux
 ```
 
+## Windows package layout
+
+```text
+NativeDNS/
+├── NativeDNS.exe
+├── NativeDNS.Debug.exe
+├── app/
+│   ├── bin/
+│   │   ├── NativeDNS.GUI.exe
+│   │   ├── NativeDNS.CoreHost.exe
+│   │   ├── NativeDNS.Diagnostics.exe
+│   │   ├── nativednsctl.exe
+│   │   └── qt.conf
+│   ├── lib/                      Qt, libsodium and MSVC runtime DLLs
+│   └── drivers/windivert/        WinDivert.dll and WinDivert64.sys
+├── docs/                         README, build/config documentation and package checksums
+├── examples/
+├── licenses/
+├── logs/                         runtime logs, diagnostic reports and ZIPs
+├── generic/
+├── iconengines/
+├── imageformats/
+├── networkinformation/
+├── platforms/
+├── styles/
+└── tls/                          Qt plugin directories
+```
+
+The two root executables are native static-CRT bootstraps, sharing the GUI
+instance identity. Each configures its process-local DLL directory before
+starting a module. `--core-host`, `--collect` and `--cli` dispatch to the appropriate
+worker. Elevation and Scheduled Task actions target the root bootstrap as well,
+so the UAC broker need not inherit a DLL path. `qt.conf` resolves plugin folders
+from the package root. No global PATH, registry DLL search setting or hosts file
+is changed by module loading. Keep the complete tree together when moving it.
+
+The application root is separate from its binary directory: logs resolve under
+the package root, CoreHost resolves beside the internal GUI, WinDivert resolves
+under `app/drivers/windivert`, and the user XML remains under LOCALAPPDATA.
+Development builds and Linux retain their existing executable directory layout.
+The diagnostic collector is an application-layer Qt Core utility; the DNS Core
+and CoreHost remain independent of Qt.
+
 ## Responsibilities
 
 ### NativeDNS.Core
@@ -163,7 +206,7 @@ remains unique per user/session. The OS releases the process lock after a crash.
 Network monitoring advances its context generation after a polling gap longer
 than five seconds, including suspend/resume, even when adapter data is unchanged.
 
-On Windows, autostart starts `NativeDNS.exe --background` without a visible window or console. The tray application then launches the registered elevated CoreHost on demand. This keeps interception privileged without elevating the Qt GUI, and avoids starting CoreHost without its tray owner.
+On Windows, paired Scheduled Tasks start the elevated CoreHost through `NativeDNS.exe --core-host` and the desktop GUI through `NativeDNS.exe --background`. The normal tray GUI can also start the registered Core task on demand; a diagnostic launch passes `--diagnostics` through the elevation bootstrap. The GUI stays unprivileged.
 
 The unprivileged GUI scheduled task retries an abnormal exit up to three times at one-minute intervals. A normal explicit Exit returns success and is not restarted. Unhandled C++ termination is recorded as `GUI_TERMINATED` in the standard diagnostic log before the process aborts.
 

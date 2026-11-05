@@ -111,9 +111,9 @@ Debug   /MDd
 Release /MD
 ```
 
-Do not switch NativeDNS or a linked dependency back to `/MT`/`/MTd` while using the official Qt MSVC binaries.
+The two root bootstrap executables use `/MT` or `/MTd` and link only Windows system libraries. All Qt/Core modules and their dependencies use the dynamic CRT shown above.
 
-`windeployqt` is asked to deploy compiler runtime dependencies for standalone/portable output.
+`packaging/deploy-windows-runtime.ps1` deploys Qt plugins at the package root and copies Qt/compiler runtime DLLs to `app/lib`. The package audit checks that imported Qt, libsodium and MSVC runtime DLLs are bundled and that the root launchers have no external runtime imports.
 
 ## Linux
 
@@ -198,66 +198,66 @@ For portable/AppImage generation, provide `linuxdeploy` and `linuxdeploy-plugin-
 
 ## Network diagnostics
 
-Configure with `-DNATIVEDNS_DIAGNOSTIC_BUILD=ON` to make GUI and CoreHost enable
-diagnostic capture on every launch. The same profile can be requested explicitly
-with `NativeDNS --diagnostics` or `NativeDNSCoreHost --diagnostics`.
-Windows packages include `start-diagnostic-mode.bat` for launching this profile
-by double-click after exiting the current NativeDNS instance.
-It enables Debug for screen/file capture and keeps file recording enabled across
-GUI config imports and CoreHost reloads. The GUI initially shows only completed
-Process results and related failures for configured upstream servers; Bypass,
-Block, original-resolver sentinel routes, and packet/lifecycle traces remain in
-the complete file log. Display filtering does not affect capture or DNS routing.
+Windows packages have two public entry points:
 
-Already distributed Windows builds can enable Debug and the existing Process
-display filter without downloading another application package:
+- `NativeDNS.exe` starts the normal GUI.
+- `NativeDNS.Debug.exe` starts the same GUI with forced Debug screen/file capture and file recording enabled.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./enable-diagnostics.ps1
-```
+They share the same GUI lock, activation endpoint and machine-wide CoreHost lock.
+A second launch activates the current instance; a request for a different mode
+shows a message asking the user to exit first. Exit through the application menu
+before switching modes. Debug logging is a runtime profile: the saved XML logging
+settings and normal GUI log filters are retained for the next normal launch.
+Config imports and reloads retain the active runtime profile.
 
-Close NativeDNS through **Exit** before applying this preset, then start it
-normally. The helper backs up the working XML, sets screen/file Debug and file
-recording, and changes only the GUI's action/command/error display preferences.
-DNS rules and network settings are retained. On older builds, importing a config
-with different logging options requires applying the preset again. Their existing
-Process filter can also show query-level debug traces and Process/0 routes; the
-strict completed-custom-upstream view is provided by the new diagnostic profile.
+The diagnostic GUI initially shows only completed Process results and related
+failures for configured upstream servers. Bypass, Block, original-resolver routes
+and packet/lifecycle traces remain in the full file log. Display filtering does
+not affect capture or routing.
 
-Network/configuration inspection is available in the staged CLI:
+Use **File > Collect diagnostic report...** and enter the affected domain to
+collect a report and the latest available logs. Collection also works without
+the GUI or CoreHost running:
 
 ```powershell
-./tools/nativednsctl.exe diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" chatgpt.com
+./NativeDNS.Debug.exe --collect --host example.com
+./NativeDNS.Debug.exe --collect --host example.com --offline --quiet
 ```
 
-On Linux use `nativednsctl diagnose <config-path> <hostname>`. This prints the
-config ID/counts, selected effective rule and available network preflight findings.
-It does not send a test DNS query or modify network settings. A zero exit code
-means no conflict was found by the available checks, not that browser/VPN DNS
-was verified. Use `servers test <config> <server-id>` or
-`resolve <config> <hostname> <original-resolver-IP>` for actual DNS requests.
+Optional arguments are `--config FILE`, `--host DOMAIN`, `--offline` and `--quiet`.
+The default configuration is `%LOCALAPPDATA%/NativeDNS/NativeDNS.xml`; the default
+domain comes from its test target, falling back to `example.com` when unavailable.
+Collection writes a UTF-8 `service-*.log` and a `diagnostics-*.zip` under `logs/`.
+The archive includes the report and up to three recent `NativeDNS-*.log` files,
+with a total input size limit of 16 MiB. Oversized existing logs are skipped and
+reported. The XML and browser profile contents are not copied to the archive.
 
-`resolve` also accepts `--type A`, `--type AAAA`, or `--type HTTPS` after the
-optional original-resolver port. Windows staged packages include a read-only
-service diagnostic script, defaulting to `gemini.google.com` and the GUI's config:
+The native collector reads CoreHost state, configuration fingerprints/effective
+rules, interface DNS, hosts conflicts, WinDivert services/processes/Event Log
+resource paths and explicit Edge Secure DNS preferences. It compares OS resolution
+with NativeDNS A/AAAA/HTTPS results, then uses up to two returned IPs for HTTPS HEAD
+probes with certificate verification. It sends no browser cookies or account
+credentials and does not establish service account or region eligibility.
+`--offline` skips DNS/HTTPS probes. Neither collection nor offline inspection
+changes DNS settings, hosts, autostart, drivers or browser profiles. Missing
+explicit Edge preferences do not prove Secure DNS is disabled.
+
+The collector uses the packaged CLI and libcurl, with bounded subprocess/probe
+timeouts. PowerShell and external curl.exe are not required at runtime. Internal
+executables in `app/bin` are started through the root bootstrap so that libraries
+in `app/lib` are available even before their main function and after elevation.
+For manual CLI inspection:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./diagnose-service.ps1
+./NativeDNS.exe --cli diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com
+./NativeDNS.exe --cli resolve "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com 1.1.1.1 --type AAAA
 ```
 
-Run it from the package directory while NativeDNS is running. For a double-click
-launch on Windows, use `run-diagnostics.bat` in the same directory. Optional script
-parameters include `-HostName`, `-ConfigPath`, `-PackageDirectory`, and `-OutputPath`.
-The script compares the Windows resolver with configured NativeDNS A/AAAA/HTTPS
-queries, reads explicit Edge DNS mode/policies, records driver service paths and
-the Event Log message-resource path, and probes TLS/HTTP using the returned IPs.
-It writes a UTF-8 file under `logs/`. DNS settings, browser profiles and drivers
-are unchanged. An absent explicit browser DNS preference does not prove Secure
-DNS is off. The HTTPS probe uses normal certificate validation, sends no browser
-cookies or account credentials, and does not verify account/region eligibility.
-The script also works with earlier CLI builds that support only A queries;
-AAAA/HTTPS DNS probes are then explicitly skipped while the A-answer TLS/HTTP
-check still runs, so updating the script does not require replacing the package.
+On Linux use `NativeDNS --diagnostics`, `NativeDNSCoreHost --diagnostics` and
+`nativednsctl diagnose <config-path> <hostname>`. The native report collector and
+Windows root launchers are Windows-specific. The CMake option
+`NATIVEDNS_DIAGNOSTIC_BUILD=ON` forces the profile by default for development;
+regular distributable packages leave it OFF and include the separate Debug entry.
 
 ## Sanitizers and fuzzing
 
@@ -314,7 +314,7 @@ Linux:   NativeDNS
 Background helper:
 
 ```text
-Windows: NativeDNSCoreHost.exe
+Windows: app/bin/NativeDNS.CoreHost.exe
 Linux:   NativeDNSCoreHost
 ```
 

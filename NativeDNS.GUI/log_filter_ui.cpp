@@ -330,12 +330,18 @@ void SavedFiltersDialog::refreshChangedRows() {
     }
 }
 
-LogPanel::LogPanel(QWidget* parent, QSettings* settings)
-    : QWidget(parent), ownedSettings_(settings ? nullptr : std::make_unique<QSettings>()),
+LogPanel::LogPanel(QWidget* parent, QSettings* settings, bool transient)
+    : QWidget(parent), transientDirectory_(transient ? std::make_unique<QTemporaryDir>() : nullptr),
+      ownedSettings_(settings ? nullptr : transient ? std::make_unique<QSettings>(transientDirectory_->filePath("capture.ini"), QSettings::IniFormat) : std::make_unique<QSettings>()),
       settings_(settings ? settings : ownedSettings_.get()), input_(new QLineEdit(this)),
       bookmark_(new QToolButton(this)), apply_(new QToolButton(this)), menu_(new QMenu(this)),
       error_(new QLabel(this)), count_(new QLabel(this)), view_(new LogDisplay(this)),
       filterControls_(new QWidget(this)) {
+    if (transient && !settings) {
+        QSettings previous;
+        for (const auto& key : previous.allKeys())
+            if (key.startsWith("ui/log")) settings_->setValue(key, previous.value(key));
+    }
     input_->setObjectName("logFilterInput");
     input_->setMaxLength(4096);
     input_->setClearButtonEnabled(true);

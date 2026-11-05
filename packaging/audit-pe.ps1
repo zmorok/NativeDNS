@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
-if (-not $ReportPath) { $ReportPath = Join-Path $package 'dependency-audit.txt' }
+if (-not $ReportPath) { $ReportPath = Join-Path $package 'docs/dependency-audit.txt' }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Visual Studio vswhere.exe was not found' }
@@ -19,7 +19,7 @@ $dumpbin = Get-ChildItem -LiteralPath (Join-Path $installation 'VC\Tools\MSVC') 
 if (-not $dumpbin) { throw 'dumpbin.exe was not found' }
 
 $binaries = Get-ChildItem -LiteralPath $package -Recurse -File | Where-Object Extension -in '.exe','.dll'
-$forbidden = 'MSCOREE\.DLL|HOSTFXR\.DLL|HOSTPOLICY\.DLL|CORECLR\.DLL|WEBVIEW2LOADER\.DLL|VCRUNTIME\d*\.DLL|MSVCP\d*\.DLL|CONCRT\d*\.DLL|UCRTBASE\.DLL'
+$forbidden = 'MSCOREE\.DLL|HOSTFXR\.DLL|HOSTPOLICY\.DLL|CORECLR\.DLL|WEBVIEW2LOADER\.DLL'
 $lines = @(
     'NativeDNS portable PE dependency audit'
     "Package: $package"
@@ -36,7 +36,13 @@ foreach ($binary in $binaries) {
     $lines += ($dependencies | ForEach-Object { "  $_" })
     $lines += ''
     $bad = @($dependencies | Where-Object { $_ -match $forbidden })
-    if ($bad) { throw "Forbidden managed/WebView/dynamic MSVC runtime dependency in $relative`: $($bad -join ', ')" }
+    if ($bad) { throw "Forbidden managed/WebView dependency in $relative`: $($bad -join ', ')" }
+    foreach ($dependency in $dependencies) {
+        if ($dependency -match '^(QT6|LIBSODIUM|MSVCP\d|VCRUNTIME\d|CONCRT\d|VCCORLIB\d|UCRTBASED\.DLL)') {
+            if (-not (Test-Path -LiteralPath (Join-Path $package ("app/lib/" + $dependency)))) { throw "Missing bundled dependency $dependency for $relative" }
+            if ($relative -in @('NativeDNS.exe','NativeDNS.Debug.exe')) { throw "Root launcher has an external runtime dependency: $dependency" }
+        }
+    }
     $headers = (& $dumpbin /HEADERS $binary.FullName 2>&1) -join "`n"
     if ($LASTEXITCODE -ne 0) { throw "dumpbin header inspection failed for $($binary.FullName)" }
     if ($headers -notmatch '(?m)^\s+8664 machine \(x64\)') { throw "$relative is not an x64 PE image" }
@@ -45,6 +51,6 @@ foreach ($binary in $binaries) {
     $lines += "  PE: x64; subsystem=$subsystem; CLR descriptor=absent"
     $lines += ''
 }
-$lines += 'RESULT: PASS - all images are x64 with no CLR descriptor and no .NET, WebView2, or dynamic MSVC/UCRT dependency imports.'
+$lines += 'RESULT: PASS - all images are x64 with no CLR descriptor and no .NET/WebView2 imports; Qt, sodium and MSVC imports are bundled in app/lib; root launchers use a static CRT.'
 [IO.File]::WriteAllLines($ReportPath,$lines,[Text.UTF8Encoding]::new($false))
 Write-Output $ReportPath

@@ -36,6 +36,7 @@ PrivilegesRequired=admin
 WizardStyle=modern
 UninstallDisplayIcon={app}\NativeDNS.exe
 CloseApplications=yes
+CloseApplicationsFilter=NativeDNS.exe,NativeDNS.Debug.exe,NativeDNS.GUI.exe,NativeDNS.CoreHost.exe,NativeDNSCoreHost.exe
 SetupLogging=yes
 
 [Tasks]
@@ -43,6 +44,9 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Dirs]
+Name: "{app}\logs"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\NativeDNS"; Filename: "{app}\NativeDNS.exe"; WorkingDir: "{app}"
@@ -52,4 +56,4 @@ Name: "{autodesktop}\NativeDNS"; Filename: "{app}\NativeDNS.exe"; WorkingDir: "{
 Filename: "{app}\NativeDNS.exe"; Description: "Launch NativeDNS"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\tools\nativednsctl.exe"; Parameters: "autostart disable"; Flags: runhidden skipifdoesntexist; RunOnceId: "DisableNativeDNSAutostart"
+Filename: "{app}\NativeDNS.exe"; Parameters: "--cli autostart disable --quiet"; Flags: runhidden skipifdoesntexist; RunOnceId: "DisableNativeDNSAutostart"

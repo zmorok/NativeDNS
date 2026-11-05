@@ -11,6 +11,13 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 `NativeDNS.Core` does not depend on Qt.
 
+Windows packages start through `NativeDNS.exe` (normal) or `NativeDNS.Debug.exe`
+(full diagnostic logging). They share one running instance. Exit before switching
+modes. Internal executables and DLLs are under `app/`; logs and diagnostic ZIPs
+are under `logs/`. Use **File > Collect diagnostic report...** or
+`NativeDNS.Debug.exe --collect --host example.com` to collect an issue report.
+See [build and diagnostics](docs/BUILD.md) for details.
+
 ## Download
 
 The Windows release packages for [v0.4.6](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.6):
@@ -36,7 +43,7 @@ Current Core functionality includes:
 - Anonymized DNSCrypt;
 - real DNS server tests with RTT/error reporting;
 - live and file logging;
-- background `NativeDNSCoreHost`;
+- background CoreHost (`NativeDNS.CoreHost.exe` on Windows, `NativeDNSCoreHost` on Linux);
 - IPC between GUI/tools and CoreHost.
 
 Platform integration:

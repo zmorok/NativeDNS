@@ -167,3 +167,13 @@ handles. Linux has no emergency OS termination fallback: killing the proxy befor
 validated nftables cleanup can leave DNS redirected to a dead listener. Linux
 continues using the independent graceful shutdown endpoint and reports an explicit
 unsupported error if forced termination is needed.
+
+### Runtime capture profile on reload
+
+The `reload_config` payload accepts `SHA256<TAB>diagnostics=0` or
+`SHA256<TAB>diagnostics=1`. The SHA-256 identifies the effective configuration,
+including the requested logging override. The host validates the candidate and
+fingerprint before changing its runtime profile. A normal GUI can therefore
+restore saved logging levels when reusing a host, and a Debug GUI forces Debug
+file/display levels without rewriting the XML. Empty and SHA-256-only legacy
+payloads retain the host's current capture profile.

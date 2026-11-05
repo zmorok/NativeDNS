@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Debug','Release')][string]$Configuration = 'Release',
-    [string]$BuildDirectory = 'build/msvc',
+    [string]$BuildDirectory = 'build/windows/windows-release',
     [string]$OutputDirectory = 'build/package',
     [switch]$SkipBuild,
     [switch]$SkipArchive
@@ -48,13 +48,13 @@ if (-not $SkipBuild) {
 cmake --install $build --config $Configuration --prefix $stage
 if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 
+& (Join-Path $PSScriptRoot 'deploy-windows-runtime.ps1') -PackageDirectory $stage -Configuration $Configuration
 $required = @(
-    'NativeDNS.exe','NativeDNS.xml','validate-clean-machine.ps1','validation-transparent.xml','WinDivert.dll','WinDivert64.sys',
-    'README.md','THIRD_PARTY_NOTICES.md','licenses/WinDivert.txt',
+    'NativeDNS.exe','NativeDNS.Debug.exe','app/bin/NativeDNS.CoreHost.exe','app/bin/NativeDNS.Diagnostics.exe',
+    'app/bin/nativednsctl.exe','app/bin/qt.conf','app/drivers/windivert/WinDivert.dll',
+    'docs/README.md','licenses/THIRD_PARTY_NOTICES.md','licenses/WinDivert.txt',
     'licenses/curl.txt','licenses/libsodium.txt','licenses/nghttp2.txt','docs/BUILD.md',
-    'docs/CONFIG_FORMAT.md','docs/MIGRATION_YOGADNS.md','docs/DEPENDENCIES.md',
-    'docs/PROGRESS.md','docs/TEST_REPORT.md',
-    'tools/nativednsctl.exe'
+    'docs/CONFIG_FORMAT.md','docs/DEPENDENCIES.md'
 )
 foreach ($relative in $required) {
     $candidate = Join-Path $stage $relative
@@ -66,7 +66,7 @@ $hashes = Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullNam
     $relative = $_.FullName.Substring($stage.TrimEnd([IO.Path]::DirectorySeparatorChar).Length + 1)
     '{0}  {1}' -f (Get-Sha256Hex $_.FullName),$relative.Replace('\','/')
 }
-[IO.File]::WriteAllLines((Join-Path $stage 'SHA256SUMS.txt'),$hashes,[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllLines((Join-Path $stage 'docs/SHA256SUMS.txt'),$hashes,[Text.UTF8Encoding]::new($false))
 
 Write-Output $stage
 if (-not $SkipArchive) {

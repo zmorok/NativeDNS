@@ -45,7 +45,7 @@ WinDivertServiceOwner windivert_service_owner() {
     bool owned = false;
     if (queried && config->lpBinaryPathName) {
         const auto expected =
-            (platform::executable_path().parent_path() / L"WinDivert64.sys").wstring();
+            (platform::windivert_directory() / L"WinDivert64.sys").wstring();
         owned =
             normalized_driver_path(config->lpBinaryPathName) == normalized_driver_path(expected);
     }
@@ -757,9 +757,9 @@ void WinDivertInterception::start() {
         }
         detail::fault_point("windivert.load");
         p.module =
-            LoadLibraryExW(L"WinDivert.dll",
+            LoadLibraryExW((platform::windivert_directory() / L"WinDivert.dll").c_str(),
                            nullptr,
-                           LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!p.module)
             throw Error("WINDIVERT_LOAD",
                         "Cannot load WinDivert.dll: " + std::to_string(GetLastError()));

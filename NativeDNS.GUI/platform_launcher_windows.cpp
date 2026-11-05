@@ -1,6 +1,8 @@
 #include "platform_launcher.hpp"
 #include <windows.h>
 #include <shellapi.h>
+#include <nativedns/platform.hpp>
+#include <QFileInfo>
 
 namespace {
 std::wstring quote(const QString& value) {
@@ -47,8 +49,18 @@ bool launchNativeDnsCore(const QString& executable,
                          const QStringList& arguments,
                          bool elevated,
                          QString* error) {
-    const auto params = joinArguments(arguments);
-    const auto file = executable.toStdWString();
+    QString program = executable;
+    QStringList effectiveArguments = arguments;
+    const auto root = nd::platform::application_root_directory();
+    if (QFileInfo(executable).fileName() == "NativeDNS.CoreHost.exe" &&
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe") &&
+        std::filesystem::is_directory(root / L"app" / L"lib")) {
+        program = QString::fromStdWString((root / L"NativeDNS.exe").wstring());
+        effectiveArguments.prepend("--core-host");
+        effectiveArguments.append("--quiet");
+    }
+    const auto params = joinArguments(effectiveArguments);
+    const auto file = program.toStdWString();
 
     SHELLEXECUTEINFOW info{sizeof(info)};
     info.fMask = SEE_MASK_NOCLOSEPROCESS;
@@ -73,8 +85,18 @@ bool runNativeDnsHelper(const QString& executable,
                         int* exitCode,
                         QString* error,
                         int timeoutMs) {
-    const auto params = joinArguments(arguments);
-    const auto file = executable.toStdWString();
+    QString program = executable;
+    QStringList effectiveArguments = arguments;
+    const auto root = nd::platform::application_root_directory();
+    if (QFileInfo(executable).fileName() == "NativeDNS.CoreHost.exe" &&
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe") &&
+        std::filesystem::is_directory(root / L"app" / L"lib")) {
+        program = QString::fromStdWString((root / L"NativeDNS.exe").wstring());
+        effectiveArguments.prepend("--core-host");
+        effectiveArguments.append("--quiet");
+    }
+    const auto params = joinArguments(effectiveArguments);
+    const auto file = program.toStdWString();
 
     SHELLEXECUTEINFOW info{sizeof(info)};
     info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;

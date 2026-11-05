@@ -92,11 +92,11 @@ if exist "%STAGE%" rmdir /s /q "%STAGE%"
 cmake --install "%BUILD%" --config %CMAKE_CONFIG% --prefix "%STAGE%"
 if errorlevel 1 exit /b %errorlevel%
 
-windeployqt --%CONFIG% --no-translations --compiler-runtime --dir "%STAGE%" "%STAGE%\NativeDNS.exe"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\packaging\deploy-windows-runtime.ps1" -PackageDirectory "%STAGE%" -Configuration %CMAKE_CONFIG%
 if errorlevel 1 exit /b %errorlevel%
 
 if not exist "%STAGE%\NativeDNS.exe" (echo ERROR: NativeDNS.exe missing after staging. & exit /b 5)
-if not exist "%STAGE%\NativeDNSCoreHost.exe" (echo ERROR: NativeDNSCoreHost.exe missing after staging. & exit /b 5)
+if not exist "%STAGE%\app\bin\NativeDNS.CoreHost.exe" (echo ERROR: NativeDNS.CoreHost.exe missing after staging. & exit /b 5)
 
 echo Standalone ready: %STAGE%
 

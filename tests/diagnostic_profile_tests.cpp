@@ -36,6 +36,16 @@ int main() {
                   "Import/reload did not retain the diagnostic profile");
             host.logger().write(nd::Level::debug, marker, "Full diagnostic capture retained");
             host.logger().flush_file();
+            const auto base_id = nd::configuration_fingerprint(config);
+            check(nd::pipe_request(endpoint, nd::IpcOperation::reload_config, base_id + "\tdiagnostics=0").status == 0,
+                  "Switching back to normal capture was rejected");
+            check(!host.logger().enabled(nd::Level::debug), "Normal launch retained forced Debug capture");
+            check(nd::load_config(path) == config, "Diagnostic mode changed the saved normal configuration");
+            check(nd::pipe_request(endpoint, nd::IpcOperation::reload_config, id + "\tdiagnostics=1").status == 0,
+                  "A reused CoreHost did not accept Debug capture");
+            check(host.logger().enabled(nd::Level::debug), "Debug capture missing after normal-to-debug switch");
+            check(nd::pipe_request(endpoint, nd::IpcOperation::reload_config, base_id + "\tdiagnostics=1").status != 0,
+                  "A mismatched effective config ID was accepted");
             host.stop();
         }
         bool found = false;

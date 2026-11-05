@@ -34,19 +34,26 @@ SingleInstanceGuard::SingleInstanceGuard(QObject* parent) : QObject(parent), loc
     lock_.setStaleLockTime(0);
 }
 
-bool SingleInstanceGuard::notifyExisting(bool activateExisting) const {
-    const QByteArray command = activateExisting ? QByteArray("ACTIVATE\n") : QByteArray("PING\n");
+bool SingleInstanceGuard::notifyExisting(bool activateExisting, bool diagnostic) const {
+    const QByteArray command = activateExisting ? QByteArray(diagnostic ? "ACTIVATE DEBUG\n" : "ACTIVATE NORMAL\n") : QByteArray("PING\n");
 
     // The primary instance may own the lock a little before its local server
     // begins listening. Retry briefly rather than starting a duplicate GUI.
     for (int attempt = 0; attempt < 30; ++attempt) {
         QLocalSocket socket;
-        socket.connectToServer(serverName(), QIODevice::WriteOnly);
+        socket.connectToServer(serverName(), QIODevice::ReadWrite);
         if (socket.waitForConnected(50)) {
             socket.write(command);
             socket.flush();
-            socket.waitForBytesWritten(100);
+            socket.waitForBytesWritten(500);
+            // Keep the pipe alive until the owner has consumed the command.
+            // Closing immediately after a buffered write can lose activation
+            // on Windows, especially for simultaneous normal/Debug launches.
+            if (socket.bytesAvailable() == 0) socket.waitForReadyRead(1000);
+            (void)socket.readAll();
             socket.disconnectFromServer();
+            // Earlier versions do not send an acknowledgement. A live owner
+            // still prevents another instance, without replaying activation.
             return true;
         }
         QThread::msleep(50);
@@ -54,9 +61,9 @@ bool SingleInstanceGuard::notifyExisting(bool activateExisting) const {
     return false;
 }
 
-bool SingleInstanceGuard::acquire(bool activateExisting) {
+bool SingleInstanceGuard::acquire(bool activateExisting, bool diagnostic) {
     if (!lock_.tryLock(0)) {
-        if (notifyExisting(activateExisting)) {
+        if (notifyExisting(activateExisting, diagnostic)) {
             return false;
         }
 
@@ -80,8 +87,11 @@ bool SingleInstanceGuard::acquire(bool activateExisting) {
     return true;
 }
 
-void SingleInstanceGuard::setActivationHandler(std::function<void()> handler) {
+void SingleInstanceGuard::setActivationHandler(std::function<void(bool)> handler) {
     activationHandler_ = std::move(handler);
+    if (pendingActivation_ && activationHandler_) {
+        activationHandler_(*pendingActivation_); pendingActivation_.reset();
+    }
     if (server_.hasPendingConnections()) {
         acceptPendingConnections();
     }
@@ -94,15 +104,22 @@ void SingleInstanceGuard::acceptPendingConnections() {
             continue;
         }
 
-        if (socket->bytesAvailable() == 0) {
-            socket->waitForReadyRead(100);
-        }
-        const auto command = socket->readAll();
-        if (command.startsWith("ACTIVATE") && activationHandler_) {
-            activationHandler_();
-        }
-
-        socket->disconnectFromServer();
-        socket->deleteLater();
+        connect(socket, &QLocalSocket::disconnected, socket, &QObject::deleteLater);
+        auto consume = [this, socket] {
+            if (!socket->canReadLine()) {
+                if (socket->bytesAvailable() > 128) socket->disconnectFromServer();
+                return;
+            }
+            const auto command = socket->readLine(128);
+            socket->write("OK\n"); socket->flush();
+            socket->disconnectFromServer();
+            if (command.startsWith("ACTIVATE")) {
+                const bool diagnostic = command.startsWith("ACTIVATE DEBUG");
+                if (activationHandler_) activationHandler_(diagnostic);
+                else pendingActivation_ = diagnostic;
+            }
+        };
+        connect(socket, &QLocalSocket::readyRead, this, consume);
+        consume();
     }
 }

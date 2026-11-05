@@ -175,7 +175,26 @@ std::filesystem::path executable_path() {
     return std::filesystem::path(std::wstring(buffer.data(), n));
 }
 std::filesystem::path application_root_directory() {
-    return executable_path().parent_path();
+    const auto binary = executable_path().parent_path();
+    if (binary.filename() == L"bin" && binary.parent_path().filename() == L"app")
+        return binary.parent_path().parent_path();
+    return binary;
+}
+std::filesystem::path application_binary_directory() { return executable_path().parent_path(); }
+std::filesystem::path gui_entrypoint() { return application_root_directory() / L"NativeDNS.exe"; }
+std::filesystem::path core_host_executable() { return application_binary_directory() / L"NativeDNS.CoreHost.exe"; }
+std::filesystem::path windivert_directory() {
+    const auto binary = application_binary_directory();
+    return binary.filename() == L"bin" && binary.parent_path().filename() == L"app"
+        ? binary.parent_path() / L"drivers" / L"windivert" : binary;
+}
+void initialize_application_paths() {
+    const auto binary = application_binary_directory();
+    if (binary.filename() != L"bin" || binary.parent_path().filename() != L"app") return;
+    const auto library = binary.parent_path() / L"lib";
+    if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS) ||
+        !AddDllDirectory(library.c_str()) || !SetDllDirectoryW(library.c_str()))
+        throw Error("PATH", "Cannot configure application DLL search paths");
 }
 std::filesystem::path user_config_directory() {
     const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);

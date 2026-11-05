@@ -1,5 +1,6 @@
 #include <nativedns/autostart.hpp>
 #include <nativedns/config.hpp>
+#include <nativedns/platform.hpp>
 #include <windows.h>
 #include <taskschd.h>
 #include <oleauto.h>
@@ -131,13 +132,20 @@ std::wstring quote_argument(const std::wstring& value) {
     result.push_back(L'\"');
     return result;
 }
+std::filesystem::path core_entrypoint(const std::filesystem::path& executable) {
+    const auto binary = executable.parent_path();
+    const auto root = binary.parent_path().parent_path();
+    if (binary.filename() == L"bin" && binary.parent_path().filename() == L"app" &&
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe")) return root / L"NativeDNS.exe";
+    return executable;
+}
 } // namespace
 
 void enable_autostart(const std::filesystem::path& executable,
                       const std::filesystem::path& config,
                       const std::filesystem::path& gui_executable) {
     const auto gui =
-        gui_executable.empty() ? executable.parent_path() / L"NativeDNS.exe" : gui_executable;
+        gui_executable.empty() ? platform::gui_entrypoint() : gui_executable;
     if (!std::filesystem::is_regular_file(executable))
         throw Error("AUTOSTART", "NativeDNS executable does not exist");
     if (!std::filesystem::is_regular_file(config))
@@ -194,9 +202,11 @@ void enable_autostart(const std::filesystem::path& executable,
     check(action->QueryInterface(IID_PPV_ARGS(execute.put())), "Configure executable action");
     const auto absolute_executable = std::filesystem::absolute(executable).lexically_normal();
     const auto absolute_config = std::filesystem::absolute(config).lexically_normal();
-    const std::wstring arguments =
-        L"--config " + quote_argument(absolute_config.wstring()) + L" --transparent";
-    Bstr executable_text(absolute_executable.wstring()), arguments_text(arguments),
+    const auto entry = core_entrypoint(absolute_executable);
+    const bool structured = entry != absolute_executable;
+    const std::wstring arguments = (structured ? L"--core-host " : L"") +
+        std::wstring(L"--config ") + quote_argument(absolute_config.wstring()) + L" --transparent";
+    Bstr executable_text(entry.wstring()), arguments_text(arguments),
         working_directory(absolute_executable.parent_path().wstring());
     check(execute->put_Path(executable_text.value), "Set task executable");
     check(execute->put_Arguments(arguments_text.value), "Set task arguments");
@@ -381,9 +391,10 @@ bool start_autostart_core(const std::filesystem::path& executable,
 
     const auto absolute_executable = std::filesystem::absolute(executable).lexically_normal();
     const auto absolute_config = std::filesystem::absolute(config).lexically_normal();
-    const std::wstring expected_arguments =
-        L"--config " + quote_argument(absolute_config.wstring()) + L" --transparent";
-    if (!path.value || !arguments.value || _wcsicmp(path.value, absolute_executable.c_str()) != 0 ||
+    const auto entry = core_entrypoint(absolute_executable);
+    const std::wstring expected_arguments = (entry != absolute_executable ? L"--core-host " : L"") +
+        std::wstring(L"--config ") + quote_argument(absolute_config.wstring()) + L" --transparent";
+    if (!path.value || !arguments.value || _wcsicmp(path.value, entry.c_str()) != 0 ||
         expected_arguments != arguments.value)
         return false;
 

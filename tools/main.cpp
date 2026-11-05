@@ -39,6 +39,7 @@ void usage() {
 } // namespace
 int main(int argc, char** native_argv) {
     try {
+        nd::platform::initialize_application_paths();
         const auto argv = nd::platform::command_line_arguments(argc, native_argv);
         argc = static_cast<int>(argv.size());
         if ((argc == 3 || argc == 4) && argv[1] == "diagnose") {

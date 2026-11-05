@@ -56,42 +56,19 @@ void openMenu(QMenu* menu) {
 class LogFilterTests final : public QObject {
     Q_OBJECT
 private slots:
-    void existingBuildDiagnosticPreset() {
-#ifdef Q_OS_WIN
-        QTemporaryDir directory;
-        const auto path = directory.filePath(QString::fromUtf8("конфигурация 日本語.xml"));
-        auto config = nd::default_config();
-        config.logging.file_enabled = false;
-        config.rules.back().name = "Правило 日本語";
-        config.settings["unicode-fixture"] = "строка\n<значение>&\"";
-        nd::save_config(config, std::filesystem::path(path.toStdWString()));
-        const auto root = "HKEY_CURRENT_USER\\Software\\NativeDNS.Tests\\Preset-" + QString::number(QCoreApplication::applicationPid());
-        QSettings settings(root, QSettings::NativeFormat);
-        struct Cleanup { QSettings& settings; ~Cleanup() { settings.clear(); settings.sync(); } } cleanup{settings};
-        QProcess helper;
-        helper.start(qEnvironmentVariable("SystemRoot") + "/System32/WindowsPowerShell/v1.0/powershell.exe",
-                     {"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ENABLE_DIAGNOSTICS_SCRIPT,
-                      "-ConfigPath", path, "-SettingsRegistryPath",
-                      "HKCU:\\Software\\NativeDNS.Tests\\Preset-" + QString::number(QCoreApplication::applicationPid()) + "\\ui"});
-        QVERIFY(helper.waitForFinished(20000));
-        QVERIFY2(helper.exitCode() == 0, helper.readAllStandardError().constData());
-        const auto loaded = nd::load_config(std::filesystem::path(path.toStdWString()));
-        QCOMPARE(loaded.logging.screen, nd::Level::debug);
-        QCOMPARE(loaded.logging.file, nd::Level::debug);
-        QVERIFY(loaded.logging.file_enabled);
-        QVERIFY(loaded.rules == config.rules && loaded.servers == config.servers);
-        auto expected = config;
-        nd::enable_diagnostic_logging(expected);
-        QVERIFY(loaded == expected);
-        settings.sync();
-        QCOMPARE(settings.value("ui/logActions").toStringList(), QStringList{"process"});
-        QCOMPARE(settings.value("ui/logCommands").toString(), QString("none"));
-        QCOMPARE(settings.value("ui/logErrors").toString(), QString("with"));
-        const auto backups = QDir(directory.path()).entryList({"*.bak"}, QDir::Files);
-        QCOMPARE(backups.size(), 1);
-        const auto before = nd::load_config(std::filesystem::path(directory.filePath(backups[0]).toStdWString()));
-        QVERIFY(before == config);
-#endif
+    void diagnosticFiltersDoNotOverwriteNormalSettings() {
+        QSettings normal;
+        const auto before = normal.value("ui/logActions");
+        const auto beforeCommands = normal.value("ui/logCommands");
+        {
+            LogPanel panel(nullptr, nullptr, true);
+            panel.applyDiagnosticPreset();
+            panel.setShownActions({"process"});
+            panel.setCommandsView(LogCommandsView::without_commands);
+        }
+        normal.sync();
+        QCOMPARE(normal.value("ui/logActions"), before);
+        QCOMPARE(normal.value("ui/logCommands"), beforeCommands);
     }
     void diagnosticPresetShowsOnlyCustomUpstreamResults() {
         QTemporaryDir directory;

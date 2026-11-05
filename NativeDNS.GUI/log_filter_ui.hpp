@@ -4,6 +4,7 @@
 #include "log_display.hpp"
 #include <QDialog>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QSet>
 #include <QWidget>
 #include <deque>
@@ -35,7 +36,7 @@ enum class LogErrorsView { with_records, only, without_errors };
 
 class LogPanel final : public QWidget {
 public:
-    explicit LogPanel(QWidget* parent = nullptr, QSettings* settings = nullptr);
+    explicit LogPanel(QWidget* parent = nullptr, QSettings* settings = nullptr, bool transient = false);
     QLabel* countLabel() const {
         return count_;
     }
@@ -87,6 +88,7 @@ private:
     void saveFilter();
     void deleteFilter();
     void manageFilters();
+    std::unique_ptr<QTemporaryDir> transientDirectory_;
     std::unique_ptr<QSettings> ownedSettings_;
     QSettings* settings_;
     QLineEdit* input_;

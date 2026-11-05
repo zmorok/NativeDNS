@@ -3,6 +3,7 @@
 #include <nativedns/autostart.hpp>
 #include <iostream>
 #include <charconv>
+#include <algorithm>
 
 namespace {
 void log_startup_failure(const char* code, const std::string& message) noexcept {
@@ -37,8 +38,14 @@ void usage() {
 
 int main(int argc, char** native_argv) {
     try {
+        nd::platform::initialize_application_paths();
         const auto argv = nd::platform::command_line_arguments(argc, native_argv);
         argc = static_cast<int>(argv.size());
+        if (std::find(argv.begin(), argv.end(), "--layout-check") != argv.end()) {
+            std::cout << "root=" << nd::platform::path_to_utf8(nd::platform::application_root_directory())
+                      << "\ndriver=" << nd::platform::path_to_utf8(nd::platform::windivert_directory()) << '\n';
+            return 0;
+        }
         std::filesystem::path config_path;
         std::filesystem::path autostart_config;
         std::filesystem::path autostart_gui;

@@ -1,0 +1,8 @@
+find_package(Qt6 6.2 REQUIRED COMPONENTS Core Network)
+add_library(NativeDNS.DiagnosticArchive STATIC archive.cpp)
+target_link_libraries(NativeDNS.DiagnosticArchive PUBLIC Qt6::Core)
+target_include_directories(NativeDNS.DiagnosticArchive PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(NativeDNS.Diagnostics main.cpp windows_inspection.cpp)
+target_link_libraries(NativeDNS.Diagnostics PRIVATE NativeDNS.Core.Internal NativeDNS.DiagnosticArchive Qt6::Network CURL::libcurl advapi32)
+nativedns_copy_sodium_runtime(NativeDNS.Diagnostics)
+install(TARGETS NativeDNS.Diagnostics RUNTIME DESTINATION app/bin COMPONENT Runtime)

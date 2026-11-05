@@ -41,6 +41,8 @@ private:
     bool applyConfiguration();
     void syncConfigurationActions();
     bool restartCore();
+    std::string effectiveFingerprint() const;
+    std::string reloadRequest(const std::string& id) const;
     void requestCoreRestart();
     void applyFileLogging();
     void openServers();

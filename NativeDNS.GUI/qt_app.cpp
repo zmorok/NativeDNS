@@ -30,6 +30,8 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QInputDialog>
+#include <QProcess>
+#include <QProgressDialog>
 #include <QItemSelectionModel>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -86,12 +88,7 @@ nd::IpcResponse readCoreStatus(const std::string& endpoint = nd::core_pipe_name)
 }
 
 QString coreHostExecutable() {
-    return QCoreApplication::applicationDirPath() +
-#ifdef _WIN32
-           "/NativeDNSCoreHost.exe";
-#else
-           "/NativeDNSCoreHost";
-#endif
+    return QString::fromUtf8(nd::platform::path_to_utf8(nd::platform::core_host_executable()).c_str());
 }
 
 QMessageBox* coreControlFailureDialog(QWidget* parent, const QString& details) {
@@ -1463,7 +1460,7 @@ void NativeDnsWindow::buildUi() {
         return menu;
     };
 
-    log_ = new LogPanel(this);
+    log_ = new LogPanel(this, nullptr, diagnosticLogging_);
     setCentralWidget(log_);
     coreStatus_ = new QLabel(uiText("Core: unknown"), this);
     statusBar()->addPermanentWidget(log_->countLabel(), 1);
@@ -1473,6 +1470,30 @@ void NativeDnsWindow::buildUi() {
     auto* newCfg = addAction(file, "New Configuration");
     auto* import = addAction(file, "Import Configuration");
     auto* exportCfg = addAction(file, "Export Configuration");
+#ifdef _WIN32
+    auto* collectDiagnostics = addAction(file, "Collect diagnostic report...");
+    connect(collectDiagnostics, &QAction::triggered, this, [this, collectDiagnostics] {
+        bool accepted = false;
+        const auto host = QInputDialog::getText(this, uiText("Collect diagnostic report..."),
+            uiText("Domain to test:"), QLineEdit::Normal, q(config_.test_target), &accepted).trimmed();
+        if (!accepted || host.isEmpty()) return;
+        try { (void)nd::normalize_host(s(host)); }
+        catch (const std::exception& error) { QMessageBox::warning(this, "NativeDNS", q(error.what())); return; }
+        auto* process = new QProcess(this);
+        auto* progress = new QProgressDialog(uiText("Collecting diagnostic report..."), QString{}, 0, 0, this);
+        progress->setCancelButton(nullptr); progress->setWindowModality(Qt::WindowModal);
+        progress->setMinimumDuration(0); collectDiagnostics->setEnabled(false);
+        auto finish = [this, process, progress, collectDiagnostics](bool success) {
+            progress->close(); progress->deleteLater(); collectDiagnostics->setEnabled(true);
+            process->deleteLater();
+            if (success) QDesktopServices::openUrl(QUrl::fromLocalFile(qPath(nd::platform::application_root_directory() / "logs")));
+            else QMessageBox::warning(this, "NativeDNS", uiText("Diagnostic collection failed. Check the logs folder."));
+        };
+        connect(process, &QProcess::finished, this, [finish](int code, QProcess::ExitStatus status) { finish(code == 0 && status == QProcess::NormalExit); });
+        connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) { if (error == QProcess::FailedToStart) finish(false); });
+        process->start(qPath(nd::platform::gui_entrypoint()), {"--collect", "--quiet", "--host", host, "--config", qPath(configPath())});
+    });
+#endif
     file->addSeparator();
     auto* autostart = addAction(file, "Autostart");
     autostart->setCheckable(true);
@@ -1517,7 +1538,7 @@ void NativeDnsWindow::buildUi() {
     screen->setObjectName("logDetailsMenu");
     auto* group = new QActionGroup(this);
     group->setExclusive(true);
-    const int configuredLevel = std::clamp(static_cast<int>(config_.logging.screen), 0, 3);
+    const int configuredLevel = diagnosticLogging_ ? 3 : std::clamp(static_cast<int>(config_.logging.screen), 0, 3);
     for (int i = 0; i < 4; ++i) {
         static constexpr const char* levelKeys[]{"Errors Only", "Normal", "Verbose", "Debug"};
         auto* action = addAction(screen, levelKeys[i]);
@@ -1547,7 +1568,7 @@ void NativeDnsWindow::buildUi() {
     logMenu->addSeparator();
     auto* fileEnabled = addAction(logMenu, "Write diagnostic file");
     fileEnabled->setCheckable(true);
-    fileEnabled->setChecked(config_.logging.file_enabled);
+    fileEnabled->setChecked(diagnosticLogging_ || config_.logging.file_enabled);
     fileEnabled->setEnabled(!diagnosticLogging_);
     connect(fileEnabled, &QAction::toggled, this, [this](bool enabled) {
         config_.logging.file_enabled = enabled;
@@ -1556,7 +1577,7 @@ void NativeDnsWindow::buildUi() {
     auto* fileLevel = addSubMenu(logMenu, "File level");
     auto* fileGroup = new QActionGroup(this);
     fileGroup->setExclusive(true);
-    const int configuredFileLevel = std::clamp(static_cast<int>(config_.logging.file), 0, 3);
+    const int configuredFileLevel = diagnosticLogging_ ? 3 : std::clamp(static_cast<int>(config_.logging.file), 0, 3);
     for (int i = 0; i < 4; ++i) {
         static constexpr const char* levelKeys[]{"Errors Only", "Normal", "Verbose", "Debug"};
         auto* action = addAction(fileLevel, levelKeys[i]);
@@ -1771,17 +1792,17 @@ void NativeDnsWindow::buildUi() {
         try {
 #ifdef _WIN32
             // Registering a highest-privilege Scheduled Task requires elevation.
-            // Keep the Qt GUI unprivileged and elevate only NativeDNSCoreHost.exe,
+            // Keep the Qt GUI unprivileged and elevate only the CoreHost bootstrap,
             // which also acts as a tiny one-shot privileged helper.
             const QString coreHost =
-                QCoreApplication::applicationDirPath() + "/NativeDNSCoreHost.exe";
+                coreHostExecutable();
             if (!QFileInfo(coreHost).isFile())
-                throw std::runtime_error("NativeDNSCoreHost.exe is missing");
+                throw std::runtime_error("NativeDNS.CoreHost.exe is missing");
 
             QStringList args;
             if (enabled)
                 args << "--register-autostart" << qPath(configPath()) << "--gui-executable"
-                     << QCoreApplication::applicationFilePath();
+                     << qPath(nd::platform::gui_entrypoint());
             else
                 args << "--unregister-autostart";
 
@@ -1843,10 +1864,6 @@ void NativeDnsWindow::loadConfiguration() {
             config_ = nd::default_config();
             nd::save_config(config_, path);
         }
-        if (diagnosticLogging_) {
-            nd::enable_diagnostic_logging(config_);
-            nd::save_config(config_, path);
-        }
     } catch (const std::exception& e) {
         QMessageBox::critical(this, uiText("Configuration"), e.what());
         config_ = nd::default_config();
@@ -1855,7 +1872,6 @@ void NativeDnsWindow::loadConfiguration() {
 
 bool NativeDnsWindow::saveConfiguration() {
     try {
-        if (diagnosticLogging_) nd::enable_diagnostic_logging(config_);
         nd::save_config(config_, configPath());
         return true;
     } catch (const std::exception& e) {
@@ -1900,13 +1916,21 @@ void NativeDnsWindow::syncConfigurationActions() {
     prepareSystemDnsAction_->setToolTip(uiText(
         "Original Windows DNS encryption is restored on Stop or Exit, or on the next start after a crash. DNS addresses and hosts are preserved."));
 }
+std::string NativeDnsWindow::effectiveFingerprint() const {
+    auto effective = config_;
+    if (diagnosticLogging_) nd::enable_diagnostic_logging(effective);
+    return nd::configuration_fingerprint(effective);
+}
+std::string NativeDnsWindow::reloadRequest(const std::string& id) const {
+    return id + (diagnosticLogging_ ? "\tdiagnostics=1" : "\tdiagnostics=0");
+}
 bool NativeDnsWindow::restartCore() {
     reloadRejected_ = false;
     configurationConfirmed_ = false;
     try {
-        const auto expected = nd::configuration_fingerprint(config_);
+        const auto expected = effectiveFingerprint();
         const auto response =
-            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, expected, 10000);
+            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, reloadRequest(expected), 10000);
         if (response.status || response.payload != "RELOADED config_id=" + expected) {
             reloadRejected_ = true;
             throw std::runtime_error(response.status ? response.payload :
@@ -1935,14 +1959,15 @@ void NativeDnsWindow::requestCoreRestart() {
     if (exiting_ || restartOperationPending_.exchange(true))
         return;
     appendLocalLog(uiText("Reloading DNS configuration..."));
-    const auto expected = nd::configuration_fingerprint(config_);
+    const auto expected = effectiveFingerprint();
     QPointer<NativeDnsWindow> self(this);
-    QThreadPool::globalInstance()->start([self, expected] {
+    const auto captureRequest = reloadRequest(expected);
+    QThreadPool::globalInstance()->start([self, expected, captureRequest] {
         bool absent = false;
         QString failure;
         try {
             const auto response =
-                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, expected, 10000);
+                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, captureRequest, 10000);
             if (response.status || response.payload != "RELOADED config_id=" + expected)
                 failure = response.status ? q(response.payload) :
                     uiText("CoreHost did not confirm the expected configuration");
@@ -1980,8 +2005,8 @@ void NativeDnsWindow::applyFileLogging() {
     if (!saveConfiguration())
         return;
     try {
-        const auto payload = std::string(config_.logging.file_enabled ? "1" : "0") + '\t' +
-                             std::to_string(static_cast<unsigned>(config_.logging.file));
+        const auto payload = std::string(diagnosticLogging_ || config_.logging.file_enabled ? "1" : "0") + '\t' +
+                             std::to_string(diagnosticLogging_ ? 3u : static_cast<unsigned>(config_.logging.file));
         const auto response = nd::pipe_request(
             nd::core_pipe_name, nd::IpcOperation::configure_file_log, payload, 500);
         if (response.status)
@@ -2044,17 +2069,13 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
     if (coreStartOperationPending_.exchange(true))
         return;
     networkProbeTimer_.restart();
-    const QString helper = QCoreApplication::applicationDirPath() +
-#ifdef _WIN32
-                           "/NativeDNSCoreHost.exe";
-#else
-                           "/NativeDNSCoreHost";
-#endif
+    const QString helper = coreHostExecutable();
     QStringList args{"--config", qPath(configPath())};
     if (diagnosticLogging_) args << "--diagnostics";
     if (transparent)
         args << "--transparent";
     const auto configuration = configPath();
+    const auto captureRequest = reloadRequest(effectiveFingerprint());
     const auto launchState = coreLaunchState_;
     launchState->pending = true;
     launchState->cancelled = false;
@@ -2062,7 +2083,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
         setStatusText(uiText("Core: starting..."));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start(
-        [self, helper, args, configuration, transparent, reportFailure, launchState] {
+        [self, helper, args, configuration, transparent, reportFailure, launchState, captureRequest, diagnostic = diagnosticLogging_] {
             bool success = false, running = false;
             QString failure;
             try {
@@ -2087,6 +2108,12 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             } catch (const std::exception& error) {
                 failure = q(error.what());
             }
+            if (success && running) {
+                try {
+                    const auto applied = nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, captureRequest, 10000);
+                    if (applied.status) throw std::runtime_error(applied.payload);
+                } catch (const std::exception& error) { success = false; failure = q(error.what()); }
+            }
             if (!success && failure.isEmpty() && !launchState->cancelled) {
                 // A missing/timed-out IPC endpoint does not mean its process
                 // has exited. Never repeatedly launch into a held singleton.
@@ -2103,7 +2130,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             if (!success && failure.isEmpty() && !launchState->cancelled) {
                 bool launched = false;
 #ifdef _WIN32
-                if (transparent) {
+                if (transparent && !diagnostic) {
                     try {
                         launched = nd::start_autostart_core(fsPath(helper), configuration);
                     } catch (...) { /* Fall back to the normal elevation prompt. */
@@ -2513,7 +2540,7 @@ void NativeDnsWindow::refreshLogs() {
     if (logRefreshPending_.exchange(true))
         return;
     const auto request = std::to_string(logSequence_) + "\t0\t" +
-                         std::to_string(static_cast<unsigned>(config_.logging.screen));
+                         std::to_string(diagnosticLogging_ ? 3u : static_cast<unsigned>(config_.logging.screen));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start([self, request] {
         QString payload;

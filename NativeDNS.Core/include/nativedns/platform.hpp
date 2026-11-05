@@ -29,9 +29,13 @@ struct ProcessIdentity {
 std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable);
 void force_stop_process(const std::filesystem::path& executable, ProcessIdentity identity);
 std::filesystem::path executable_path();
-// Root of the staged application. On Windows executables live in the root;
-// Linux packages place them in <root>/bin.
+// Root of the staged application, independent of its internal binary directory.
 std::filesystem::path application_root_directory();
+std::filesystem::path application_binary_directory();
+std::filesystem::path gui_entrypoint();
+std::filesystem::path core_host_executable();
+std::filesystem::path windivert_directory();
+void initialize_application_paths();
 std::filesystem::path user_config_directory();
 bool is_elevated();
 // Windows can release interception handles by exiting after stuck cleanup.
