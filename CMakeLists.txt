@@ -99,8 +99,8 @@ if(WIN32)
     DESTINATION . COMPONENT Runtime)
   install(FILES "${NATIVEDNS_WINDIVERT_ROOT}/LICENSE" DESTINATION licenses RENAME WinDivert.txt COMPONENT Runtime)
   install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/diagnose-service.ps1" DESTINATION . COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/run-diagnostics.cmd" DESTINATION . COMPONENT Runtime)
-  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/start-diagnostic-mode.cmd" DESTINATION . COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/run-diagnostics.bat" DESTINATION . COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/start-diagnostic-mode.bat" DESTINATION . COMPONENT Runtime)
   install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/enable-diagnostics.ps1" DESTINATION . COMPONENT Runtime)
 
   # libsodium is linked dynamically on Windows so it uses the same dynamic

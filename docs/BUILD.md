@@ -201,7 +201,7 @@ For portable/AppImage generation, provide `linuxdeploy` and `linuxdeploy-plugin-
 Configure with `-DNATIVEDNS_DIAGNOSTIC_BUILD=ON` to make GUI and CoreHost enable
 diagnostic capture on every launch. The same profile can be requested explicitly
 with `NativeDNS --diagnostics` or `NativeDNSCoreHost --diagnostics`.
-Windows packages include `start-diagnostic-mode.cmd` for launching this profile
+Windows packages include `start-diagnostic-mode.bat` for launching this profile
 by double-click after exiting the current NativeDNS instance.
 It enables Debug for screen/file capture and keeps file recording enabled across
 GUI config imports and CoreHost reloads. The GUI initially shows only completed
@@ -246,7 +246,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./diagnose-service.ps1
 ```
 
 Run it from the package directory while NativeDNS is running. For a double-click
-launch on Windows, use `run-diagnostics.cmd` in the same directory. Optional script
+launch on Windows, use `run-diagnostics.bat` in the same directory. Optional script
 parameters include `-HostName`, `-ConfigPath`, `-PackageDirectory`, and `-OutputPath`.
 The script compares the Windows resolver with configured NativeDNS A/AAAA/HTTPS
 queries, reads explicit Edge DNS mode/policies, records driver service paths and
