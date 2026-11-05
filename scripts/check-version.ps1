@@ -74,7 +74,7 @@ $checks = @(
         Patterns = @(
             'NativeDNS-\$version-windows-x64-portable',
             '/DAppVersion=\$version',
-            'NativeDNS-\$version-windows-x64-setup'
+            'build-portable\.ps1'
         )
     },
     @{

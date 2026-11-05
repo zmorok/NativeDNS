@@ -20,12 +20,12 @@ See [build and diagnostics](docs/BUILD.md) for details.
 
 ## Download
 
-The Windows release packages for [v0.4.6](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.6):
+The Windows release packages for [v0.4.7](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.7):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.6/NativeDNS-0.4.6-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.6/NativeDNS-0.4.6-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.7/NativeDNS-0.4.7-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.7/NativeDNS-0.4.7-windows-x64-portable.zip)
 
-Linux packages are not part of this release. Linux interception still needs validation on a real privileged host.
+These release packages require Windows 10 or Windows 11 x64.
 
 ## Features
 

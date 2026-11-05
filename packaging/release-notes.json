@@ -173,5 +173,35 @@
     "category": "other",
     "en": "Added Enter to expand or collapse a log record, keeping only one record expanded. Enter inside details collapses them and returns selection to the record line.",
     "ru": "Enter раскрывает и сворачивает запись журнала; одновременно раскрыта только одна запись. Enter внутри подробностей сворачивает их и возвращает выделение на основную строку."
+  },
+  "8916f58c1f030800cf679999aa8f2c3e873edaf2": {
+    "category": "interception_corehost",
+    "en": "Added recoverable Windows DNS preparation while preserving configured DNS addresses and hosts. Added network conflict inspection, configuration identity checks and UTF-8 path handling.",
+    "ru": "Добавлена подготовка DNS Windows с восстановлением настроек, сохранением DNS-адресов и файла hosts. Добавлены диагностика сетевых конфликтов, проверка соответствия конфигураций и поддержка путей UTF-8."
+  },
+  "4a474f81b49475989b7599673d28d2bc4dab9747": {
+    "category": "other",
+    "en": "Improved diagnostic launch entry points in the Windows package.",
+    "ru": "Улучшен запуск диагностики из комплекта приложения для Windows."
+  },
+  "057b13097ccca763d396c1dbbdb59511392a00e8": {
+    "category": "other",
+    "en": "Reorganized Windows modules, libraries and WinDivert files under app/. Added NativeDNS.Debug.exe with full Debug capture and a native diagnostic collector that saves reports and logs as ZIP archives.",
+    "ru": "Модули, библиотеки и файлы WinDivert распределены по подпапкам app/. Добавлены NativeDNS.Debug.exe с подробным журналом Debug и встроенный сборщик диагностики, сохраняющий отчёты и журналы в ZIP."
+  },
+  "9f9937e7dd34ae38b7e40315fe62c60758eb690e": {
+    "category": "other",
+    "en": "Diagnostic mode inherits Filters and Selected record visibility without overwriting normal-mode display preferences.",
+    "ru": "Диагностический режим наследует видимость Filters и Selected record, сохраняя настройки отображения обычного режима."
+  },
+  "4baa081e359acab147584f119a9769cf6efc916f": {
+    "category": "other",
+    "en": "Opened application windows and notifications are brought to the front. Repeated launches activate the existing instance, with modal dialogs retaining priority.",
+    "ru": "Открываемые окна приложения и уведомления выводятся на передний план. Повторный запуск активирует текущий экземпляр с сохранением приоритета модальных диалогов."
+  },
+  "fcccf6a14c2747152e2f8c2c88eec1f8b179c493": {
+    "category": "other",
+    "en": "Moved certificate, hostname and pin validation to local TLS fixtures. Nightly checks retain live DoH, DoT and DNSCrypt coverage without depending on badssl.com.",
+    "ru": "Проверки сертификатов, имён серверов и pin перенесены на локальные TLS-серверы. Ночные проверки сохраняют тестирование внешних DoH, DoT и DNSCrypt без зависимости от badssl.com."
   }
 }
