@@ -56,6 +56,45 @@ void openMenu(QMenu* menu) {
 class LogFilterTests final : public QObject {
     Q_OBJECT
 private slots:
+    void visibilitySurvivesModeSwitch_data() {
+        QTest::addColumn<bool>("filters");
+        QTest::addColumn<bool>("selected");
+        QTest::newRow("both hidden") << false << false;
+        QTest::newRow("filters only") << true << false;
+        QTest::newRow("selected only") << false << true;
+        QTest::newRow("both shown") << true << true;
+    }
+    void visibilitySurvivesModeSwitch() {
+        QFETCH(bool, filters);
+        QFETCH(bool, selected);
+        QTemporaryDir directory;
+        const auto file = directory.filePath("normal.ini");
+        {
+            QSettings settings(file, QSettings::IniFormat);
+            LogPanel normal(nullptr, &settings);
+            QVERIFY(normal.setFiltersShown(filters));
+            QVERIFY(normal.setSelectedRecordShown(selected));
+        }
+        {
+            QSettings settings(file, QSettings::IniFormat);
+            LogPanel diagnostic(nullptr, &settings, true);
+            diagnostic.applyDiagnosticPreset();
+            QCOMPARE(diagnostic.filtersShown(), filters);
+            QCOMPARE(diagnostic.selectedRecordShown(), selected);
+            QVERIFY(diagnostic.setFiltersShown(!filters));
+            QVERIFY(diagnostic.setSelectedRecordShown(!selected));
+        }
+        {
+            QSettings settings(file, QSettings::IniFormat);
+            LogPanel normal(nullptr, &settings);
+            QCOMPARE(normal.filtersShown(), filters);
+            QCOMPARE(normal.selectedRecordShown(), selected);
+            LogPanel diagnostic(nullptr, &settings, true);
+            diagnostic.applyDiagnosticPreset();
+            QCOMPARE(diagnostic.filtersShown(), filters);
+            QCOMPARE(diagnostic.selectedRecordShown(), selected);
+        }
+    }
     void diagnosticFiltersDoNotOverwriteNormalSettings() {
         QSettings normal;
         const auto before = normal.value("ui/logActions");

@@ -208,6 +208,8 @@ A second launch activates the current instance; a request for a different mode
 shows a message asking the user to exit first. Exit through the application menu
 before switching modes. Debug logging is a runtime profile: the saved XML logging
 settings and normal GUI log filters are retained for the next normal launch.
+Debug inherits the saved visibility of Filters and Selected record; changes to
+these controls during a diagnostic session stay within that session.
 Config imports and reloads retain the active runtime profile.
 
 The diagnostic GUI initially shows only completed Process results and related
