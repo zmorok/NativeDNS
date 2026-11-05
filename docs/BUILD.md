@@ -277,6 +277,20 @@ cmake --build build/fuzz --target fuzz_dns fuzz_dnscrypt fuzz_config fuzz_ipc
 
 External secure-transport tests remain opt-in locally through `NATIVEDNS_LIVE_TESTS`; the scheduled CI workflow runs them nightly so provider/network failures are kept separate from deterministic pull-request checks.
 
+Linux certificate validation uses the loopback-only `secure_local_tls` test when
+Python 3.8+ and the OpenSSL command-line tool are available. It creates temporary
+CA/server certificates and checks a real successful DoH answer, expired and
+wrong-host certificates, an incorrect pin, and a connection reset. Private CA
+trust is injected only into the `secure_tests` executable through linker wrappers;
+production binaries and system certificate stores are unchanged. The test uses
+ephemeral ports and requires no external DNS or HTTPS service. Python/OpenSSL
+are test tools, not application runtime dependencies.
+
+The nightly workflow requires these tools and runs `ctest -L tls` before external
+DNS checks. External `secure_live` still checks real DoH/DoT resolution and explicit
+bootstrap, while `dnscrypt_live` checks real DNSCrypt. Network/provider failures
+in those checks remain failures; a reset is never accepted as certificate validation.
+
 On Windows, `windivert_live_tests` is a separate opt-in executable built with
 the test targets. Close NativeDNS and other active DNS interceptors first, then
 run it from an administrator terminal:

@@ -9,15 +9,40 @@ void check(bool value, const char* message) {
     if (!value)
         throw std::runtime_error(message);
 }
+int local_tls_checks(char** argv) {
+    auto server = [](const char* port) {
+        nd::Server result;
+        result.protocol = nd::Protocol::doh;
+        result.url = "https://localhost:" + std::string(port) + "/dns-query";
+        result.ip = "127.0.0.1";
+        result.timeout_ms = 3000;
+        return result;
+    };
+    const auto valid = server(argv[2]);
+    const auto positive = nd::test_server(valid);
+    if (!positive.success || positive.addresses != std::vector<std::string>{"192.0.2.53"})
+        throw std::runtime_error("Local trusted DoH control failed: " + positive.error_code + " " +
+                                 positive.message);
+    std::cout << "PASS trusted certificate and real DoH answer\n";
+    const auto expect = [](const nd::Server& candidate, const char* code, const char* name) {
+        const auto result = nd::test_server(candidate);
+        if (result.success || result.error_code != code)
+            throw std::runtime_error(std::string(name) + ": expected " + code + ", got " +
+                                     result.error_code + " " + result.message);
+        std::cout << "PASS " << name << ": " << result.error_code << '\n';
+    };
+    expect(server(argv[3]), "TLS_CERTIFICATE", "expired certificate");
+    expect(server(argv[4]), "TLS_CERTIFICATE", "wrong certificate hostname");
+    auto pinned = valid;
+    pinned.hashes = {"sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="};
+    expect(pinned, "TLS_PIN", "wrong certificate pin");
+    expect(server(argv[5]), "TLS_HTTP", "reset is a transport failure, not a certificate result");
+    return 0;
+}
 int main(int argc, char** argv) {
     try {
-        const auto prepare = [](nd::Server value) {
-            auto config = nd::default_config();
-            value.id = 1;
-            config.servers.push_back(std::move(value));
-            nd::prepare_secure_endpoints(config);
-            return config.servers.front();
-        };
+        if (argc == 6 && std::string(argv[1]) == "--local-tls")
+            return local_tls_checks(argv);
 #ifdef _WIN32
         check((curl_version_info(CURLVERSION_NOW)->features & CURL_VERSION_HTTP2) != 0,
               "Bundled Windows libcurl must support HTTP/2");
@@ -158,44 +183,15 @@ int main(int argc, char** argv) {
                     }
                 }
             server.enabled = true;
-            server.url = "https://expired.badssl.com/";
-            server.timeout_ms = 5000;
-            server = prepare(server);
-            const auto expired = nd::test_server(server);
-            std::cout << "expired certificate: " << expired.error_code << " " << expired.message
-                      << '\n';
-            bool live_failed = expired.error_code != "TLS_CERTIFICATE";
-            if (live_failed)
-                std::cerr << "Expired certificate check failed: " << expired.error_code << '\n';
-            server.url = "https://wrong.host.badssl.com/";
-            server.ip.clear();
-            server = prepare(server);
-            const auto wrong = nd::test_server(server);
-            std::cout << "wrong certificate name: " << wrong.error_code << '\n';
-            if (wrong.error_code != "TLS_CERTIFICATE") {
-                live_failed = true;
-                std::cerr << "Wrong hostname check failed: " << wrong.error_code << '\n';
-            }
             server.url = "https://xbox-dns.ru/dns-query";
-            server.ip.clear();
-            server = prepare(server);
-            server.hashes = {"sha256//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="};
-            const auto pin = nd::test_server(server);
-            std::cout << "wrong pin: " << pin.error_code << '\n';
-            if (pin.error_code != "TLS_PIN") {
-                live_failed = true;
-                std::cerr << "Wrong pin check failed: " << pin.error_code << '\n';
-            }
+            server.timeout_ms = 5000;
             server.hashes.clear();
             server.ip.clear();
             server.bootstrap = {"1.1.1.1"};
             const auto bootstrapped = nd::test_server(server);
             std::cout << "explicit bootstrap: " << bootstrapped.success << ' '
                       << bootstrapped.error_code << '\n';
-            if (!bootstrapped.success)
-                live_failed = true;
-            check(!live_failed,
-                  "One or more live TLS/bootstrap checks failed; see individual results");
+            check(bootstrapped.success, "Live explicit bootstrap failed; see the resolver result");
         }
         std::cout << "secure transport checks passed\n";
         return 0;
