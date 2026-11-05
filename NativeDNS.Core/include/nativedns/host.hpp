@@ -1,6 +1,7 @@
 #pragma once
 #include <nativedns/interception.hpp>
 #include <nativedns/ipc.hpp>
+#include <nativedns/network_preparation.hpp>
 #include <condition_variable>
 
 namespace nd {
@@ -12,7 +13,8 @@ public:
              uint16_t local_port = 0,
              std::string pipe_name = core_pipe_name,
              InterceptionMode mode = InterceptionMode::local_proxy,
-             std::filesystem::path config_path = {});
+             std::filesystem::path config_path = {},
+             bool diagnostic_logging = false);
     ~CoreHost();
     void start();
     void stop();
@@ -37,6 +39,10 @@ public:
 
 private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
+    void log_configuration();
+    void inspect_network();
+    bool prepare_network();
+    void restore_network() noexcept;
     mutable std::mutex mutex_;
     std::mutex reload_mutex_;
     std::mutex ipc_lifecycle_mutex_;
@@ -50,12 +56,14 @@ private:
     uint16_t local_port_;
     std::string pipe_name_;
     std::filesystem::path config_path_;
+    bool diagnostic_logging_ = false;
     std::string log_pipe_name_;
     Logger logger_;
     std::filesystem::path file_log_path_;
     bool file_log_enabled_ = false;
     std::shared_ptr<Router> router_;
     std::unique_ptr<IInterceptionProvider> interception_;
+    std::unique_ptr<NetworkPreparation> network_preparation_;
     std::unique_ptr<PipeServer> ipc_;
     std::unique_ptr<PipeServer> log_ipc_;
     std::unique_ptr<PipeServer> shutdown_ipc_;

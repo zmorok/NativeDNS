@@ -56,7 +56,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    NativeDnsWindow window(background);
+    const bool diagnostics = NATIVEDNS_DIAGNOSTIC_DEFAULT != 0 || app.arguments().contains("--diagnostics");
+    NativeDnsWindow window(background, diagnostics);
     exitDeadline = nd::platform::watch_shutdown_deadline(
         [signal = window.exitConfirmedSignal()] { return signal->load(); });
     singleInstance.setActivationHandler([&window] { window.showAndActivate(); });

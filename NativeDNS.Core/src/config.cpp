@@ -401,9 +401,10 @@ RuntimeOptions runtime_options(const Config& config) {
             found = config.settings.find("yoga.settings." + key);
         return found == config.settings.end() ? nullptr : &found->second;
     };
-    const auto boolean = [&](const std::string& key) {
+    const auto boolean = [&](const std::string& key, bool fallback = false) {
         const auto text = value(key);
-        if (!text || *text == "0" || *text == "false")
+        if (!text) return fallback;
+        if (*text == "0" || *text == "false")
             return false;
         if (*text == "1" || *text == "true")
             return true;
@@ -426,6 +427,7 @@ RuntimeOptions runtime_options(const Config& config) {
     options.intercept_others = boolean("interceptOthers");
     options.captive_portal_detection = boolean("captivePortalDetection");
     options.ignore_interface_down = boolean("ignore_rule_if_interface_down");
+    options.prepare_system_dns = boolean("windowsPrepareSystemDns", true);
     options.ttl_min = number("ttlMin", 0);
     options.ttl_max = number("ttlMax", 2147483647);
     if (options.ttl_min > options.ttl_max)

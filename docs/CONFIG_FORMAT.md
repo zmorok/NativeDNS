@@ -8,6 +8,12 @@ Current schema:
 schemaVersion = 1
 ```
 
+The GUI keeps its working configuration in `%LOCALAPPDATA%\NativeDNS\NativeDNS.xml`
+on Windows and the `nativedns` directory under the XDG configuration directory on Linux.
+Use **File > Import Configuration** to apply an XML file from another computer.
+Copying an XML file beside the executable does not import it. The GUI log shows
+the working file path. CoreHost also accepts an explicit `--config` path.
+
 ## Model
 
 The configuration contains:
@@ -30,11 +36,74 @@ The `Logging` element controls the live GUI log and the rotating diagnostic file
 File logging is enabled at the normal level for new configurations. The log includes DNS routing plus startup, environment, interception, IPC, and shutdown diagnostics. On Windows, the environment row shows the OS edition, architecture, display version, and full build number. The file rotates at 4 MiB, gives each new segment its own recording-start timestamp, and retains three previous files. A fatal CoreHost startup error is written to the default diagnostic log when possible even if configuration loading itself fails.
 
 Saving servers or rules in the GUI applies the new configuration to the running CoreHost without stopping DNS interception. If CoreHost rejects the new configuration, its previous routing state remains active.
+Explicit rejection also restores the previous GUI configuration and saved file.
+If a configuration is saved while CoreHost is starting or its reply is unavailable,
+the import dialog reports pending confirmation instead of claiming it was applied.
+
+Diagnostic builds (or `--diagnostics`) preset both capture levels to Debug and
+enable file recording, including after imports/reloads. Their initial GUI view
+shows only completed Process results and related errors for custom upstreams.
+The full file log also retains Bypass, Block and service diagnostics. Normal log
+menus are locked at Debug during diagnostic capture; changing display filters
+does not lower file capture. `server_id=0` identifies the original-resolver sentinel.
+
+`CONFIG_SUMMARY` records the absolute loaded path, application version, server/rule
+counts and a `config_id` at the normal log level, on startup and after reload.
+The ID is SHA-256 of the canonical serialized configuration, so XML formatting
+does not affect it. Verbose logging also records ordered rules. The GUI sends
+the expected ID when reloading; a different saved configuration is rejected with
+`CONFIG_MISMATCH` before replacing active routing.
+
+Windows logs and IPC text use UTF-8 independently of the ANSI/OEM/console code
+pages recorded in `SYSTEM_ENVIRONMENT`. CoreHost and CLI paths are read from the
+Unicode command line; changing `chcp` is not required for configuration or file logs.
+
+Transparent mode inspects the network before interception starts, after config
+reload, and after network changes. `DNS_HOSTS_OVERRIDE` identifies hosts-file names
+that overlap effective custom Process/Block rules. Windows interface DoH properties,
+machine DNS-encryption policy values, NRPT rule counts and active adapter DNS
+addresses are also logged. Unavailable checks are reported rather than treated
+as proof that no override exists. The hosts file is inspected read-only and is
+never edited by NativeDNS. Browser profiles are not edited. The existing
+`clearDnsCache` option flushes the system DNS cache after interception
+start/reload; it cannot clear application caches. Browser Secure DNS and VPN DNS
+need separate inspection. An `HTTPS` query type in a DNS log is a resource-record
+type and does not identify DNS-over-HTTPS transport.
+
+Windows transparent mode enables `windowsPrepareSystemDns` by default. After
+interception starts, if enabled rules require a custom Process upstream or
+Block, it temporarily disables configured per-server Windows
+DoH/DoT and adapter DDR so queries can reach the port-53 interceptor. Static/DHCP
+DNS addresses, DNS suffixes, registration, NRPT rules, machine encryption
+policies and browser profiles are not changed. The hosts file is never modified.
+Unsupported Windows APIs/properties or policy refusals produce explicit
+`DNS_PREPARATION_*` findings instead of silently claiming successful preparation.
+The Windows Configuration menu exposes this setting as a checkable action.
+
+Original encryption flags, templates, hostnames and ports are persisted before
+each change in `%PROGRAMDATA%\NativeDNS.NetworkRecovery`, writable only by
+Administrators/SYSTEM. Stop/Exit restores them in reverse order. The next
+transparent start recovers a journal left after an abnormal termination before
+preparing the current network. Setting `windowsPrepareSystemDns=0` also triggers
+restoration on reload. Actual changes flush the Windows DNS cache independently
+of `clearDnsCache`; application/browser caches require separate handling.
+
+Recovery preserves later external edits. A changed encryption property is
+reported as `DNS_PREPARATION_CONFLICT` and its original is retained in the
+journal. Removed DNS addresses are not recreated; disconnected adapters retain
+their recovery records for a later retry. Failed preparation does not stop
+otherwise working interception. Local proxy mode and Linux do not alter system
+DNS encryption. Browser Secure DNS remains separate from Windows DNS settings.
 
 GUI rows begin with local time in `[dd.MM HH:mm:ss]` form. File rows use `[dd.MM.yyyy HH:mm:ss]` so exported diagnostics retain the year.
 The GUI retains the newest 2,000 live-log rows; older rows are removed from the display only and remain available in the diagnostic file.
 
 At the normal level, each successful DNS operation is one combined route/result row containing the hostname, query type, action, readable server transport, matched rule, and elapsed upstream time. Verbose/debug levels add transport internals; failures remain separate error-level rows.
+
+Completed upstream route rows also include `rcode`, `address_count`, and up to eight
+`answer_ip` values, making it possible to compare the selected DNS route with the
+addresses used by the OS/browser. `address_count=0` is not by itself a DNS error:
+for example, an HTTPS resource-record response need not contain an A/AAAA address.
 
 Server protocol values currently represented by the model include:
 
@@ -154,6 +223,7 @@ take precedence over imported `yoga.settings.` keys. Boolean values accept
 | Key | Windows behavior |
 |---|---|
 | `clearDnsCache` | Flush the Windows resolver cache after Start and successful Reload. Failures are logged. |
+| `windowsPrepareSystemDns` | Default `1`; temporarily disable Windows DNS encryption in transparent mode and restore it on Stop/Exit or the next start after a crash. |
 | `ttlMin`, `ttlMax` | Clamp ordinary RR TTLs in Process replies before caching; range 0..2147483647, minimum <= maximum. |
 | `blockTcpPort53` | Reject external TCP/53 with a reset, retaining Core-owned upstream sockets. |
 | `interceptOthers` | Include third-party injected packets when enabled; changing it requires a CoreHost restart. |

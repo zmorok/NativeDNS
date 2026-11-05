@@ -38,6 +38,10 @@ bool is_elevated();
 // Linux must finish nftables cleanup and currently has no forced-exit fallback.
 std::jthread watch_shutdown_deadline(std::function<bool()> shutdown_requested);
 std::string system_summary();
+// Application text is UTF-8, independently of the Windows ANSI/OEM code pages.
+std::string path_to_utf8(const std::filesystem::path& path);
+std::filesystem::path path_from_utf8(const std::string& text);
+std::vector<std::string> command_line_arguments(int argc, char** argv);
 
 enum class InstanceScope { session, machine };
 class ProcessInstanceLock {

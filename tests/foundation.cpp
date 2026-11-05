@@ -10,12 +10,20 @@
 #include <fstream>
 #include <cctype>
 #include <algorithm>
+#ifdef NATIVEDNS_TEST_LEGACY_CODEPAGE
+#include <windows.h>
+#endif
 void check(bool value, const char* message = "foundation assertion failed") {
     if (!value)
         throw std::runtime_error(message);
 }
 int main() {
     try {
+#ifdef NATIVEDNS_TEST_LEGACY_CODEPAGE
+        std::cout << "Test ANSI code page=" << GetACP() << '\n';
+        if (GetACP() != 1251)
+            return 77;
+#endif
         check(NativeDns_GetApiVersion() == 1);
         {
             nd::detail::BoundedExecutor executor;
@@ -152,6 +160,26 @@ int main() {
         }
         check(timestamped_file_count == 3, "timestamped log retention");
         std::filesystem::remove(directory);
+        {
+            const auto unicode_directory = std::filesystem::temp_directory_path() /
+                nd::platform::path_from_utf8("NativeDNS-тест-日本語-😀-" + std::to_string(nd::platform::process_id()));
+            std::filesystem::create_directories(unicode_directory);
+            const auto unrelated = unicode_directory / nd::platform::path_from_utf8("чужой-файл-日本語.txt");
+            { std::ofstream file(unrelated); file << "keep"; }
+            const auto unicode_log = nd::timestamped_log_path(unicode_directory);
+            const std::string message = "Сервер 日本語 😀";
+            logger.configure_file(true, nd::Level::normal, unicode_log, 1024, 2);
+            logger.write(nd::Level::normal, "UNICODE", message);
+            logger.configure_file(false, nd::Level::normal, {});
+            std::ifstream file(unicode_log, std::ios::binary);
+            const std::string contents((std::istreambuf_iterator<char>(file)), {});
+            check(contents.find(message) != std::string::npos, "file log must retain UTF-8 bytes");
+            file.close();
+            check(std::filesystem::exists(unrelated), "log pruning removed an unrelated Unicode file");
+            std::filesystem::remove(unicode_log);
+            std::filesystem::remove(unrelated);
+            std::filesystem::remove(unicode_directory);
+        }
         std::cout << "foundation passed\n";
         return 0;
     } catch (const std::exception& error) {

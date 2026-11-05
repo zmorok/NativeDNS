@@ -21,7 +21,7 @@ class QMessageBox;
 
 class NativeDnsWindow final : public QMainWindow {
 public:
-    explicit NativeDnsWindow(bool background = false);
+    explicit NativeDnsWindow(bool background = false, bool diagnostic_logging = false);
     ~NativeDnsWindow() override;
 
     void ensureCoreStarted();
@@ -39,6 +39,7 @@ private:
     void loadConfiguration();
     bool saveConfiguration();
     bool applyConfiguration();
+    void syncConfigurationActions();
     bool restartCore();
     void requestCoreRestart();
     void applyFileLogging();
@@ -58,10 +59,12 @@ private:
     std::filesystem::path configPath() const;
 
     nd::Config config_;
+    bool diagnosticLogging_ = false;
     LogPanel* log_ = nullptr;
     QLabel* coreStatus_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
     QAction* hideToTrayAction_ = nullptr;
+    QAction* prepareSystemDnsAction_ = nullptr;
     QPointer<UpdateDialog> updateDialog_;
     QPointer<QMessageBox> coreControlDialog_;
     QString lastCoreStatus_, lastCoreContact_;
@@ -77,6 +80,7 @@ private:
     bool networkAvailable_ = false;
     bool restartWhenNetworkReturns_ = false;
     bool reloadRejected_ = false;
+    bool configurationConfirmed_ = false;
     bool networkErrorLogged_ = false;
     bool coreShutdownAttempted_ = false;
     bool coreControlErrorLogged_ = false;

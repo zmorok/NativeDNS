@@ -10,6 +10,7 @@ struct LogRecord {
     QDateTime timestamp;
     QString code, message, address, dnsType, rule, action;
     bool error = false;
+    quint32 upstreamId = 0;
 };
 
 class LogFilter {

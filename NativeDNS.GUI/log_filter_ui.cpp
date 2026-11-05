@@ -460,6 +460,10 @@ void LogPanel::renderRecord(const LogRecord& record) {
     ++visible_;
 }
 bool LogPanel::matches(const LogRecord& record) const {
+    if (customUpstreamsOnly_ &&
+        (record.action != "process" || record.address.isEmpty() || !record.upstreamId ||
+         (record.code != "DNS_ROUTE" && !record.error)))
+        return false;
     if (filtersShown_ && !filter_.matches(record))
         return false;
     if ((errorsView_ == LogErrorsView::only && !record.error) ||
@@ -701,8 +705,21 @@ bool LogPanel::setShownActions(const QSet<QString>& actions) {
         return false;
     }
     shownActions_ = QSet<QString>(selected.begin(), selected.end());
+    customUpstreamsOnly_ = false;
     rebuild();
     return true;
+}
+void LogPanel::applyDiagnosticPreset() {
+    input_->clear();
+    appliedExpression_.clear();
+    selectedId_.clear();
+    QString error;
+    filter_ = *LogFilter::compile({}, error);
+    setShownActions({"process"});
+    setCommandsView(LogCommandsView::without_commands);
+    setErrorsView(LogErrorsView::with_records);
+    customUpstreamsOnly_ = true;
+    rebuild();
 }
 bool LogPanel::setLogView(LogView view) {
     settings_->setValue("ui/logView", logViewKey(view));

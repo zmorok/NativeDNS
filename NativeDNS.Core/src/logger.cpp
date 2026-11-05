@@ -23,7 +23,7 @@ const char* level_name(Level level) {
     return "UNKNOWN";
 }
 bool is_timestamped_log_path(const std::filesystem::path& path) {
-    const auto name = path.filename().string();
+    const auto name = platform::path_to_utf8(path.filename());
     if (name.size() != 29 || !name.starts_with("NativeDNS-") || !name.ends_with(".log") ||
         name[16] != '-')
         return false;

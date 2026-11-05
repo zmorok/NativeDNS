@@ -20,6 +20,9 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
   src/ipc_wire.cpp
   src/fault_injection.cpp
   src/network.cpp
+  src/text.cpp
+  src/network_preflight.cpp
+  src/network_preparation.cpp
 )
 
 if(WIN32)
@@ -28,6 +31,8 @@ if(WIN32)
     src/platform/windows/process_control.cpp
     src/platform/windows/network.cpp
     src/platform/windows/network_policy.cpp
+    src/platform/windows/recovery_store.cpp
+    src/platform/windows/network_preparation.cpp
     src/platform/windows/interception_conflicts.cpp
     src/platform/windows/dns_transport.cpp
     src/platform/windows/local_proxy.cpp
@@ -43,6 +48,7 @@ else()
     src/platform/linux/platform.cpp
     src/platform/linux/process_control.cpp
     src/platform/linux/network.cpp
+    src/platform/linux/network_preflight.cpp
     src/platform/linux/dns_transport.cpp
     src/platform/linux/local_proxy.cpp
     src/platform/linux/linux_interception.cpp
@@ -84,6 +90,7 @@ foreach(target NativeDNS.Core NativeDNS.Core.Internal)
 endforeach()
 
 add_executable(NativeDNS.CoreHost host/main.cpp)
+target_compile_definitions(NativeDNS.CoreHost PRIVATE NATIVEDNS_DIAGNOSTIC_DEFAULT=$<BOOL:${NATIVEDNS_DIAGNOSTIC_BUILD}>)
 target_link_libraries(NativeDNS.CoreHost PRIVATE NativeDNS.Core.Internal)
 set_target_properties(NativeDNS.CoreHost PROPERTIES OUTPUT_NAME NativeDNSCoreHost)
 if(WIN32)

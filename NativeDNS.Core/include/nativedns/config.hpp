@@ -25,6 +25,7 @@ void validate(const Config& config);
 struct RuntimeOptions {
     bool clear_dns_cache = false, block_tcp53 = false, intercept_others = false;
     bool captive_portal_detection = false, ignore_interface_down = false;
+    bool prepare_system_dns = true;
     uint32_t ttl_min = 0, ttl_max = 2147483647;
 };
 RuntimeOptions runtime_options(const Config& config);

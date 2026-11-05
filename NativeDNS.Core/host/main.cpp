@@ -29,18 +29,21 @@ nd::Server default_original() {
 }
 
 void usage() {
-    std::cout << "NativeDNSCoreHost --config <file> [--transparent] [--port N]\n"
+    std::cout << "NativeDNSCoreHost --config <file> [--transparent] [--port N] [--diagnostics]\n"
               << "NativeDNSCoreHost --register-autostart <config> [--gui-executable <file>]\n"
               << "NativeDNSCoreHost --unregister-autostart\n";
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char** native_argv) {
     try {
+        const auto argv = nd::platform::command_line_arguments(argc, native_argv);
+        argc = static_cast<int>(argv.size());
         std::filesystem::path config_path;
         std::filesystem::path autostart_config;
         std::filesystem::path autostart_gui;
         bool transparent = false;
+        bool diagnostic_logging = NATIVEDNS_DIAGNOSTIC_DEFAULT != 0;
         bool register_autostart = false;
         bool unregister_autostart = false;
         nd::platform::ProcessIdentity force_target;
@@ -49,9 +52,11 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--config" && i + 1 < argc)
-                config_path = argv[++i];
+                config_path = nd::platform::path_from_utf8(argv[++i]);
             else if (arg == "--transparent")
                 transparent = true;
+            else if (arg == "--diagnostics")
+                diagnostic_logging = true;
             else if (arg == "--force-shutdown" && i + 2 < argc) {
                 const std::string pid = argv[++i], started = argv[++i];
                 const auto [pid_end, pid_error] =
@@ -73,11 +78,11 @@ int main(int argc, char** argv) {
                 port = static_cast<uint16_t>(parsed);
             } else if (arg == "--register-autostart" && i + 1 < argc) {
                 register_autostart = true;
-                autostart_config = argv[++i];
+                autostart_config = nd::platform::path_from_utf8(argv[++i]);
             } else if (arg == "--unregister-autostart")
                 unregister_autostart = true;
             else if (arg == "--gui-executable" && i + 1 < argc)
-                autostart_gui = argv[++i];
+                autostart_gui = nd::platform::path_from_utf8(argv[++i]);
             else if (arg == "--help") {
                 usage();
                 return 0;
@@ -133,7 +138,8 @@ int main(int argc, char** argv) {
                               nd::core_pipe_name,
                               transparent ? nd::InterceptionMode::transparent
                                           : nd::InterceptionMode::local_proxy,
-                              config_path);
+                              config_path,
+                              diagnostic_logging);
             // Windows enforces the deadline independently of backend/IPC locks.
             shutdown_deadline = nd::platform::watch_shutdown_deadline(
                 [signal = host.shutdown_signal()] { return signal->load(); });

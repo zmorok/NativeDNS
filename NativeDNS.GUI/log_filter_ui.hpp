@@ -43,6 +43,7 @@ public:
     void clear();
     void retranslateUi();
     bool applyFilter();
+    void applyDiagnosticPreset();
     bool filtersShown() const {
         return filtersShown_;
     }
@@ -105,6 +106,7 @@ private:
     std::deque<LogRecord> records_;
     int visible_ = 0;
     bool filtersShown_ = true;
+    bool customUpstreamsOnly_ = false;
 };
 
 void showLogFilterHelp(QWidget* parent);

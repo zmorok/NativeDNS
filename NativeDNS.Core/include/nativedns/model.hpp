@@ -64,6 +64,11 @@ struct Config {
     std::map<std::string, std::string> settings;
     bool operator==(const Config&) const = default;
 };
+inline void enable_diagnostic_logging(Config& config) {
+    config.logging.screen = Level::debug;
+    config.logging.file = Level::debug;
+    config.logging.file_enabled = true;
+}
 inline Config default_config() {
     Config config;
     Rule rule;

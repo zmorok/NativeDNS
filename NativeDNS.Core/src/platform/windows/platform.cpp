@@ -6,6 +6,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#include <shellapi.h>
 #include <sodium.h>
 #include <vector>
 #include <cstring>
@@ -17,6 +18,20 @@
 #include <cstdlib>
 
 namespace nd::platform {
+std::vector<std::string> command_line_arguments(int, char**) {
+    int count = 0;
+    auto** arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (!arguments)
+        throw Error("COMMAND_LINE", "Cannot read Unicode command line");
+    struct Release {
+        HLOCAL value;
+        ~Release() { LocalFree(value); }
+    } release{arguments};
+    std::vector<std::string> result;
+    for (int i = 0; i < count; ++i)
+        result.push_back(narrow(arguments[i]));
+    return result;
+}
 std::vector<std::string> system_dns_servers() {
     return select_bootstrap_dns_servers(enumerate_interfaces());
 }
@@ -227,7 +242,10 @@ std::string system_summary() {
     output << " build=" << version.dwBuildNumber;
     if (ubr)
         output << '.' << *ubr;
-    output << " pid=" << process_id() << " elevated=" << (is_elevated() ? 1 : 0);
+    output << " pid=" << process_id() << " elevated=" << (is_elevated() ? 1 : 0)
+           << " ansi_cp=" << GetACP() << " oem_cp=" << GetOEMCP()
+           << " console_input_cp=" << GetConsoleCP()
+           << " console_output_cp=" << GetConsoleOutputCP() << " log_encoding=UTF-8";
     return output.str();
 }
 void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::time_point deadline) {

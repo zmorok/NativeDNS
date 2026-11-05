@@ -53,6 +53,7 @@ std::string route_log_message(const Question& question,
                << " port=" << server->port << " interface="
                << (server->route.interface_id.empty() ? "automatic" : server->route.interface_id)
                << " generation=" << server->route.generation;
+    output << ", server_id=" << rule.server_id;
     return output.str();
 }
 Router::Router(Config config, Logger& logger) : logger_(logger) {
@@ -459,10 +460,14 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 route_log_message(question, rule, selected_server, elapsed) +
                     ", error=" + result.message);
         } else {
-            if (logger_.enabled(Level::normal))
+            if (logger_.enabled(Level::normal)) {
+                std::string details = ", rcode=0 address_count=" + std::to_string(parsed.addresses.size());
+                for (size_t i = 0; i < parsed.addresses.size() && i < 8; ++i)
+                    details += " answer_ip=" + parsed.addresses[i];
                 log(Level::normal,
                     "DNS_ROUTE",
-                    route_log_message(question, rule, selected_server, elapsed));
+                    route_log_message(question, rule, selected_server, elapsed) + details);
+            }
             if (logger_.enabled(Level::debug))
                 log(Level::debug,
                     "DNS_REPLY_DETAIL",

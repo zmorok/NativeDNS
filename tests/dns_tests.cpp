@@ -714,6 +714,9 @@ int main() {
                   route_events[0].message.find("interface=automatic generation=") !=
                       std::string::npos,
               "Route diagnostics identify the actual endpoint and network context");
+        check(route_events[0].message.find("rcode=0 address_count=1 answer_ip=" +
+                  nd::parse_response(routed.packet, q).addresses.front()) != std::string::npos,
+              "Normal route diagnostics retain the actual DNS answer address");
         check(route_events[0].context.address == "example.com" &&
                   route_events[0].context.dns_type == "A" &&
                   route_events[0].context.rule == "selected" &&

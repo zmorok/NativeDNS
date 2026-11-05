@@ -10,6 +10,7 @@
 #include <nativedns/dns.hpp>
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/network_preflight.hpp>
 #include <QApplication>
 #include <QAbstractTableModel>
 #include <QAbstractItemView>
@@ -1380,10 +1381,16 @@ private:
 };
 } // namespace
 
-NativeDnsWindow::NativeDnsWindow(bool background) {
+NativeDnsWindow::NativeDnsWindow(bool background, bool diagnostic_logging)
+    : diagnosticLogging_(diagnostic_logging) {
     (void)background;
     loadConfiguration();
     buildUi();
+    if (diagnosticLogging_) {
+        log_->applyDiagnosticPreset();
+        setWindowTitle(windowTitle() + " (" + uiText("Diagnostic capture") + ")");
+    }
+    appendLocalLog(uiText("Configuration file: ") + qPath(configPath()));
     QNetworkInformation::loadDefaultBackend();
     networkAvailable_ = networkAvailable();
     networkSignature_ = networkSignature();
@@ -1482,6 +1489,19 @@ void NativeDnsWindow::buildUi() {
     auto* config = addMenu("&Configuration");
     auto* servers = addAction(config, "DNS Servers");
     auto* rules = addAction(config, "Rules");
+#ifdef _WIN32
+    config->addSeparator();
+    prepareSystemDnsAction_ = addAction(config, "Temporarily disable Windows encrypted DNS");
+    prepareSystemDnsAction_->setObjectName("prepareSystemDnsAction");
+    prepareSystemDnsAction_->setCheckable(true);
+    syncConfigurationActions();
+    connect(prepareSystemDnsAction_, &QAction::toggled, this, [this](bool enabled) {
+        const auto previous = config_;
+        config_.settings["windowsPrepareSystemDns"] = enabled ? "1" : "0";
+        if (!applyConfiguration()) config_ = previous;
+        syncConfigurationActions();
+    });
+#endif
 
     // Too early to expose Advanced features; keep the menu hidden for now.
     auto* advanced = addMenu("&Advanced");
@@ -1501,6 +1521,7 @@ void NativeDnsWindow::buildUi() {
     for (int i = 0; i < 4; ++i) {
         static constexpr const char* levelKeys[]{"Errors Only", "Normal", "Verbose", "Debug"};
         auto* action = addAction(screen, levelKeys[i]);
+        action->setEnabled(!diagnosticLogging_);
         action->setCheckable(true);
         action->setData(i);
         group->addAction(action);
@@ -1527,6 +1548,7 @@ void NativeDnsWindow::buildUi() {
     auto* fileEnabled = addAction(logMenu, "Write diagnostic file");
     fileEnabled->setCheckable(true);
     fileEnabled->setChecked(config_.logging.file_enabled);
+    fileEnabled->setEnabled(!diagnosticLogging_);
     connect(fileEnabled, &QAction::toggled, this, [this](bool enabled) {
         config_.logging.file_enabled = enabled;
         applyFileLogging();
@@ -1538,6 +1560,7 @@ void NativeDnsWindow::buildUi() {
     for (int i = 0; i < 4; ++i) {
         static constexpr const char* levelKeys[]{"Errors Only", "Normal", "Verbose", "Debug"};
         auto* action = addAction(fileLevel, levelKeys[i]);
+        action->setEnabled(!diagnosticLogging_);
         action->setCheckable(true);
         fileGroup->addAction(action);
         if (i == configuredFileLevel)
@@ -1799,6 +1822,7 @@ void NativeDnsWindow::buildUi() {
 }
 
 void NativeDnsWindow::retranslateUi() {
+    syncConfigurationActions();
     log_->retranslateUi();
     const auto actions = findChildren<QAction*>();
     for (auto* action : actions) {
@@ -1819,6 +1843,10 @@ void NativeDnsWindow::loadConfiguration() {
             config_ = nd::default_config();
             nd::save_config(config_, path);
         }
+        if (diagnosticLogging_) {
+            nd::enable_diagnostic_logging(config_);
+            nd::save_config(config_, path);
+        }
     } catch (const std::exception& e) {
         QMessageBox::critical(this, uiText("Configuration"), e.what());
         config_ = nd::default_config();
@@ -1827,6 +1855,7 @@ void NativeDnsWindow::loadConfiguration() {
 
 bool NativeDnsWindow::saveConfiguration() {
     try {
+        if (diagnosticLogging_) nd::enable_diagnostic_logging(config_);
         nd::save_config(config_, configPath());
         return true;
     } catch (const std::exception& e) {
@@ -1845,28 +1874,45 @@ bool NativeDnsWindow::applyConfiguration() {
     }
     if (!saveConfiguration())
         return false;
-    if (restartCore())
+    if (restartCore()) {
+        syncConfigurationActions();
         return true;
-    if (!reloadRejected_)
+    }
+    if (!reloadRejected_) {
+        syncConfigurationActions();
         return true;
+    }
     if (previous) {
         try {
             nd::save_config(*previous, configPath());
+            config_ = *previous;
         } catch (const std::exception& error) {
             QMessageBox::critical(this, uiText("Configuration"), error.what());
         }
     }
+    syncConfigurationActions();
     return false;
+}
+void NativeDnsWindow::syncConfigurationActions() {
+    if (!prepareSystemDnsAction_) return;
+    QSignalBlocker blocker(prepareSystemDnsAction_);
+    prepareSystemDnsAction_->setChecked(nd::runtime_options(config_).prepare_system_dns);
+    prepareSystemDnsAction_->setToolTip(uiText(
+        "Original Windows DNS encryption is restored on Stop or Exit, or on the next start after a crash. DNS addresses and hosts are preserved."));
 }
 bool NativeDnsWindow::restartCore() {
     reloadRejected_ = false;
+    configurationConfirmed_ = false;
     try {
+        const auto expected = nd::configuration_fingerprint(config_);
         const auto response =
-            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, {}, 10000);
-        if (response.status) {
+            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, expected, 10000);
+        if (response.status || response.payload != "RELOADED config_id=" + expected) {
             reloadRejected_ = true;
-            throw std::runtime_error(response.payload);
+            throw std::runtime_error(response.status ? response.payload :
+                "CoreHost did not confirm the expected configuration");
         }
+        configurationConfirmed_ = true;
         restartWhenNetworkReturns_ = false;
         appendLocalLog(uiText("DNS configuration reloaded without stopping the core."));
         refreshStatus();
@@ -1889,15 +1935,17 @@ void NativeDnsWindow::requestCoreRestart() {
     if (exiting_ || restartOperationPending_.exchange(true))
         return;
     appendLocalLog(uiText("Reloading DNS configuration..."));
+    const auto expected = nd::configuration_fingerprint(config_);
     QPointer<NativeDnsWindow> self(this);
-    QThreadPool::globalInstance()->start([self] {
+    QThreadPool::globalInstance()->start([self, expected] {
         bool absent = false;
         QString failure;
         try {
             const auto response =
-                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, {}, 10000);
-            if (response.status)
-                failure = q(response.payload);
+                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, expected, 10000);
+            if (response.status || response.payload != "RELOADED config_id=" + expected)
+                failure = response.status ? q(response.payload) :
+                    uiText("CoreHost did not confirm the expected configuration");
         } catch (const nd::Error& error) {
             absent = error.code == "IPC_CONNECT";
             if (!absent)
@@ -1965,7 +2013,8 @@ void NativeDnsWindow::importConfiguration() {
             config_ = nd::import_yoga(path).config;
         }
         if (applyConfiguration())
-            QMessageBox::information(this, "NativeDNS", uiText("Configuration imported."));
+            QMessageBox::information(this, "NativeDNS", uiText(configurationConfirmed_
+                ? "Configuration imported." : "Configuration saved; CoreHost confirmation is pending."));
     } catch (const std::exception& e) {
         QMessageBox::critical(this, uiText("Import"), e.what());
     }
@@ -2002,6 +2051,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                            "/NativeDNSCoreHost";
 #endif
     QStringList args{"--config", qPath(configPath())};
+    if (diagnosticLogging_) args << "--diagnostics";
     if (transparent)
         args << "--transparent";
     const auto configuration = configPath();

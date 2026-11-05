@@ -2,6 +2,7 @@
 #include <nativedns/host.hpp>
 #include <nativedns/dns.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/network_preflight.hpp>
 #include <nativedns/detail/fault_injection.hpp>
 #include <future>
 #include <iostream>
@@ -406,7 +407,16 @@ int main() {
         config.logging.file_enabled = true;
         config.rules.back().block_mode = nd::BlockMode::nxdomain;
         nd::save_config(config, config_path);
-        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config).payload == "RELOADED",
+        const auto mismatch = nd::pipe_request(host_name, nd::IpcOperation::reload_config, std::string(64, '0'));
+        check(mismatch.status != 0 && mismatch.payload.find("CONFIG_MISMATCH") != std::string::npos,
+              "GUI/CoreHost config mismatch is explicitly rejected");
+        check(nd::test_server(local, "example.com").success,
+              "mismatched reload preserves the live routing snapshot");
+        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config, "not-a-config-id").status != 0,
+              "malformed reload fingerprint is rejected");
+        const auto expected_config = nd::configuration_fingerprint(config);
+        check(nd::pipe_request(host_name, nd::IpcOperation::reload_config, expected_config).payload ==
+                  "RELOADED config_id=" + expected_config,
               "reload configuration without stopping CoreHost");
         check(nd::pipe_request(host_name, nd::IpcOperation::status)
                       .payload.find("port=" + std::to_string(port)) != std::string::npos,

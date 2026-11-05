@@ -4,6 +4,8 @@
 #include <nativedns/router.hpp>
 #include <nativedns/interception.hpp>
 #include <nativedns/ipc.hpp>
+#include <nativedns/platform.hpp>
+#include <nativedns/network_preflight.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -26,16 +28,47 @@ void usage() {
                  "  nativednsctl config export INPUT OUTPUT\n"
                  "  nativednsctl rules list CONFIG\n"
                  "  nativednsctl rules match CONFIG HOST\n"
+                 "  nativednsctl diagnose CONFIG [HOST]\n"
                  "  nativednsctl servers list CONFIG\n"
                  "  nativednsctl servers test CONFIG ID\n"
                  "  nativednsctl probe udp|tcp IP [HOST [PORT]]\n"
-                 "  nativednsctl resolve CONFIG HOST ORIGINAL_IP [ORIGINAL_PORT]\n"
+                 "  nativednsctl resolve CONFIG HOST ORIGINAL_IP [ORIGINAL_PORT] [--type A|AAAA|HTTPS]\n"
                  "  nativednsctl serve CONFIG ORIGINAL_IP [LOCAL_PORT]\n"
                  "  nativednsctl autostart status|enable COREHOST CONFIG|disable\n";
 }
 } // namespace
-int main(int argc, char** argv) {
+int main(int argc, char** native_argv) {
     try {
+        const auto argv = nd::platform::command_line_arguments(argc, native_argv);
+        argc = static_cast<int>(argv.size());
+        if ((argc == 3 || argc == 4) && argv[1] == "diagnose") {
+            const auto path = nd::platform::path_from_utf8(argv[2]);
+            const auto config = nd::load_config(path);
+            const auto network = nd::NetworkMonitor::shared().snapshot();
+            std::cout << nd::platform::system_summary() << '\n'
+                      << "CONFIG path=\"" << nd::platform::path_to_utf8(std::filesystem::absolute(path))
+                      << "\" config_id=" << nd::configuration_fingerprint(config)
+                      << " servers=" << config.servers.size() << " rules=" << config.rules.size() << '\n';
+            bool conflict = false;
+            for (const auto& finding : nd::inspect_network_environment(config, *network)) {
+                const bool error = finding.level == nd::Level::errors_only;
+                conflict = conflict || error;
+                std::cout << (error ? "ERROR " : "INFO ") << finding.code << ' ' << finding.message << '\n';
+            }
+            if (argc == 4) {
+                const auto decision = nd::evaluate_rule(config, argv[3], network);
+                std::cout << "RULE name=" << argv[3] << " id=" << decision.rule->id
+                          << " rule=\"" << decision.rule->name << "\" action="
+                          << nd::action_name(decision.rule->action) << " server=" << decision.rule->server_id;
+                if (!decision.error_code.empty()) {
+                    conflict = true;
+                    std::cout << " error=" << decision.error_code << ' ' << decision.message;
+                }
+                std::cout << '\n';
+            }
+            std::cout << "Diagnostic inspection only; system settings were not changed.\n";
+            return conflict ? 1 : 0;
+        }
         if (argc >= 3 && std::string(argv[1]) == "core") {
             const std::string cmd = argv[2];
             nd::IpcOperation op;
@@ -83,14 +116,14 @@ int main(int argc, char** argv) {
                 auto st = nd::autostart_status();
                 std::cout << (st.enabled ? "ENABLED" : "DISABLED");
                 if (st.enabled)
-                    std::cout << " executable=" << st.executable.string()
+                    std::cout << " executable=" << nd::platform::path_to_utf8(st.executable)
                               << " arguments=" << st.arguments;
                 std::cout << '\n';
                 return 0;
             }
             if (cmd == "enable" && argc == 5) {
-                nd::enable_autostart(std::filesystem::absolute(argv[3]),
-                                     std::filesystem::absolute(argv[4]));
+                nd::enable_autostart(std::filesystem::absolute(nd::platform::path_from_utf8(argv[3])),
+                                     std::filesystem::absolute(nd::platform::path_from_utf8(argv[4])));
                 std::cout << "ENABLED\n";
                 return 0;
             }
@@ -101,19 +134,30 @@ int main(int argc, char** argv) {
             }
             throw nd::Error("COMMAND", "Invalid autostart command");
         }
-        if ((argc == 5 || argc == 6) && std::string(argv[1]) == "resolve") {
+        if (argc >= 5 && argc <= 8 && std::string(argv[1]) == "resolve") {
             nd::Logger logger;
-            nd::Router router(nd::load_config(argv[2]), logger);
+            nd::Router router(nd::load_config(nd::platform::path_from_utf8(argv[2])), logger);
             nd::Server original;
             original.name = "Original destination";
             original.ip = argv[4];
-            if (argc == 6) {
-                const int port = std::stoi(argv[5]);
+            int index = 5;
+            if (index < argc && argv[index] != "--type") {
+                const int port = std::stoi(argv[index++]);
                 if (port < 1 || port > 65535)
                     throw nd::Error("PORT", "Invalid port");
                 original.port = static_cast<uint16_t>(port);
             }
-            const auto query = nd::make_query(argv[3]);
+            uint16_t type = 1;
+            if (index < argc) {
+                if (index + 2 != argc || argv[index] != "--type")
+                    throw nd::Error("COMMAND", "resolve expects [ORIGINAL_PORT] [--type A|AAAA|HTTPS]");
+                const auto& value = argv[index + 1];
+                if (value == "A") type = 1;
+                else if (value == "AAAA") type = 28;
+                else if (value == "HTTPS") type = 65;
+                else throw nd::Error("DNS_TYPE", "resolve supports A, AAAA and HTTPS queries");
+            }
+            const auto query = nd::make_query(argv[3], type);
             auto routed = router.route(query, original);
             for (const auto& e : logger.snapshot(nd::Level::debug))
                 std::cerr << e.code << " " << e.message << '\n';
@@ -135,7 +179,7 @@ int main(int argc, char** argv) {
         }
         if ((argc == 4 || argc == 5) && std::string(argv[1]) == "serve") {
             nd::Logger logger;
-            auto router = std::make_shared<nd::Router>(nd::load_config(argv[2]), logger);
+            auto router = std::make_shared<nd::Router>(nd::load_config(nd::platform::path_from_utf8(argv[2])), logger);
             nd::Server original;
             original.name = "Original resolver";
             original.ip = argv[3];
@@ -173,7 +217,7 @@ int main(int argc, char** argv) {
             return print_test(nd::test_server(server, argc >= 5 ? argv[4] : "iana.org"));
         }
         if (argc >= 4 && std::string(argv[1]) == "servers") {
-            auto config = nd::load_config(argv[3]);
+            auto config = nd::load_config(nd::platform::path_from_utf8(argv[3]));
             if (std::string(argv[2]) == "list" && argc == 4) {
                 for (const auto& server : config.servers)
                     std::cout << server.id << '\t' << server.name << '\t'
@@ -192,8 +236,8 @@ int main(int argc, char** argv) {
         }
         if (argc == 5 && std::string(argv[1]) == "config" &&
             std::string(argv[2]) == "import-yoga") {
-            auto result = nd::import_yoga(argv[3]);
-            nd::save_config(result.config, argv[4]);
+            auto result = nd::import_yoga(nd::platform::path_from_utf8(argv[3]));
+            nd::save_config(result.config, nd::platform::path_from_utf8(argv[4]));
             for (const auto& w : result.warnings)
                 std::cerr << "WARNING: " << w << '\n';
             std::cout << result.config.servers.size() << " servers, " << result.config.rules.size()
@@ -201,11 +245,11 @@ int main(int argc, char** argv) {
             return 0;
         }
         if (argc == 5 && std::string(argv[1]) == "config" && std::string(argv[2]) == "export") {
-            nd::save_config(nd::load_config(argv[3]), argv[4]);
+            nd::save_config(nd::load_config(nd::platform::path_from_utf8(argv[3])), nd::platform::path_from_utf8(argv[4]));
             return 0;
         }
         if (argc >= 4 && std::string(argv[1]) == "rules") {
-            auto config = nd::load_config(argv[3]);
+            auto config = nd::load_config(nd::platform::path_from_utf8(argv[3]));
             if (std::string(argv[2]) == "list" && argc == 4) {
                 for (const auto& r : config.rules)
                     std::cout << r.id << '\t' << r.name << '\t' << nd::action_name(r.action) << '\t'

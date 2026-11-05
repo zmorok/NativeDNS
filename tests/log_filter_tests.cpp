@@ -1,5 +1,6 @@
 #include "../NativeDNS.GUI/log_filter_ui.hpp"
 #include "../NativeDNS.GUI/ui_preferences.hpp"
+#include <nativedns/config.hpp>
 #include <QAction>
 #include <QClipboard>
 #include <QDir>
@@ -14,6 +15,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProcess>
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
@@ -54,6 +56,70 @@ void openMenu(QMenu* menu) {
 class LogFilterTests final : public QObject {
     Q_OBJECT
 private slots:
+    void existingBuildDiagnosticPreset() {
+#ifdef Q_OS_WIN
+        QTemporaryDir directory;
+        const auto path = directory.filePath(QString::fromUtf8("конфигурация 日本語.xml"));
+        auto config = nd::default_config();
+        config.logging.file_enabled = false;
+        config.rules.back().name = "Правило 日本語";
+        config.settings["unicode-fixture"] = "строка\n<значение>&\"";
+        nd::save_config(config, std::filesystem::path(path.toStdWString()));
+        const auto root = "HKEY_CURRENT_USER\\Software\\NativeDNS.Tests\\Preset-" + QString::number(QCoreApplication::applicationPid());
+        QSettings settings(root, QSettings::NativeFormat);
+        struct Cleanup { QSettings& settings; ~Cleanup() { settings.clear(); settings.sync(); } } cleanup{settings};
+        QProcess helper;
+        helper.start(qEnvironmentVariable("SystemRoot") + "/System32/WindowsPowerShell/v1.0/powershell.exe",
+                     {"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ENABLE_DIAGNOSTICS_SCRIPT,
+                      "-ConfigPath", path, "-SettingsRegistryPath",
+                      "HKCU:\\Software\\NativeDNS.Tests\\Preset-" + QString::number(QCoreApplication::applicationPid()) + "\\ui"});
+        QVERIFY(helper.waitForFinished(20000));
+        QVERIFY2(helper.exitCode() == 0, helper.readAllStandardError().constData());
+        const auto loaded = nd::load_config(std::filesystem::path(path.toStdWString()));
+        QCOMPARE(loaded.logging.screen, nd::Level::debug);
+        QCOMPARE(loaded.logging.file, nd::Level::debug);
+        QVERIFY(loaded.logging.file_enabled);
+        QVERIFY(loaded.rules == config.rules && loaded.servers == config.servers);
+        auto expected = config;
+        nd::enable_diagnostic_logging(expected);
+        QVERIFY(loaded == expected);
+        settings.sync();
+        QCOMPARE(settings.value("ui/logActions").toStringList(), QStringList{"process"});
+        QCOMPARE(settings.value("ui/logCommands").toString(), QString("none"));
+        QCOMPARE(settings.value("ui/logErrors").toString(), QString("with"));
+        const auto backups = QDir(directory.path()).entryList({"*.bak"}, QDir::Files);
+        QCOMPARE(backups.size(), 1);
+        const auto before = nd::load_config(std::filesystem::path(directory.filePath(backups[0]).toStdWString()));
+        QVERIFY(before == config);
+#endif
+    }
+    void diagnosticPresetShowsOnlyCustomUpstreamResults() {
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("diagnostic.ini"), QSettings::IniFormat);
+        LogPanel panel(nullptr, &settings);
+        panel.setShownActions({"bypass"});
+        panel.setCommandsView(LogCommandsView::only);
+        panel.setErrorsView(LogErrorsView::without_errors);
+        panel.applyDiagnosticPreset();
+        auto success = record("custom upstream success"); success.upstreamId = 1011;
+        auto failure = record("custom upstream failure", true); failure.upstreamId = 1011;
+        auto original = record("original destination");
+        auto bypass = success; bypass.action = "bypass"; bypass.message = "bypass hidden";
+        auto blocked = success; blocked.action = "block"; blocked.message = "block hidden";
+        auto trace = success; trace.code = "DNS_CAPTURE"; trace.message = "packet trace hidden";
+        auto technical = record("global diagnostic hidden", true); technical.address.clear();
+        panel.appendRecords({success, failure, original, bypass, blocked, trace, technical});
+        const auto text = panel.findChild<QPlainTextEdit*>("logDisplay");
+        QVERIFY(text);
+        const auto contents = text->toPlainText();
+        QVERIFY(contents.contains("custom upstream success"));
+        QVERIFY(contents.contains("custom upstream failure"));
+        QVERIFY(!contents.contains("original destination"));
+        QVERIFY(!contents.contains("hidden"));
+        const auto decoded = decodeLogRecords("1\t1\t1700000000000\tDNS_ROUTE\tgemini.google.com [A] - process : server=DNS, rule=AI, endpoint=192.0.2.1 port=53 interface=automatic generation=1, server_id=1011\n");
+        QCOMPARE(decoded.size(), 1);
+        QCOMPARE(decoded[0].upstreamId, quint32(1011));
+    }
     void initTestCase() {
         const auto fontPath = qEnvironmentVariable("NATIVEDNS_TEST_FONT");
         if (!fontPath.isEmpty()) {

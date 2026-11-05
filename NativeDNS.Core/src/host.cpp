@@ -1,6 +1,8 @@
 #include <nativedns/host.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/network.hpp>
+#include <nativedns/network_preflight.hpp>
+#include <nativedns/core_api.h>
 #include <nativedns/detail/fault_injection.hpp>
 #include <charconv>
 #include <sstream>
@@ -18,12 +20,14 @@ CoreHost::CoreHost(Config config,
                    uint16_t local_port,
                    std::string pipe_name,
                    InterceptionMode mode,
-                   std::filesystem::path config_path)
+                   std::filesystem::path config_path,
+                   bool diagnostic_logging)
     : config_(std::move(config)), original_(std::move(original)), mode_(mode),
       local_port_(local_port), pipe_name_(std::move(pipe_name)),
-      config_path_(std::move(config_path)),
+      config_path_(std::move(config_path)), diagnostic_logging_(diagnostic_logging),
       log_pipe_name_(pipe_name_ == core_pipe_name ? core_log_pipe_name : pipe_name_ + ".logs"),
       logger_(4096) {
+    if (diagnostic_logging_) enable_diagnostic_logging(config_);
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
     for (auto& server : config_.servers)
@@ -45,14 +49,10 @@ CoreHost::CoreHost(Config config,
     logger_.write(Level::normal, "SYSTEM_ENVIRONMENT", platform::system_summary());
     logger_.write(Level::verbose,
                   "CORE_PATHS",
-                  "executable=" + platform::executable_path().string() +
-                      " working_directory=" + std::filesystem::current_path().string() +
-                      " log=" + (file_log_path_.empty() ? "disabled" : file_log_path_.string()));
-    logger_.write(Level::verbose,
-                  "CONFIG_SUMMARY",
-                  "servers=" + std::to_string(config_.servers.size()) +
-                      " rules=" + std::to_string(config_.rules.size()) + " mode=" +
-                      (mode == InterceptionMode::transparent ? "transparent" : "local_proxy"));
+                  "executable=" + platform::path_to_utf8(platform::executable_path()) +
+                      " working_directory=" + platform::path_to_utf8(std::filesystem::current_path()) +
+                      " log=" + (file_log_path_.empty() ? "disabled" : platform::path_to_utf8(file_log_path_)));
+    log_configuration();
     router_ = std::make_shared<Router>(config_, logger_);
     if (mode == InterceptionMode::transparent)
         interception_ =
@@ -79,6 +79,69 @@ CoreHost::CoreHost(Config config,
 CoreHost::~CoreHost() {
     stop();
 }
+void CoreHost::log_configuration() {
+    logger_.write(Level::normal, "CONFIG_SUMMARY",
+                  "version=" + std::string(NativeDns_GetBuildVersion()) +
+                      " path=\"" + (config_path_.empty() ? "in-memory" :
+                          platform::path_to_utf8(std::filesystem::absolute(config_path_))) +
+                      "\" config_id=" + configuration_fingerprint(config_) +
+                      " servers=" + std::to_string(config_.servers.size()) +
+                      " rules=" + std::to_string(config_.rules.size()) + " mode=" +
+                      (mode_ == InterceptionMode::transparent ? "transparent" : "local_proxy"));
+    for (const auto& rule : config_.rules) {
+        std::string patterns;
+        for (const auto& pattern : rule.patterns) {
+            if (!patterns.empty()) patterns += ';';
+            patterns += pattern;
+        }
+        logger_.write(Level::verbose, "CONFIG_RULE",
+                      "id=" + std::to_string(rule.id) + " name=\"" + rule.name +
+                          "\" enabled=" + (rule.enabled ? "1" : "0") +
+                          " action=" + action_name(rule.action) + " server=" +
+                          std::to_string(rule.server_id) + " interface=\"" + rule.interface_id +
+                          "\" patterns=" + patterns);
+    }
+}
+void CoreHost::inspect_network() {
+    if (mode_ != InterceptionMode::transparent)
+        return;
+    try {
+        const auto network = NetworkMonitor::shared().snapshot();
+        for (const auto& finding : inspect_network_environment(config_, *network))
+            logger_.write(finding.level, finding.code, finding.message);
+    } catch (const std::exception& error) {
+        logger_.write(Level::errors_only, "DNS_PREFLIGHT_FAILED", error.what());
+    }
+}
+bool CoreHost::prepare_network() {
+    if (mode_ != InterceptionMode::transparent) return false;
+    try {
+        if (!network_preparation_) network_preparation_ = platform::make_network_preparation();
+        if (network_preparation_) {
+            const auto result = network_preparation_->apply(config_, *NetworkMonitor::shared().snapshot());
+            for (const auto& finding : result.findings) logger_.write(finding.level, finding.code, finding.message);
+            return result.changed;
+        }
+    } catch (const std::exception& error) {
+        const auto* detail = dynamic_cast<const Error*>(&error);
+        const auto unavailable = detail && detail->code == "DNS_PREPARATION_UNAVAILABLE";
+        logger_.write(unavailable ? Level::normal : Level::errors_only,
+                      unavailable ? "DNS_PREPARATION_UNAVAILABLE" : "DNS_PREPARATION_FAILED", error.what());
+    }
+    return false;
+}
+void CoreHost::restore_network() noexcept {
+    try {
+        if (network_preparation_) {
+            const auto result = network_preparation_->restore();
+            for (const auto& finding : result.findings) logger_.write(finding.level, finding.code, finding.message);
+            if (result.changed) platform::flush_dns_cache();
+        }
+    } catch (const std::exception& error) {
+        try { logger_.write(Level::errors_only, "DNS_PREPARATION_RESTORE_FAILED", error.what()); }
+        catch (...) {}
+    }
+}
 void CoreHost::start() {
     std::unique_lock lock(mutex_);
     if (interception_->status().state != State::stopped)
@@ -88,9 +151,11 @@ void CoreHost::start() {
     stopped_ = false;
     const char* stage = "interception";
     try {
+        inspect_network();
         logger_.write(Level::verbose, "INTERCEPTION_STARTING", "Starting DNS interception backend");
         interception_->start();
-        if (runtime_options(config_).clear_dns_cache) {
+        const bool prepared = prepare_network();
+        if (prepared || runtime_options(config_).clear_dns_cache) {
             try {
                 platform::flush_dns_cache();
                 logger_.write(Level::normal,
@@ -142,6 +207,7 @@ void CoreHost::start() {
             log_ipc_->stop();
         if (ipc_)
             ipc_->stop();
+        restore_network();
         if (interception_)
             interception_->stop();
         stopped_ = true;
@@ -169,6 +235,7 @@ void CoreHost::stop() {
             shutdown_ipc_->stop();
     }
     std::lock_guard lock(mutex_);
+    restore_network();
     if (interception_)
         interception_->stop();
     *shutdown_requested_ = true;
@@ -229,6 +296,11 @@ void CoreHost::wait_for_shutdown() {
                 logger_.write(Level::verbose, "NETWORK_INTERFACE", std::move(details));
             }
             previous_network = network;
+            inspect_network();
+            if (interception_->status().state == State::running && prepare_network()) {
+                try { platform::flush_dns_cache(); }
+                catch (const Error& error) { logger_.write(Level::errors_only, error.code, error.what()); }
+            }
         }
         const auto value = interception_->status();
         if (value.state == State::error)
@@ -243,15 +315,31 @@ InterceptionStatus CoreHost::status() const {
 }
 IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload) {
     if (operation != IpcOperation::logs && operation != IpcOperation::configure_file_log &&
+        operation != IpcOperation::reload_config &&
         !payload.empty())
         throw Error("IPC_PROTOCOL", "This operation requires an empty payload");
     if (operation == IpcOperation::ping)
         return {0, "NativeDNS Core API 1"};
     if (operation == IpcOperation::reload_config) {
         std::lock_guard reload_lock(reload_mutex_);
+        if (!payload.empty() &&
+            (payload.size() != 64 || !std::all_of(payload.begin(), payload.end(), [](char c) {
+                return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+            })))
+            throw Error("IPC_PROTOCOL", "Reload payload must be an empty string or a SHA-256 config ID");
         if (config_path_.empty())
             throw Error("CONFIG_IO", "CoreHost has no configuration path to reload");
         auto next = load_config(config_path_);
+        if (diagnostic_logging_) enable_diagnostic_logging(next);
+        const auto next_id = configuration_fingerprint(next);
+        if (!payload.empty() && payload != next_id) {
+            const auto message = "CoreHost configuration does not match the GUI: path=\"" +
+                platform::path_to_utf8(std::filesystem::absolute(config_path_)) +
+                "\" expected=" + payload + " saved=" + next_id +
+                ". Check the running CoreHost and the imported configuration file.";
+            logger_.write(Level::errors_only, "CONFIG_MISMATCH", message);
+            throw Error("CONFIG_MISMATCH", message);
+        }
         for (auto& server : next.servers)
             server.use_system_bootstrap = mode_ == InterceptionMode::transparent;
         {
@@ -259,7 +347,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             interception_->reload(next);
             config_ = std::move(next);
             logger_.set_display_level(config_.logging.screen);
-            if (runtime_options(config_).clear_dns_cache) {
+            const bool prepared = interception_->status().state == State::running && prepare_network();
+            if (prepared || runtime_options(config_).clear_dns_cache) {
                 try {
                     platform::flush_dns_cache();
                     logger_.write(Level::normal,
@@ -278,11 +367,13 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             } catch (const std::exception& error) {
                 logger_.write(Level::errors_only, "FILE_LOG_CONFIG_FAILED", error.what());
             }
+            log_configuration();
+            inspect_network();
         }
         logger_.write(Level::normal,
                       "CONFIG_RELOADED",
                       "Configuration applied without stopping DNS interception");
-        return {0, "RELOADED"};
+        return {0, payload.empty() ? "RELOADED" : "RELOADED config_id=" + next_id};
     }
     if (operation == IpcOperation::status) {
         const auto value = interception_->status();
@@ -312,8 +403,10 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
     }
     if (operation == IpcOperation::start) {
         std::lock_guard lock(mutex_);
+        inspect_network();
         interception_->start();
-        if (runtime_options(config_).clear_dns_cache) {
+        const bool prepared = prepare_network();
+        if (prepared || runtime_options(config_).clear_dns_cache) {
             try {
                 platform::flush_dns_cache();
             } catch (const Error& error) {
@@ -324,6 +417,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
     }
     if (operation == IpcOperation::stop) {
         std::lock_guard lock(mutex_);
+        restore_network();
         interception_->stop();
         return {0, "STOPPED"};
     }
@@ -415,6 +509,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             end != level_text.data() + level_text.size() || requested_level > 3)
             throw Error("IPC_PROTOCOL", "file log level must be 0..3");
         const bool enabled = enabled_text == "1";
+        if (diagnostic_logging_ && (!enabled || requested_level != 3))
+            throw Error("DIAGNOSTIC_MODE", "Diagnostic capture requires file logging at Debug level");
         if (enabled && !file_log_enabled_)
             file_log_path_ = timestamped_log_path(file_log_directory());
         logger_.configure_file(enabled, static_cast<Level>(requested_level), file_log_path_);
@@ -422,7 +518,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         if (enabled)
             logger_.write(Level::normal,
                           "FILE_LOG_CONFIGURED",
-                          "path=" + file_log_path_.string() + " level=" + level_text);
+                          "path=" + platform::path_to_utf8(file_log_path_) + " level=" + level_text);
         return {0, enabled ? "FILE_LOG_ENABLED" : "FILE_LOG_DISABLED"};
     }
     if (operation == IpcOperation::clear_display) {

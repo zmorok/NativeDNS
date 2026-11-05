@@ -78,7 +78,7 @@ Current operations include:
 | 8 | Clear display |
 | 9 | Restart |
 | 10 | Configure file log (`enabled<TAB>level`) |
-| 11 | Reload config (empty payload) |
+| 11 | Reload config (empty payload or expected config ID) |
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
 
@@ -88,6 +88,15 @@ WinDivert, nftables, and DNS listeners remain active. Queries already in progres
 their original snapshot; later queries use the new one. If validation or endpoint preparation
 fails, CoreHost retains the current routing snapshot. `Restart` (ID 9) remains available to
 fully stop and start CoreHost for recovery.
+
+An optional Reload config payload is the 64 lowercase hexadecimal characters of
+the SHA-256 of the canonical serialized configuration. CoreHost compares it with
+the saved configuration before applying changes and returns
+`RELOADED config_id=<id>` on success. A mismatch returns `CONFIG_MISMATCH` without
+changing routing. Empty payloads retain the legacy `RELOADED` response. The GUI
+uses and verifies the ID so an unrelated CoreHost configuration cannot silently
+be reported as the imported one. GUI and CoreHost must be updated together;
+older CoreHost versions reject the nonempty payload.
 
 Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in milliseconds, code, and message. The GUI formats that timestamp in local time.
 

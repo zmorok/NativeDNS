@@ -24,6 +24,9 @@
 #include <algorithm>
 
 namespace nd::platform {
+std::vector<std::string> command_line_arguments(int argc, char** argv) {
+    return {argv, argv + argc};
+}
 std::vector<std::string> system_dns_servers() {
     std::vector<std::string> servers;
     for (const char* path : {"/run/systemd/resolve/resolv.conf",

@@ -16,7 +16,7 @@ Current Windows presets use the Visual Studio generator and an MSVC x64 Qt kit.
 Required:
 
 - Visual Studio/MSVC with C++ x64 toolset;
-- Windows SDK;
+- Windows SDK 10.0.26100.0 or newer (build headers; the runtime still targets Windows 10/11);
 - Qt 6 MSVC x64;
 - Inno Setup 6 only when building the installer.
 
@@ -195,6 +195,69 @@ Output forms:
 - `all`: all available forms.
 
 For portable/AppImage generation, provide `linuxdeploy` and `linuxdeploy-plugin-qt` through PATH, `tools/`, or the corresponding environment variables expected by the packaging scripts.
+
+## Network diagnostics
+
+Configure with `-DNATIVEDNS_DIAGNOSTIC_BUILD=ON` to make GUI and CoreHost enable
+diagnostic capture on every launch. The same profile can be requested explicitly
+with `NativeDNS --diagnostics` or `NativeDNSCoreHost --diagnostics`.
+Windows packages include `start-diagnostic-mode.cmd` for launching this profile
+by double-click after exiting the current NativeDNS instance.
+It enables Debug for screen/file capture and keeps file recording enabled across
+GUI config imports and CoreHost reloads. The GUI initially shows only completed
+Process results and related failures for configured upstream servers; Bypass,
+Block, original-resolver sentinel routes, and packet/lifecycle traces remain in
+the complete file log. Display filtering does not affect capture or DNS routing.
+
+Already distributed Windows builds can enable Debug and the existing Process
+display filter without downloading another application package:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./enable-diagnostics.ps1
+```
+
+Close NativeDNS through **Exit** before applying this preset, then start it
+normally. The helper backs up the working XML, sets screen/file Debug and file
+recording, and changes only the GUI's action/command/error display preferences.
+DNS rules and network settings are retained. On older builds, importing a config
+with different logging options requires applying the preset again. Their existing
+Process filter can also show query-level debug traces and Process/0 routes; the
+strict completed-custom-upstream view is provided by the new diagnostic profile.
+
+Network/configuration inspection is available in the staged CLI:
+
+```powershell
+./tools/nativednsctl.exe diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" chatgpt.com
+```
+
+On Linux use `nativednsctl diagnose <config-path> <hostname>`. This prints the
+config ID/counts, selected effective rule and available network preflight findings.
+It does not send a test DNS query or modify network settings. A zero exit code
+means no conflict was found by the available checks, not that browser/VPN DNS
+was verified. Use `servers test <config> <server-id>` or
+`resolve <config> <hostname> <original-resolver-IP>` for actual DNS requests.
+
+`resolve` also accepts `--type A`, `--type AAAA`, or `--type HTTPS` after the
+optional original-resolver port. Windows staged packages include a read-only
+service diagnostic script, defaulting to `gemini.google.com` and the GUI's config:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./diagnose-service.ps1
+```
+
+Run it from the package directory while NativeDNS is running. For a double-click
+launch on Windows, use `run-diagnostics.cmd` in the same directory. Optional script
+parameters include `-HostName`, `-ConfigPath`, `-PackageDirectory`, and `-OutputPath`.
+The script compares the Windows resolver with configured NativeDNS A/AAAA/HTTPS
+queries, reads explicit Edge DNS mode/policies, records driver service paths and
+the Event Log message-resource path, and probes TLS/HTTP using the returned IPs.
+It writes a UTF-8 file under `logs/`. DNS settings, browser profiles and drivers
+are unchanged. An absent explicit browser DNS preference does not prove Secure
+DNS is off. The HTTPS probe uses normal certificate validation, sends no browser
+cookies or account credentials, and does not verify account/region eligibility.
+The script also works with earlier CLI builds that support only A queries;
+AAAA/HTTPS DNS probes are then explicitly skipped while the A-answer TLS/HTTP
+check still runs, so updating the script does not require replacing the package.
 
 ## Sanitizers and fuzzing
 

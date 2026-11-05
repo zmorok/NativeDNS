@@ -1,0 +1,58 @@
+#include <nativedns/host.hpp>
+#include <nativedns/network_preflight.hpp>
+#include <fstream>
+#include <iostream>
+
+namespace {
+void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
+}
+int main() {
+    try {
+        auto config = nd::default_config();
+        config.logging.screen = config.logging.file = nd::Level::normal;
+        config.logging.file_enabled = false;
+        const auto token = std::to_string(nd::platform::process_id()) + '-' +
+                           std::to_string(nd::platform::monotonic_millis());
+        const auto path = std::filesystem::temp_directory_path() / ("diagnostic-profile-" + token + ".xml");
+        nd::save_config(config, path);
+        auto effective = config;
+        nd::enable_diagnostic_logging(effective);
+        check(effective.rules == config.rules && effective.servers == config.servers &&
+                  effective.logging.screen == nd::Level::debug && effective.logging.file == nd::Level::debug &&
+                  effective.logging.file_enabled, "Diagnostic profile changed routing or missed a log setting");
+        const auto endpoint = std::string(nd::core_pipe_name) + ".Profile." + token;
+        const auto marker = "PROFILE_DEBUG_" + token;
+        nd::Server original;
+        original.name = "Unused loopback upstream";
+        original.ip = "127.0.0.1"; original.port = 1;
+        {
+            nd::CoreHost host(config, original, 0, endpoint, nd::InterceptionMode::local_proxy, path, true);
+            host.start();
+            check(host.logger().enabled(nd::Level::debug), "Debug capture was not enabled on startup");
+            check(nd::pipe_request(endpoint, nd::IpcOperation::configure_file_log, "0\t1").status != 0,
+                  "Diagnostic file capture could be silently disabled");
+            const auto id = nd::configuration_fingerprint(effective);
+            check(nd::pipe_request(endpoint, nd::IpcOperation::reload_config, id).payload == "RELOADED config_id=" + id,
+                  "Import/reload did not retain the diagnostic profile");
+            host.logger().write(nd::Level::debug, marker, "Full diagnostic capture retained");
+            host.logger().flush_file();
+            host.stop();
+        }
+        bool found = false;
+        const auto directory = nd::platform::application_root_directory() / "logs";
+        for (const auto& item : std::filesystem::directory_iterator(directory)) {
+            if (!item.is_regular_file()) continue;
+            std::ifstream file(item.path(), std::ios::binary);
+            const std::string contents((std::istreambuf_iterator<char>(file)), {});
+            if (contents.find("[DEBUG] " + marker) == std::string::npos) continue;
+            found = true;
+            file.close();
+            std::filesystem::remove(item.path());
+        }
+        check(found, "Debug events were not actually written to a file");
+        std::filesystem::remove(path);
+        auto backup = path; backup += ".bak"; std::filesystem::remove(backup);
+        std::cout << "diagnostic logging profile passed\n";
+        return 0;
+    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}

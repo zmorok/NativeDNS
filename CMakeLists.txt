@@ -36,6 +36,7 @@ option(NATIVEDNS_ANALYZE "Enable compiler static analysis where supported" OFF)
 option(NATIVEDNS_LIVE_TESTS "Enable external DNS integration tests" OFF)
 option(NATIVEDNS_FUZZING "Build Clang libFuzzer targets" OFF)
 option(NATIVEDNS_STRESS_TESTS "Build and register local proxy stress/benchmark tests" OFF)
+option(NATIVEDNS_DIAGNOSTIC_BUILD "Start GUI and CoreHost with diagnostic logging defaults" OFF)
 
 if(MSVC)
   # Qt's official MSVC builds use the dynamic CRT. Keep every NativeDNS
@@ -97,6 +98,10 @@ if(WIN32)
     "${NATIVEDNS_WINDIVERT_ROOT}/x64/WinDivert64.sys"
     DESTINATION . COMPONENT Runtime)
   install(FILES "${NATIVEDNS_WINDIVERT_ROOT}/LICENSE" DESTINATION licenses RENAME WinDivert.txt COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/diagnose-service.ps1" DESTINATION . COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/run-diagnostics.cmd" DESTINATION . COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/start-diagnostic-mode.cmd" DESTINATION . COMPONENT Runtime)
+  install(FILES "${CMAKE_SOURCE_DIR}/scripts/windows/enable-diagnostics.ps1" DESTINATION . COMPONENT Runtime)
 
   # libsodium is linked dynamically on Windows so it uses the same dynamic
   # MSVC CRT as Qt and NativeDNS. The CLI lives in tools/, so it needs its own

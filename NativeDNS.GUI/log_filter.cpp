@@ -208,10 +208,11 @@ bool isTechnicalLogRecord(const LogRecord& record) {
 
 QList<LogRecord> decodeLogRecords(const QString& payload) {
     QList<LogRecord> result;
+    static const QRegularExpression upstream("(?:^|, )server_id=([0-9]+)(?:,| |$)");
     static const QRegularExpression route(
         "^(?:suppressed=[0-9]+ )?(\\S+) \\[([^\\]]+)\\] - "
         "(process|bypass|block) : "
-        ".*?rule=(.*?)(?:, time=[0-9.]+ ms|, endpoint=|, error=|$)");
+        ".*?rule=(.*?)(?:, time=[0-9.]+ ms|, endpoint=|, error=|, server_id=|$)");
     for (const auto& line : payload.split('\n', Qt::SkipEmptyParts)) {
         const auto fields = line.split('\t');
         if (fields.size() < 4)
@@ -259,6 +260,7 @@ QList<LogRecord> decodeLogRecords(const QString& payload) {
                     record.rule = match.captured(4);
             }
         }
+        record.upstreamId = upstream.match(record.message).captured(1).toUInt();
         result.push_back(std::move(record));
     }
     return result;
