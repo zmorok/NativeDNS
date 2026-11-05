@@ -1,5 +1,14 @@
 find_package(Qt6 6.2 REQUIRED COMPONENTS Widgets Network)
 
+add_library(NativeDNS.WindowActivation STATIC window_activation.cpp)
+target_link_libraries(NativeDNS.WindowActivation PUBLIC Qt6::Widgets)
+if(WIN32)
+  target_sources(NativeDNS.WindowActivation PRIVATE window_activation_windows.cpp)
+  target_link_libraries(NativeDNS.WindowActivation PRIVATE user32)
+else()
+  target_sources(NativeDNS.WindowActivation PRIVATE window_activation_linux.cpp)
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC OFF)
 set(CMAKE_AUTORCC ON)
@@ -33,7 +42,7 @@ if(WIN32)
 else()
   set_target_properties(NativeDNS.GUI PROPERTIES OUTPUT_NAME NativeDNS)
 endif()
-target_link_libraries(NativeDNS.GUI PRIVATE NativeDNS.Core.Internal Qt6::Widgets Qt6::Network)
+target_link_libraries(NativeDNS.GUI PRIVATE NativeDNS.Core.Internal NativeDNS.WindowActivation Qt6::Widgets Qt6::Network)
 target_compile_definitions(NativeDNS.GUI PRIVATE NATIVEDNS_VERSION="${PROJECT_VERSION}")
 target_compile_definitions(NativeDNS.GUI PRIVATE NATIVEDNS_DIAGNOSTIC_DEFAULT=$<BOOL:${NATIVEDNS_DIAGNOSTIC_BUILD}>)
 

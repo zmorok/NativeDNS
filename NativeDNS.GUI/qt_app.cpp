@@ -5,6 +5,7 @@
 #include "log_filter_ui.hpp"
 #include "action_icons.hpp"
 #include "platform_launcher.hpp"
+#include "window_activation.hpp"
 #include "ui_preferences.hpp"
 #include <nativedns/autostart.hpp>
 #include <nativedns/dns.hpp>
@@ -1430,10 +1431,7 @@ std::filesystem::path NativeDnsWindow::configPath() const {
 }
 
 void NativeDnsWindow::showAndActivate() {
-    showNormal();
-    show();
-    raise();
-    activateWindow();
+    activateApplicationWindow(*this);
 }
 
 void NativeDnsWindow::buildUi() {

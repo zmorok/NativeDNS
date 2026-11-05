@@ -58,7 +58,10 @@ void report(const std::wstring& message, bool quiet) {
         (void)WriteFile(output, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr);
     }
     if (!quiet)
-        MessageBoxW(nullptr, message.c_str(), L"NativeDNS", MB_OK | MB_ICONERROR);
+        MessageBoxW(nullptr,
+                    message.c_str(),
+                    L"NativeDNS",
+                    MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
 }
 } // namespace
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
@@ -140,12 +143,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                     job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)))
                 throw std::runtime_error("Cannot create diagnostic/helper process job");
         }
+        const bool suspended = job.value || !worker;
         if (!CreateProcessW(executable.c_str(),
                             command.data(),
                             nullptr,
                             nullptr,
                             inherit,
-                            (worker ? CREATE_NO_WINDOW : 0) | (job.value ? CREATE_SUSPENDED : 0),
+                            (worker ? CREATE_NO_WINDOW : 0) | (suspended ? CREATE_SUSPENDED : 0),
                             nullptr,
                             root.c_str(),
                             &startup,
@@ -162,6 +166,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 CloseHandle(process.hProcess);
                 throw std::runtime_error("Cannot contain diagnostic/helper process");
             }
+        }
+        if (!worker)
+            (void)AllowSetForegroundWindow(process.dwProcessId);
+        if (suspended) {
             if (ResumeThread(process.hThread) == static_cast<DWORD>(-1)) {
                 TerminateProcess(process.hProcess, ERROR_PROCESS_ABORTED);
                 CloseHandle(process.hThread);
@@ -186,7 +194,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 code ? L"Diagnostic collection failed. Partial results may be available in logs."
                      : L"Diagnostic collection finished. The report is in the logs folder.",
                 L"NativeDNS diagnostics",
-                MB_OK | (code ? MB_ICONERROR : MB_ICONINFORMATION));
+                MB_OK | MB_SETFOREGROUND | MB_TOPMOST | (code ? MB_ICONERROR : MB_ICONINFORMATION));
         }
         return static_cast<int>(code);
     } catch (const std::exception& error) {

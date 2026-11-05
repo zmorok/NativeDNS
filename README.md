@@ -96,6 +96,7 @@ an up-to-date version or a failed check stays silent. Manual checks still show r
 NativeDNS is designed around one GUI instance and one CoreHost instance.
 
 - Starting `NativeDNS` again should activate the existing GUI instead of creating another full instance.
+- Opening the GUI, restoring it from the tray and showing a dialog bring the relevant window to the foreground. An open modal dialog keeps activation priority; background autostart keeps the main window hidden.
 - `Hide to tray` is a persistent flag.
 - With `Hide to tray` enabled, closing the window hides it while the tray icon and CoreHost remain available.
 - With `Hide to tray` disabled, closing the window exits the GUI and shuts down CoreHost.

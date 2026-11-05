@@ -1,4 +1,5 @@
 #include "single_instance.hpp"
+#include "window_activation.hpp"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -35,6 +36,11 @@ SingleInstanceGuard::SingleInstanceGuard(QObject* parent) : QObject(parent), loc
 }
 
 bool SingleInstanceGuard::notifyExisting(bool activateExisting, bool diagnostic) const {
+    if (activateExisting) {
+        qint64 owner = 0;
+        QString host, application;
+        if (lock_.getLockInfo(&owner, &host, &application)) allowApplicationForeground(owner);
+    }
     const QByteArray command = activateExisting ? QByteArray(diagnostic ? "ACTIVATE DEBUG\n" : "ACTIVATE NORMAL\n") : QByteArray("PING\n");
 
     // The primary instance may own the lock a little before its local server

@@ -1,5 +1,6 @@
 #include "qt_app.hpp"
 #include "single_instance.hpp"
+#include "window_activation.hpp"
 #include "ui_preferences.hpp"
 #include <nativedns/logger.hpp>
 #include <nativedns/platform.hpp>
@@ -42,6 +43,7 @@ int main(int argc, char** argv) {
     // Outlive the window, QApplication and Qt's shutdown callbacks.
     std::jthread exitDeadline;
     QApplication app(argc, argv);
+    installWindowActivation(app);
     app.setApplicationName("NativeDNS");
     app.setApplicationVersion(QStringLiteral(NATIVEDNS_VERSION));
     app.setOrganizationName("NativeDNS");
@@ -78,6 +80,6 @@ int main(int argc, char** argv) {
     });
 
     if (!background)
-        window.show();
+        window.showAndActivate();
     return app.exec();
 }
