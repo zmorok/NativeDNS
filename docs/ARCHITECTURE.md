@@ -40,7 +40,8 @@ NativeDNS/
 │   │   ├── NativeDNS.GUI.exe
 │   │   ├── NativeDNS.CoreHost.exe
 │   │   ├── NativeDNS.Diagnostics.exe
-│   │   ├── nativednsctl.exe
+│   │   ├── NativeDNS.Cli.exe       internal CLI worker
+│   │   ├── nativednsctl.exe        static console bootstrap
 │   │   └── qt.conf
 │   ├── lib/                      Qt, libsodium and MSVC runtime DLLs
 │   └── drivers/windivert/        WinDivert.dll and WinDivert64.sys
@@ -246,3 +247,41 @@ Windows builds use the dynamic MSVC CRT to match official Qt builds.
 `libsodium` is dynamically linked on Windows and provided by the system/package manager on Linux.
 
 The optional advanced-module/plugin concept is not currently a public stable plugin ABI. Do not treat it as an implemented extension contract.
+
+## Interception verification and diagnostics
+
+The GUI's File menu contains Interception Diagnostics. It reads mechanism health,
+packet/routing counters, the last active test, logging state, document/runtime IDs
+and potential competing components without flooding the main window. The status
+bar distinguishes a running but unverified interceptor. Read-only inspection does
+not infer failure from idle traffic. The active UDP/IPv4 test has a dedicated
+bounded socket and nonce match, independent of Router and user rules.
+
+WinDivert statistics use relaxed atomic counters. The optional probe match lock
+is entered only during an active probe. Driver start/stop/reload/probe operations
+are serialized separately from status and packet processing. Unexpected receiver
+or worker exceptions stop capture, cancel upstream work and publish `ERROR`;
+stop joins workers before releasing the driver handle. Send/receive failures and
+bounded-queue overload remain observable after Stop.
+
+Windows conflict inspection reads known process names, running services/drivers
+and WFP provider/callout/filter metadata. Provider registration alone is only
+information. A matching active process/service/filter is a potential competitor,
+not proof of interception interference. Enumeration failures and limits are
+explicit. Ordinary security products and unrelated WFP filters are not blanket
+classified as conflicts.
+
+Normal and Debug startup both try the validated existing Scheduled Task before
+requesting elevation. Validation includes the current interactive principal,
+owner, elevation level, one executable action, exact executable/config arguments
+and working directory. Debug can be applied through IPC after scheduled startup;
+its early events retain the task's initial logging profile. Direct Debug startup
+still captures early initialization. An existing CoreHost with unavailable IPC
+prevents duplicate launches.
+
+The file writer publishes its actual state rather than a cached enabled flag.
+Portable `logs` is preferred; failed initialization falls back to the user's
+NativeDNS data directory. The collector flushes the writer, asks CoreHost for its
+current rotated/fallback path, and embeds bounded memory events and explicit
+missing/read-error notices. Text reports and archived logs redact URL credentials,
+URL query strings and common credential fields. Configuration XML is not archived.

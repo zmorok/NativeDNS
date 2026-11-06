@@ -1,6 +1,8 @@
 #include "archive.hpp"
 #include "windows_inspection.hpp"
 #include <nativedns/config.hpp>
+#include <nativedns/ipc.hpp>
+#include <nativedns/core_api.h>
 #include <nativedns/platform.hpp>
 #include <curl/curl.h>
 #include <QCoreApplication>
@@ -10,6 +12,7 @@
 #include <QHostAddress>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QTemporaryDir>
 #include <iostream>
 
 namespace {
@@ -124,17 +127,23 @@ int main(int argc, char** argv) {
             }
         }
         host = QString::fromStdString(nd::normalize_host(host.toStdString()));
-        const QDir logs(qPath(nd::platform::application_root_directory() / "logs"));
-        if (!QDir().mkpath(logs.path()))
-            throw std::runtime_error("Cannot create logs directory");
+        QDir logs(qPath(nd::platform::application_root_directory() / "logs"));
+        QDir().mkpath(logs.path());
         const auto stamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz") + '-' +
                            QString::number(QCoreApplication::applicationPid());
-        const auto reportPath = logs.filePath("service-" + stamp + ".log");
+        auto reportPath = logs.filePath("service-" + stamp + ".log");
         QFile report(reportPath);
-        if (!report.open(QIODevice::WriteOnly | QIODevice::NewOnly))
-            throw std::runtime_error("Cannot create diagnostic report");
+        if (!report.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            logs = QDir(qPath(nd::platform::user_config_directory() / "logs"));
+            if (!QDir().mkpath(logs.path()))
+                throw std::runtime_error("Cannot create fallback diagnostic directory");
+            reportPath = logs.filePath("service-" + stamp + ".log");
+            report.setFileName(reportPath);
+            if (!report.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+                throw std::runtime_error("Cannot create diagnostic report in fallback directory");
+        }
         auto line = [&](const QString& text) {
-            const auto bytes = (text + '\n').toUtf8();
+            const auto bytes = (redactDiagnosticText(text) + '\n').toUtf8();
             if (report.write(bytes) != bytes.size() || !report.flush())
                 throw std::runtime_error("Cannot write diagnostic report");
             std::cout << bytes.constData() << std::flush;
@@ -147,6 +156,7 @@ int main(int argc, char** argv) {
             line("exit_code=" + QString::number(result.code) + '\n' + result.output.trimmed());
             return result;
         };
+        line("diagnostic_version=1 build=" + QString::fromUtf8(NativeDns_GetBuildVersion()));
         line("NativeDNS diagnostics time=" +
              QDateTime::currentDateTime().toString(Qt::ISODateWithMs) + " host=" + host);
         line("Read-only collection. System DNS, hosts, browser settings and the configuration file "
@@ -154,6 +164,36 @@ int main(int argc, char** argv) {
         line("HTTPS transport results do not establish service account or region eligibility.");
         line("=== CoreHost status ===");
         cli({"core", "status"}, 5000);
+        QString activeLog;
+        line("=== Interception and logging health ===");
+        try {
+            try {
+                const auto flushed = nd::pipe_request(
+                    nd::core_pipe_name, nd::IpcOperation::flush_file_log, {}, 5000);
+                line("Flush: " + QString::fromStdString(flushed.payload));
+            } catch (const std::exception& error) {
+                line("Flush unavailable: " + QString::fromUtf8(error.what()));
+            }
+            const auto state = nd::pipe_request(
+                nd::core_pipe_name, nd::IpcOperation::interception_status, {}, 5000);
+            line("exit_code=" + QString::number(state.status) + "\n" +
+                 QString::fromStdString(state.payload));
+            if (!state.status)
+                for (const auto& row : QString::fromStdString(state.payload).split('\n'))
+                    if (row.startsWith("logging_path="))
+                        activeLog = row.mid(13);
+        } catch (const std::exception& error) {
+            line("Health IPC unavailable: " + QString::fromUtf8(error.what()));
+        }
+        line("=== In-memory CoreHost events (bounded to 1 MiB) ===");
+        try {
+            const auto memory =
+                nd::pipe_request(nd::core_log_pipe_name, nd::IpcOperation::logs, "0\t0\t3", 3000);
+            line("exit_code=" + QString::number(memory.status) + "\n" +
+                 QString::fromStdString(memory.payload));
+        } catch (const std::exception& error) {
+            line("Memory log unavailable: " + QString::fromUtf8(error.what()));
+        }
         line("=== Configuration, routes and system DNS inspection ===");
         cli({"diagnose", config, host});
         for (const auto& text : inspectWindowsDiagnostics())
@@ -197,19 +237,72 @@ int main(int argc, char** argv) {
             line("Offline collection: DNS and HTTPS network probes skipped.");
         const auto archive = logs.filePath("diagnostics-" + stamp + ".zip");
         line("Archive=" + archive);
+        QTemporaryDir snapshots;
+        if (!snapshots.isValid())
+            throw std::runtime_error("Cannot create diagnostic snapshot directory");
         QStringList files{reportPath};
         qint64 bytes = report.size();
-        const auto candidates = logs.entryInfoList({"NativeDNS-*.log"}, QDir::Files, QDir::Time);
+        QFileInfoList candidates;
+        if (!activeLog.isEmpty()) {
+            const QFileInfo current(activeLog);
+            if (current.isAbsolute() && current.fileName().startsWith("NativeDNS-") &&
+                current.suffix() == "log")
+                candidates << current;
+            else
+                line("Invalid current log path returned by CoreHost");
+        }
+        candidates += logs.entryInfoList({"NativeDNS-*.log"}, QDir::Files, QDir::Time);
+        const QDir portableLogs(qPath(nd::platform::application_root_directory() / "logs"));
+        if (portableLogs.absolutePath() != logs.absolutePath())
+            candidates += portableLogs.entryInfoList({"NativeDNS-*.log"}, QDir::Files, QDir::Time);
+        QStringList seen;
         for (const auto& file : candidates) {
-            if (files.size() == 4)
+            if (files.size() >= 4)
                 break;
-            if (file.size() > 16 * 1024 * 1024 - 65536 - bytes) {
-                line("Skipped oversized log=" + file.fileName());
+            if (seen.contains(file.absoluteFilePath()))
+                continue;
+            seen << file.absoluteFilePath();
+            line("Log metadata: path=" + file.absoluteFilePath() +
+                 " size=" + QString::number(file.size()) +
+                 " modified=" + file.lastModified().toString(Qt::ISODateWithMs));
+            QFile readable(file.absoluteFilePath());
+            if (!readable.open(QIODevice::ReadOnly)) {
+                line("Cannot read log: " + readable.errorString());
                 continue;
             }
-            files << file.absoluteFilePath();
-            bytes += file.size();
+            if (!file.isFile() || file.size() > 16 * 1024 * 1024 - 2 * 1024 * 1024 - bytes) {
+                line("Skipped oversized or missing log=" + file.fileName());
+                continue;
+            }
+            bool duplicateName = false;
+            for (const auto& previous : files)
+                if (QFileInfo(previous).fileName() == file.fileName())
+                    duplicateName = true;
+            if (duplicateName) {
+                line("Skipped duplicate log filename=" + file.fileName());
+                continue;
+            }
+            auto contents = readable.read(16 * 1024 * 1024 - 2 * 1024 * 1024 - bytes + 1);
+            if (readable.error() != QFileDevice::NoError ||
+                contents.size() > 16 * 1024 * 1024 - 2 * 1024 * 1024 - bytes) {
+                line("Log read failed or grew beyond collection limit: " + file.fileName());
+                continue;
+            }
+            contents = redactDiagnosticText(QString::fromUtf8(contents)).toUtf8();
+            const auto snapshot = snapshots.filePath(file.fileName());
+            QFile copy(snapshot);
+            if (!copy.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+                copy.write(contents) != contents.size() || !copy.flush()) {
+                line("Cannot snapshot log=" + file.fileName() + " error=" + copy.errorString());
+                continue;
+            }
+            copy.close();
+            files << snapshot;
+            bytes += contents.size();
         }
+        if (files.size() == 1)
+            line("File journal absent or unreadable; report includes available health and "
+                 "in-memory events.");
         report.close();
         writeDiagnosticArchive(archive, files);
         return 0;

@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 & (Join-Path $PSScriptRoot 'deploy-windows-runtime.ps1') -PackageDirectory $stage -Configuration $Configuration
 $required = @(
     'NativeDNS.exe','NativeDNS.Debug.exe','app/bin/NativeDNS.CoreHost.exe','app/bin/NativeDNS.Diagnostics.exe',
-    'app/bin/nativednsctl.exe','app/bin/qt.conf','app/drivers/windivert/WinDivert.dll',
+    'app/bin/nativednsctl.exe','app/bin/NativeDNS.Cli.exe','app/bin/qt.conf','app/drivers/windivert/WinDivert.dll',
     'docs/README.md','licenses/THIRD_PARTY_NOTICES.md','licenses/WinDivert.txt',
     'licenses/curl.txt','licenses/libsodium.txt','licenses/nghttp2.txt','docs/BUILD.md',
     'docs/CONFIG_FORMAT.md','docs/DEPENDENCIES.md'

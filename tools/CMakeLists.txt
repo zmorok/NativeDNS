@@ -4,3 +4,7 @@ if(WIN32)
   nativedns_copy_windivert_runtime(nativednsctl)
   nativedns_copy_sodium_runtime(nativednsctl)
 endif()
+
+if(WIN32 AND NATIVEDNS_BUILD_GUI)
+  set_target_properties(nativednsctl PROPERTIES OUTPUT_NAME NativeDNS.Cli)
+endif()
