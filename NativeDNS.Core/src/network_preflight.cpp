@@ -6,6 +6,14 @@
 #include <sodium.h>
 
 namespace nd {
+std::string routing_fingerprint(const Config& config) {
+    auto routing = config;
+    routing.logging = {};
+    routing.test_target = "iana.org";
+    routing.test_concurrency = 15;
+    // Preserve all network settings and metadata, including unknown future ones.
+    return configuration_fingerprint(routing);
+}
 std::string configuration_fingerprint(const Config& config) {
     const auto text = serialize_config(config);
     unsigned char digest[crypto_hash_sha256_BYTES]{};

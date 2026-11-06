@@ -26,6 +26,13 @@ struct LogEvent {
     std::string code, message;
     LogContext context;
 };
+struct FileLogStatus {
+    std::string state, last_error;
+    std::filesystem::path path;
+    Level level = Level::normal;
+    bool enabled = false, writer_active = false;
+    uint64_t written_events = 0, lost_events = 0, last_write_timestamp_ms = 0;
+};
 // Bounded in-memory log with an optional independently filtered rotating file sink.
 class Logger {
 public:
@@ -51,6 +58,7 @@ public:
                         uint32_t retained_files = 3);
     void clear_file();
     void flush_file();
+    FileLogStatus file_status() const;
 
 private:
     struct FileTask {
@@ -86,6 +94,11 @@ private:
     std::deque<FileTask> file_tasks_;
     std::jthread file_thread_;
     std::atomic_uint64_t dropped_file_events_ = 0;
+    std::atomic_uint64_t written_file_events_ = 0, last_file_write_ms_ = 0;
+    std::atomic_bool file_failed_ = false, writer_active_ = false;
+    mutable std::mutex file_status_mutex_;
+    std::filesystem::path observed_file_path_;
+    std::string last_file_error_;
     std::filesystem::path file_path_;
     uint64_t maximum_bytes_ = 4 * 1024 * 1024;
     uint32_t retained_files_ = 3;

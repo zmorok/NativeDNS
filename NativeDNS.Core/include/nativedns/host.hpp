@@ -40,6 +40,7 @@ public:
 private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     void log_configuration();
+    void configure_logging();
     void inspect_network();
     bool prepare_network();
     void restore_network() noexcept;
@@ -51,16 +52,18 @@ private:
         std::make_shared<std::atomic_bool>(false);
     std::atomic_bool stopped_ = true;
     Config config_;
+    LoggingSettings saved_logging_;
+    std::string saved_config_id_;
     Server original_;
     InterceptionMode mode_;
     uint16_t local_port_;
     std::string pipe_name_;
     std::filesystem::path config_path_;
     bool diagnostic_logging_ = false;
+    const bool startup_diagnostic_logging_;
     std::string log_pipe_name_;
     Logger logger_;
     std::filesystem::path file_log_path_;
-    bool file_log_enabled_ = false;
     std::shared_ptr<Router> router_;
     std::unique_ptr<IInterceptionProvider> interception_;
     std::unique_ptr<NetworkPreparation> network_preparation_;

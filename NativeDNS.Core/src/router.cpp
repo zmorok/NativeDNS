@@ -93,7 +93,30 @@ Packet Router::exchange(const Packet& request, const Server& server) const {
             transports_[index] = make_transport(server.protocol);
         transport = transports_[index];
     }
-    return transport->exchange(request, server);
+    counters_.upstream_attempts.fetch_add(1, std::memory_order_relaxed);
+    try {
+        auto reply = transport->exchange(request, server);
+        counters_.upstream_replies.fetch_add(1, std::memory_order_relaxed);
+        return reply;
+    } catch (...) {
+        counters_.upstream_errors.fetch_add(1, std::memory_order_relaxed);
+        throw;
+    }
+}
+RoutingStatistics Router::statistics() const {
+    RoutingStatistics v;
+#define ND_LOAD(name) v.name = counters_.name.load(std::memory_order_relaxed)
+    ND_LOAD(queries_completed);
+    ND_LOAD(rules_evaluated);
+    ND_LOAD(blocked);
+    ND_LOAD(bypassed);
+    ND_LOAD(parse_errors);
+    ND_LOAD(route_errors);
+    ND_LOAD(upstream_attempts);
+    ND_LOAD(upstream_replies);
+    ND_LOAD(upstream_errors);
+#undef ND_LOAD
+    return v;
 }
 std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot,
                                                         const Packet& request,
@@ -346,6 +369,12 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
     detail::CancellationScope cancellation(cancellation_.load()->get_token());
     const auto& snapshot = *current;
     RouteResult result;
+    struct Completed {
+        Counters& counters;
+        ~Completed() {
+            counters.queries_completed.fetch_add(1, std::memory_order_relaxed);
+        }
+    } completed{counters_};
     Question question;
     LogContext context;
     bool valid_question = false;
@@ -379,6 +408,11 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         context.dns_type = dns_type_name(question.type);
         const auto decision = evaluate_rule(snapshot.config, question.name);
         const auto& rule = *decision.rule;
+        counters_.rules_evaluated.fetch_add(1, std::memory_order_relaxed);
+        if (rule.action == Action::block)
+            counters_.blocked.fetch_add(1, std::memory_order_relaxed);
+        if (rule.action == Action::bypass)
+            counters_.bypassed.fetch_add(1, std::memory_order_relaxed);
         matched_rule = &rule;
         context.rule = rule.name;
         context.action = action_name(rule.action);
@@ -453,6 +487,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                                  std::chrono::steady_clock::now() - exchange_started)
                                  .count();
         if (parsed.rcode) {
+            counters_.route_errors.fetch_add(1, std::memory_order_relaxed);
             result.error_code = "DNS_RCODE";
             result.message = "Upstream returned RCODE " + std::to_string(parsed.rcode);
             log(Level::errors_only,
@@ -475,6 +510,9 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                         " addresses=" + std::to_string(parsed.addresses.size()));
         }
     } catch (const Error& error) {
+        if (!valid_question)
+            counters_.parse_errors.fetch_add(1, std::memory_order_relaxed);
+        counters_.route_errors.fetch_add(1, std::memory_order_relaxed);
         result.error_code = error.code;
         result.message = error.what();
         if (valid_question && matched_rule) {
@@ -495,6 +533,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         else
             result.disposition = Disposition::silent_drop;
     } catch (const std::exception& error) {
+        counters_.route_errors.fetch_add(1, std::memory_order_relaxed);
         result.error_code = "INTERNAL";
         result.message = error.what();
         if (valid_question && matched_rule) {

@@ -46,6 +46,52 @@ int main() {
             check(host.logger().enabled(nd::Level::debug), "Debug capture missing after normal-to-debug switch");
             check(nd::pipe_request(endpoint, nd::IpcOperation::reload_config, base_id + "\tdiagnostics=1").status != 0,
                   "A mismatched effective config ID was accepted");
+            const auto routing = nd::routing_fingerprint(config);
+            const auto info = [&] {
+                const auto response =
+                    nd::pipe_request(endpoint, nd::IpcOperation::interception_status, {}, 5000);
+                check(!response.status, "Diagnostics request failed");
+                check(response.payload.find("saved_config_id=" + base_id) != std::string::npos,
+                      "Saved document identity changed");
+                check(response.payload.find("routing_config_id=" + routing) != std::string::npos,
+                      "Applied routing identity changed");
+                return response.payload;
+            };
+            check(info().find("runtime_profile=Debug") != std::string::npos,
+                  "Debug profile not reported");
+            check(
+                nd::pipe_request(endpoint, nd::IpcOperation::diagnostic_profile, "Normal").status ==
+                    0,
+                "Runtime Normal failed");
+            check(info().find("runtime_profile=Normal") != std::string::npos,
+                  "Normal profile not reported");
+            check(
+                nd::pipe_request(endpoint, nd::IpcOperation::diagnostic_profile, "Debug").status ==
+                    0,
+                "Runtime Debug failed");
+            check(nd::pipe_request(
+                      endpoint, nd::IpcOperation::diagnostic_profile, "Debug --exec anything")
+                          .status != 0,
+                  "Arbitrary profile accepted");
+            check(nd::pipe_request(endpoint,
+                                   nd::IpcOperation::reload_config,
+                                   "routing=" + routing + "\tdiagnostics=0")
+                          .status == 0,
+                  "Routing identity reload rejected valid Normal profile");
+            check(nd::pipe_request(endpoint,
+                                   nd::IpcOperation::reload_config,
+                                   "routing=" + routing + "\tdiagnostics=1")
+                          .status == 0,
+                  "Routing identity reload rejected valid Debug profile");
+            check(nd::pipe_request(
+                      endpoint, nd::IpcOperation::reload_config, "routing=" + std::string(64, '0'))
+                          .status != 0,
+                  "Real routing mismatch was ignored");
+            check(nd::pipe_request(endpoint, nd::IpcOperation::interception_test).status != 0,
+                  "Local proxy incorrectly claims transparent self-test support");
+            check(nd::pipe_request(endpoint, nd::IpcOperation::flush_file_log).status == 0,
+                  "IPC flush failed");
+            check(nd::load_config(path) == config, "Runtime profiles changed XML");
             host.stop();
         }
         bool found = false;

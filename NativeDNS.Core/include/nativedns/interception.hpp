@@ -10,6 +10,32 @@ struct InterceptionStatus {
     bool tcp = false;
     std::string error_code, error_message;
 };
+// Mechanism state and end-to-end verification are deliberately independent.
+struct InterceptionTestResult {
+    bool in_progress = false;
+    bool sent = false, captured = false, parsed = false, injected = false, received = false;
+    uint64_t timestamp_ms = 0;
+    uint32_t interface_index = 0;
+    std::string failure_stage = "NOT_RUN", message;
+    bool success() const {
+        return !in_progress && sent && captured && parsed && injected && received;
+    }
+};
+struct InterceptionDiagnostics {
+    bool supported = false, library_loaded = false, handle_open = false, receiver_active = false;
+    int priority = 123;
+    std::string health = "UNVERIFIED", filter;
+    uint64_t packets_received = 0, udp_dns_captured = 0, tcp_dns_captured = 0;
+    uint64_t dns_parse_errors = 0, rules_evaluated = 0, queries_processed = 0;
+    uint64_t queries_bypassed = 0, queries_blocked = 0, upstream_bypassed = 0;
+    uint64_t packets_injected = 0, send_errors = 0, receive_errors = 0;
+    uint64_t worker_queue_overflows = 0, processing_errors = 0, last_capture_timestamp = 0;
+    uint64_t active_workers = 0, queued_jobs = 0, queued_bytes = 0;
+    uint64_t upstream_attempts = 0, upstream_replies = 0, upstream_errors = 0;
+    InterceptionTestResult last_test;
+};
+std::string format_interception_test(const InterceptionTestResult& value);
+std::string format_interception_diagnostics(const InterceptionDiagnostics& value);
 class IInterceptionProvider {
 public:
     virtual ~IInterceptionProvider() = default;
@@ -18,6 +44,13 @@ public:
     virtual void cancel_pending() = 0;
     virtual void reload(Config config) = 0;
     virtual InterceptionStatus status() const = 0;
+    virtual InterceptionDiagnostics diagnostics() const {
+        return {};
+    }
+    virtual InterceptionTestResult self_test() {
+        throw Error("NOT_SUPPORTED",
+                    "Active interception test is available for Windows UDP/IPv4 only");
+    }
 };
 
 // Explicit loopback fallback. It is portable and does not modify system DNS.
@@ -54,6 +87,8 @@ public:
     void cancel_pending() override;
     void reload(Config config) override;
     InterceptionStatus status() const override;
+    InterceptionDiagnostics diagnostics() const override;
+    InterceptionTestResult self_test() override;
 
 private:
     struct Impl;
@@ -69,5 +104,6 @@ Packet make_reflected_tcp_packet(const Packet& captured,
 // Returns true only when the captured UDP DNS query can be safely reinjected
 // without entering the bounded routing worker queue.
 bool should_reinject_udp_immediately(const Config& config, const Packet& captured);
+std::string windivert_filter(bool intercept_others, uint16_t target, uint16_t proxy);
 #endif
 } // namespace nd

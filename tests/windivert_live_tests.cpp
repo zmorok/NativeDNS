@@ -3,6 +3,7 @@
 #include <nativedns/platform.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windivert.h>
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -98,6 +99,91 @@ void reload(nd::Config& config, const std::filesystem::path& path, const std::st
     check(response.status == 0 && response.payload == "RELOADED",
           "Live transactional reload: " + response.payload);
 }
+nd::IpcResponse test_priority_chain(const std::string& pipe, std::ostream& output) {
+    struct Api {
+        HMODULE module =
+            LoadLibraryW((nd::platform::windivert_directory() / "WinDivert.dll").c_str());
+        decltype(&WinDivertOpen) open = nullptr;
+        decltype(&WinDivertRecv) recv = nullptr;
+        decltype(&WinDivertSend) send = nullptr;
+        decltype(&WinDivertShutdown) shutdown = nullptr;
+        decltype(&WinDivertClose) close = nullptr;
+        Api() {
+            check(module != nullptr, "Load WinDivert for priority chain");
+            open = reinterpret_cast<decltype(open)>(GetProcAddress(module, "WinDivertOpen"));
+            recv = reinterpret_cast<decltype(recv)>(GetProcAddress(module, "WinDivertRecv"));
+            send = reinterpret_cast<decltype(send)>(GetProcAddress(module, "WinDivertSend"));
+            shutdown =
+                reinterpret_cast<decltype(shutdown)>(GetProcAddress(module, "WinDivertShutdown"));
+            close = reinterpret_cast<decltype(close)>(GetProcAddress(module, "WinDivertClose"));
+            check(open && recv && send && shutdown && close, "Priority-chain driver API exports");
+        }
+        ~Api() {
+            if (module)
+                FreeLibrary(module);
+        }
+    } api;
+    std::mutex sequence_mutex;
+    std::vector<int> sequence;
+    std::atomic_bool failed = false;
+    struct Handle {
+        Api& api;
+        HANDLE value = INVALID_HANDLE_VALUE;
+        std::jthread reader;
+        Handle(Api& functions,
+               int priority,
+               std::mutex& mutex,
+               std::vector<int>& trace,
+               std::atomic_bool& failure)
+            : api(functions) {
+            value =
+                api.open("outbound and !loopback and udp.DstPort == 53 and ip.DstAddr == 192.0.2.1",
+                         WINDIVERT_LAYER_NETWORK,
+                         static_cast<INT16>(priority),
+                         0);
+            check(value != INVALID_HANDLE_VALUE, "Open priority-chain handle");
+            reader = std::jthread([this, priority, &mutex, &trace, &failure] {
+                nd::Packet packet(WINDIVERT_MTU_MAX);
+                UINT length = 0;
+                WINDIVERT_ADDRESS address{};
+                if (!api.recv(value,
+                              packet.data(),
+                              static_cast<UINT>(packet.size()),
+                              &length,
+                              &address)) {
+                    failure = true;
+                    return;
+                }
+                {
+                    std::lock_guard lock(mutex);
+                    trace.push_back(priority);
+                }
+                UINT sent = 0;
+                if (!api.send(value, packet.data(), length, &sent, &address) || sent != length)
+                    failure = true;
+            });
+        }
+        ~Handle() {
+            if (value != INVALID_HANDLE_VALUE)
+                api.shutdown(value, WINDIVERT_SHUTDOWN_BOTH);
+            if (reader.joinable())
+                reader.join();
+            if (value != INVALID_HANDLE_VALUE)
+                api.close(value);
+        }
+    };
+    nd::IpcResponse response;
+    {
+        Handle lower(api, 124, sequence_mutex, sequence, failed);
+        Handle higher(api, 125, sequence_mutex, sequence, failed);
+        response = nd::pipe_request(pipe, nd::IpcOperation::interception_test, {}, 5000);
+    }
+    check(!failed && sequence == std::vector<int>{125, 124},
+          "WinDivert 2.2 reinjection order is higher numeric priority first");
+    output << "PASS two WinDivert handles: 125 -> 124 -> NativeDNS 123; exactly one capture per "
+              "handle\n";
+    return response;
+}
 void exercise(std::ostream& output, const std::filesystem::path& directory) {
     check(nd::platform::is_elevated(), "Real WinDivert tests require elevation");
     for (const auto& conflict : nd::platform::interception_conflicts())
@@ -120,7 +206,8 @@ void exercise(std::ostream& output, const std::filesystem::path& directory) {
     upstream.ip = "1.1.1.1";
     upstream.timeout_ms = 5000;
     config.servers.push_back(upstream);
-    config.settings["clearDnsCache"] = "true";
+    config.settings["clearDnsCache"] = "false";
+    config.settings["windowsPrepareSystemDns"] = "false";
     const auto path = directory / "windivert-live-config.xml";
     const std::string pipe =
         R"(\\.\pipe\NativeDNS.Test.Live.)" + std::to_string(nd::platform::process_id());
@@ -134,6 +221,20 @@ void exercise(std::ostream& output, const std::filesystem::path& directory) {
         host.start();
         check(nd::pipe_request(pipe, nd::IpcOperation::status).payload.starts_with("RUNNING"),
               "Live CoreHost status");
+        const auto baseline =
+            nd::pipe_request(pipe, nd::IpcOperation::interception_status, {}, 5000);
+        check(!baseline.status &&
+                  baseline.payload.find("interception_health=UNVERIFIED") != std::string::npos,
+              "Startup must not claim verified interception");
+        const auto self_test = test_priority_chain(pipe, output);
+        output << self_test.payload;
+        check(!self_test.status && self_test.payload.find("probe_received=1") != std::string::npos,
+              "Active UDP/IPv4 capture/injection/delivery test");
+        const auto verified =
+            nd::pipe_request(pipe, nd::IpcOperation::interception_status, {}, 5000);
+        check(verified.payload.find("interception_health=VERIFIED") != std::string::npos &&
+                  verified.payload.find("packets_received=0\n") == std::string::npos,
+              "Successful active test must update counters and health");
         for (bool tcp : {false, true}) {
             const auto response = query(tcp, "8.8.8.8", "native-dns-live.invalid");
             check((response[3] & 15) == 3, "Live Block returns NXDOMAIN");

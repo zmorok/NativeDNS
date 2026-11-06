@@ -250,7 +250,7 @@ void Logger::configure_file(bool enabled,
     task.kind = FileTask::Kind::configure;
     task.enabled = enabled;
     task.level = level;
-    task.path = std::move(path);
+    task.path = path.empty() ? path : std::filesystem::absolute(path);
     task.maximum_bytes = maximum_bytes;
     task.retained_files = retained_files;
     submit_file_task(std::move(task));
@@ -275,7 +275,30 @@ void Logger::submit_file_task(FileTask task) {
     file_changed_.notify_one();
     completed.get();
 }
+FileLogStatus Logger::file_status() const {
+    FileLogStatus result;
+    {
+        std::lock_guard lock(file_status_mutex_);
+        result.path = observed_file_path_;
+        result.last_error = last_file_error_;
+    }
+    result.enabled = file_enabled_.load();
+    result.writer_active = writer_active_.load();
+    result.level = file_level_.load();
+    result.written_events = written_file_events_.load();
+    result.lost_events = dropped_file_events_.load();
+    result.last_write_timestamp_ms = last_file_write_ms_.load();
+    result.state = file_failed_         ? "FAILED"
+                   : !result.enabled    ? "DISABLED"
+                   : result.lost_events ? "DEGRADED"
+                                        : "ENABLED";
+    return result;
+}
 void Logger::record_file_failure(const std::string& message) {
+    {
+        std::lock_guard lock(file_status_mutex_);
+        last_file_error_ = message;
+    }
     std::lock_guard lock(mutex_);
     events_.push_back({++sequence_,
                        std::chrono::system_clock::now(),
@@ -288,6 +311,7 @@ void Logger::record_file_failure(const std::string& message) {
     changed_.notify_all();
 }
 void Logger::file_loop() {
+    writer_active_ = true;
     bool sink_enabled = false;
     for (;;) {
         FileTask task;
@@ -309,11 +333,23 @@ void Logger::file_loop() {
                         file_tasks_.pop_front();
                     }
                 }
-                if (sink_enabled)
-                    write_file_batch(batch);
+                if (sink_enabled) {
+                    try {
+                        write_file_batch(batch);
+                    } catch (...) {
+                        dropped_file_events_.fetch_add(batch.size());
+                        throw;
+                    }
+                } else
+                    dropped_file_events_.fetch_add(batch.size());
                 continue;
             }
             if (task.kind == FileTask::Kind::configure) {
+                {
+                    std::lock_guard lock(file_status_mutex_);
+                    observed_file_path_ = task.path;
+                }
+                file_level_ = task.level;
                 if (task.enabled) {
                     const auto parent = task.path.parent_path();
                     if (!parent.empty())
@@ -332,7 +368,7 @@ void Logger::file_loop() {
                 file_level_ = task.level;
                 sink_enabled = task.enabled;
                 file_enabled_ = task.enabled;
-                dropped_file_events_ = 0;
+                file_failed_ = false;
             } else if (task.kind == FileTask::Kind::clear) {
                 if (!file_path_.empty() && std::filesystem::exists(file_path_)) {
                     std::ofstream stream(file_path_, std::ios::binary | std::ios::trunc);
@@ -342,7 +378,16 @@ void Logger::file_loop() {
                     if (!stream)
                         throw std::runtime_error("cannot flush cleared log file");
                 }
+            } else if (task.kind == FileTask::Kind::flush) {
+                // Every completed batch is flushed before reaching this barrier.
+                if (file_failed_) {
+                    if (task.completion)
+                        task.completion->set_exception(
+                            std::make_exception_ptr(std::runtime_error(file_status().last_error)));
+                    continue;
+                }
             } else if (task.kind == FileTask::Kind::stop) {
+                writer_active_ = false;
                 if (task.completion)
                     task.completion->set_value();
                 return;
@@ -353,6 +398,7 @@ void Logger::file_loop() {
             const auto failure = std::current_exception();
             sink_enabled = false;
             file_enabled_ = false;
+            file_failed_ = true;
             try {
                 std::rethrow_exception(failure);
             } catch (const std::exception& error) {
@@ -440,5 +486,12 @@ void Logger::write_file_batch(const std::vector<LogEvent>& events) {
         if (!stream)
             throw std::runtime_error("cannot flush log file");
     }
+    written_file_events_.fetch_add(events.size());
+    last_file_write_ms_ =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count());
+    std::lock_guard lock(file_status_mutex_);
+    observed_file_path_ = file_path_;
 }
 } // namespace nd

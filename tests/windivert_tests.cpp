@@ -6,6 +6,7 @@
 #include <nativedns/detail/fault_injection.hpp>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windivert.h>
 #include <algorithm>
 #include <array>
 #include <iostream>
@@ -312,8 +313,81 @@ void tcp_proxy_roundtrip() {
     }
     proxy.stop();
 }
+void filter_semantics() {
+    const auto module =
+        LoadLibraryW((nd::platform::windivert_directory() / "WinDivert.dll").c_str());
+    check(module != nullptr, "Load SDK for filter semantics test");
+    const auto evaluate = reinterpret_cast<decltype(&WinDivertHelperEvalFilter)>(
+        GetProcAddress(module, "WinDivertHelperEvalFilter"));
+    check(evaluate != nullptr, "WinDivert filter evaluator available");
+    WINDIVERT_ADDRESS address{};
+    address.Outbound = 1;
+    address.Network.IfIdx = 1;
+    const auto filtered = [&](const nd::Packet& packet, bool others = false) {
+        address.IPv6 = (packet[0] >> 4) == 6;
+        const auto filter = nd::windivert_filter(others, 53, 45000);
+        return evaluate(
+                   filter.c_str(), packet.data(), static_cast<UINT>(packet.size()), &address) !=
+               FALSE;
+    };
+    check(filtered(ipv4_query()), "UDP/IPv4 query excluded by production filter");
+    check(filtered(ipv6_query()), "UDP/IPv6 query excluded by production filter");
+    address.Loopback = 1;
+    check(!filtered(ipv4_query()), "Loopback UDP must be excluded");
+    address.Loopback = 0;
+    address.Impostor = 1;
+    check(!filtered(ipv4_query()) && filtered(ipv4_query(), true),
+          "interceptOthers filter semantics");
+    address.Impostor = 0;
+    address.Outbound = 0;
+    check(!filtered(ipv4_query()), "Inbound UDP unexpectedly captured");
+    address.Outbound = 1;
+    auto fragment = ipv4_query();
+    write16(fragment.data() + 6, 0x2000);
+    check(!filtered(fragment), "Fragmented UDP unexpectedly captured");
+    auto short_packet = ipv4_query();
+    short_packet.resize(28 + 11);
+    write16(short_packet.data() + 2, static_cast<uint16_t>(short_packet.size()));
+    write16(short_packet.data() + 24, 8 + 11);
+    check(!filtered(short_packet), "Short DNS payload unexpectedly captured");
+    check(filtered(ipv4_tcp(50000, 53)), "TCP/53 excluded");
+    check(!filtered(ipv4_tcp(50000, 443)), "Encrypted non-DNS TCP unexpectedly captured");
+    FreeLibrary(module);
+    nd::Logger logger;
+    nd::WinDivertInterception stopped(nd::default_config(), logger);
+    const auto status = stopped.diagnostics();
+    check(status.supported && !status.handle_open && !status.receiver_active &&
+              status.health == "UNVERIFIED" && status.packets_received == 0,
+          "False verified initial state");
+    auto changed = nd::default_config();
+    changed.settings["windivertPriority"] = "124";
+    bool restart = false;
+    try {
+        stopped.reload(changed);
+    } catch (const nd::Error& error) {
+        restart = error.code == "RESTART_REQUIRED";
+    }
+    check(restart, "Priority change must require restart");
+    changed = nd::default_config();
+    changed.settings["interceptOthers"] = "1";
+    restart = false;
+    try {
+        stopped.reload(changed);
+    } catch (const nd::Error& error) {
+        restart = error.code == "RESTART_REQUIRED";
+    }
+    check(restart, "interceptOthers change must require restart");
+    nd::InterceptionTestResult probe;
+    probe.sent = probe.captured = probe.parsed = probe.injected = true;
+    check(!probe.success(), "Injection without delivery cannot verify interception");
+    probe.received = true;
+    check(probe.success(), "Complete probe not considered verified");
+    probe.in_progress = true;
+    check(!probe.success(), "An unfinished probe must not claim verification");
+}
 int main() {
     try {
+        filter_semantics();
         check(!nd::detail::is_network_upstream(false, 42424), "upstream registry initially empty");
         {
             nd::detail::NetworkUpstreamGuard first(false, 42424), second(false, 42424);
