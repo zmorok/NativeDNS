@@ -2,7 +2,10 @@
 #include <nativedns/host.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/network.hpp>
+#include <nativedns/detail/bootstrap.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include <curl/curl.h>
+#include <cstdlib>
 #include <iostream>
 #include <future>
 void check(bool value, const char* message) {
@@ -10,6 +13,21 @@ void check(bool value, const char* message) {
         throw std::runtime_error(message);
 }
 int local_tls_checks(char** argv) {
+#ifdef _WIN32
+    char* ca_raw = nullptr;
+    size_t ca_len = 0;
+    if (_dupenv_s(&ca_raw, &ca_len, "NATIVEDNS_TEST_CA_FILE") == 0 && ca_raw && *ca_raw)
+        nd::detail::set_test_ca_file_for_testing(ca_raw);
+    std::free(ca_raw);
+#else
+    if (const auto* ca = std::getenv("NATIVEDNS_TEST_CA_FILE"); ca && *ca)
+        nd::detail::set_test_ca_file_for_testing(ca);
+#endif
+    struct ClearCa {
+        ~ClearCa() {
+            nd::detail::set_test_ca_file_for_testing({});
+        }
+    } clear_ca;
     auto server = [](const char* port) {
         nd::Server result;
         result.protocol = nd::Protocol::doh;
@@ -24,6 +42,22 @@ int local_tls_checks(char** argv) {
         throw std::runtime_error("Local trusted DoH control failed: " + positive.error_code + " " +
                                  positive.message);
     std::cout << "PASS trusted certificate and real DoH answer\n";
+    {
+        auto shared_doh = nd::make_transport(nd::Protocol::doh);
+        std::vector<std::future<void>> concurrent;
+        for (int i = 0; i < 16; ++i) {
+            concurrent.push_back(std::async(std::launch::async, [&, i] {
+                const auto q = nd::make_query("c" + std::to_string(i) + ".example");
+                const auto resp = shared_doh->exchange(q, valid);
+                const auto ans = nd::parse_response(resp, nd::parse_question(q));
+                if (ans.rcode || ans.addresses != std::vector<std::string>{"192.0.2.53"})
+                    throw std::runtime_error("Concurrent multiplexed DoH failed");
+            }));
+        }
+        for (auto& f : concurrent)
+            f.get();
+        std::cout << "PASS 16 concurrent DoH requests through shared multi dispatcher\n";
+    }
     const auto expect = [](const nd::Server& candidate, const char* code, const char* name) {
         const auto result = nd::test_server(candidate);
         if (result.success || result.error_code != code)
@@ -47,6 +81,13 @@ int main(int argc, char** argv) {
         check((curl_version_info(CURLVERSION_NOW)->features & CURL_VERSION_HTTP2) != 0,
               "Bundled Windows libcurl must support HTTP/2");
 #endif
+        check(nd::detail::is_dns_message_content_type("application/dns-message") &&
+                  nd::detail::is_dns_message_content_type("Application/DNS-Message; charset=binary") &&
+                  nd::detail::is_dns_message_content_type("  application/dns-message ; foo=bar ") &&
+                  !nd::detail::is_dns_message_content_type("") &&
+                  !nd::detail::is_dns_message_content_type("text/html; charset=utf-8") &&
+                  !nd::detail::is_dns_message_content_type("application/dns-json"),
+              "RFC 8484 Content-Type media-type parsing");
         nd::Server server;
         server.id = 1;
         server.name = "secure test";

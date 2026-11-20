@@ -67,13 +67,13 @@ Failed tests return a structured error code/message suitable for readable red GU
 
 DNS over HTTPS uses libcurl.
 
-The Router keeps a bounded pool of up to eight libcurl easy handles per DoH server. Reusing a handle preserves libcurl's connection cache. DoH requests prefer HTTP/2 through ALPN and automatically fall back to HTTP/1.1 when the server does not negotiate HTTP/2. Idle connections older than 30 seconds and connections older than five minutes are not reused.
+The Router uses a shared `CURLM` HTTP/2 multiplexing dispatcher per network route/generation (up to 64 concurrent in-flight streams multiplexed over up to two TLS connections per host, falling back to HTTP/1.1 when ALPN does not negotiate HTTP/2). Idle connections older than 30 seconds and connections older than five minutes are not reused; stale keep-alive connection drops are retried once within the remaining request deadline.
 
 Requirements include:
 
 - certificate/hostname verification;
 - HTTP success;
-- `application/dns-message`;
+- `application/dns-message` media type (ignoring RFC 8484 MIME parameters such as `; charset=binary` and reporting the actual received value on mismatch);
 - configured timeout;
 - optional certificate/public-key pin behavior where configured.
 

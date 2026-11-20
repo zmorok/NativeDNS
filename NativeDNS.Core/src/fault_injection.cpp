@@ -7,7 +7,16 @@ namespace {
 std::mutex fault_mutex;
 std::string fault_stage;
 bool fault_once = false;
+std::string test_ca_file;
 } // namespace
+void set_test_ca_file_for_testing(std::string path) {
+    std::lock_guard lock(fault_mutex);
+    test_ca_file = std::move(path);
+}
+std::string test_ca_file_for_testing() {
+    std::lock_guard lock(fault_mutex);
+    return test_ca_file;
+}
 void set_fault_stage_for_testing(std::string stage, bool once) {
     std::lock_guard lock(fault_mutex);
     fault_stage = std::move(stage);
