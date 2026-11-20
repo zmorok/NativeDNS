@@ -1,5 +1,6 @@
 #include <nativedns/tcp_dns_proxy.hpp>
 #include <nativedns/platform.hpp>
+#include <nativedns/detail/fault_injection.hpp>
 #include "../../bounded_executor.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -281,6 +282,27 @@ uint16_t TcpDnsProxy::start() {
             throw Error("SOCKET_INIT", "TCP proxy WSAStartup failed");
         p.winsock = true;
         int last_error = 0;
+        bool ipv6_available = true;
+        try {
+            detail::fault_point("tcp_proxy.ipv6_socket");
+            SOCKET probe6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+            if (probe6 == INVALID_SOCKET) {
+                const int err = WSAGetLastError();
+                if (err == WSAEAFNOSUPPORT || err == WSAEPROTONOSUPPORT ||
+                    err == WSAENETUNREACH || err == WSAEINVAL)
+                    ipv6_available = false;
+                else
+                    throw Error("TCP_PROXY_IO",
+                                "Cannot create IPv6 TCP proxy listener: " + std::to_string(err));
+            } else {
+                closesocket(probe6);
+            }
+        } catch (const Error& error) {
+            if (error.code == "FAULT_INJECTED")
+                ipv6_available = false;
+            else
+                throw;
+        }
         for (unsigned attempt = 0; attempt < 128; ++attempt) {
             uint32_t random = 0;
             if (BCryptGenRandom(nullptr,
@@ -290,26 +312,39 @@ uint16_t TcpDnsProxy::start() {
                 throw Error("TCP_PROXY_IO", "Cannot choose TCP proxy port");
             const uint16_t candidate = static_cast<uint16_t>(20000 + (random % 28000));
             p.ipv4 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            p.ipv6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
-            if (p.ipv4 == INVALID_SOCKET || p.ipv6 == INVALID_SOCKET)
-                throw Error("TCP_PROXY_IO", "Cannot create TCP proxy listeners");
+            if (p.ipv4 == INVALID_SOCKET)
+                throw Error("TCP_PROXY_IO", "Cannot create IPv4 TCP proxy listener");
+            if (ipv6_available) {
+                p.ipv6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+                if (p.ipv6 == INVALID_SOCKET) {
+                    const int err = WSAGetLastError();
+                    if (err == WSAEAFNOSUPPORT || err == WSAEPROTONOSUPPORT ||
+                        err == WSAENETUNREACH || err == WSAEINVAL) {
+                        ipv6_available = false;
+                    } else {
+                        throw Error("TCP_PROXY_IO", "Cannot create IPv6 TCP proxy listener");
+                    }
+                }
+            }
             BOOL exclusive = TRUE, ipv6_only = TRUE;
             if (setsockopt(p.ipv4,
                            SOL_SOCKET,
                            SO_EXCLUSIVEADDRUSE,
                            reinterpret_cast<const char*>(&exclusive),
-                           sizeof(exclusive)) ||
-                setsockopt(p.ipv6,
-                           SOL_SOCKET,
-                           SO_EXCLUSIVEADDRUSE,
-                           reinterpret_cast<const char*>(&exclusive),
-                           sizeof(exclusive)) ||
-                setsockopt(p.ipv6,
-                           IPPROTO_IPV6,
-                           IPV6_V6ONLY,
-                           reinterpret_cast<const char*>(&ipv6_only),
-                           sizeof(ipv6_only)))
-                throw Error("TCP_PROXY_IO", "Cannot secure TCP proxy listener");
+                           sizeof(exclusive)))
+                throw Error("TCP_PROXY_IO", "Cannot secure IPv4 TCP proxy listener");
+            if (p.ipv6 != INVALID_SOCKET &&
+                (setsockopt(p.ipv6,
+                            SOL_SOCKET,
+                            SO_EXCLUSIVEADDRUSE,
+                            reinterpret_cast<const char*>(&exclusive),
+                            sizeof(exclusive)) ||
+                 setsockopt(p.ipv6,
+                            IPPROTO_IPV6,
+                            IPV6_V6ONLY,
+                            reinterpret_cast<const char*>(&ipv6_only),
+                            sizeof(ipv6_only))))
+                throw Error("TCP_PROXY_IO", "Cannot secure IPv6 TCP proxy listener");
             // Reflection preserves the original resolver address, so the local
             // stack cannot reach this listener through a loopback-only bind.
             // Exposure is constrained by the per-run firewall rule and every
@@ -318,13 +353,29 @@ uint16_t TcpDnsProxy::start() {
             address4.sin_family = AF_INET;
             address4.sin_port = htons(candidate);
             address4.sin_addr.s_addr = htonl(INADDR_ANY);
-            sockaddr_in6 address6{};
-            address6.sin6_family = AF_INET6;
-            address6.sin6_port = htons(candidate);
-            address6.sin6_addr = in6addr_any;
-            if (!bind(p.ipv4, reinterpret_cast<sockaddr*>(&address4), sizeof(address4)) &&
-                !bind(p.ipv6, reinterpret_cast<sockaddr*>(&address6), sizeof(address6)) &&
-                !listen(p.ipv4, 64) && !listen(p.ipv6, 64)) {
+            const bool ok4 =
+                !bind(p.ipv4, reinterpret_cast<sockaddr*>(&address4), sizeof(address4)) &&
+                !listen(p.ipv4, 64);
+            bool ok6 = true;
+            if (ok4 && p.ipv6 != INVALID_SOCKET) {
+                sockaddr_in6 address6{};
+                address6.sin6_family = AF_INET6;
+                address6.sin6_port = htons(candidate);
+                address6.sin6_addr = in6addr_any;
+                ok6 = !bind(p.ipv6, reinterpret_cast<sockaddr*>(&address6), sizeof(address6)) &&
+                      !listen(p.ipv6, 64);
+                if (!ok6) {
+                    const int err = WSAGetLastError();
+                    if (err == WSAEAFNOSUPPORT || err == WSAEPROTONOSUPPORT ||
+                        err == WSAENETUNREACH || err == WSAEADDRNOTAVAIL) {
+                        closesocket(p.ipv6);
+                        p.ipv6 = INVALID_SOCKET;
+                        ipv6_available = false;
+                        ok6 = true;
+                    }
+                }
+            }
+            if (ok4 && ok6) {
                 p.port = candidate;
                 break;
             }
@@ -333,10 +384,15 @@ uint16_t TcpDnsProxy::start() {
         }
         if (!p.port)
             throw Error("TCP_PROXY_BIND",
-                        "Cannot bind TCP proxy listener pair: " + std::to_string(last_error));
+                        "Cannot bind TCP proxy listener: " + std::to_string(last_error));
+        if (p.ipv6 == INVALID_SOCKET)
+            p.logger.write(Level::normal,
+                           "TCP_PROXY_IPV4_ONLY",
+                           "IPv6 is unavailable; transparent TCP DNS proxy running in IPv4-only mode");
         p.handlers.start(32, 128);
         p.accept4 = std::jthread([&p] { p.accept_loop(p.ipv4); });
-        p.accept6 = std::jthread([&p] { p.accept_loop(p.ipv6); });
+        if (p.ipv6 != INVALID_SOCKET)
+            p.accept6 = std::jthread([&p] { p.accept_loop(p.ipv6); });
         return p.port;
     } catch (...) {
         p.running = false;

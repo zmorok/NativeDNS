@@ -410,9 +410,9 @@ std::string windivert_filter(bool intercept_others, uint16_t target_port, uint16
     const std::string injected = intercept_others ? "" : "!impostor and ";
     const auto target = std::to_string(target_port), proxy = std::to_string(proxy_port);
     return "(outbound and !loopback and " + injected +
-           "!fragment and udp.DstPort == 53 and udp.PayloadLength >= 12) or (" + injected +
-           "tcp and !fragment and (tcp.DstPort == " + target + " or tcp.SrcPort == " + target +
-           " or tcp.DstPort == " + proxy + " or tcp.SrcPort == " + proxy + "))";
+           "!fragment and udp.DstPort == 53 and udp.PayloadLength >= 12) or (outbound and " +
+           injected + "tcp and !fragment and (tcp.DstPort == " + target +
+           " or tcp.SrcPort == " + proxy + "))";
 }
 struct WinDivertInterception::Impl {
     using Open = decltype(&WinDivertOpen);

@@ -2,6 +2,7 @@
 #include "../../bounded_executor.hpp"
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mswsock.h>
 #include <windows.h>
 #include <bcrypt.h>
 #include <thread>
@@ -103,34 +104,52 @@ struct LocalProxy::Impl {
     }
     void udp_loop() {
         try {
+            Packet scratch(65535);
             while (wait(udp_event)) {
                 WSANETWORKEVENTS events{};
                 if (WSAEnumNetworkEvents(udp, udp_event, &events))
                     throw Error("PROXY_IO", "UDP event enumeration failed");
                 if (!(events.lNetworkEvents & FD_READ))
                     continue;
-                Packet packet(65535);
-                sockaddr_storage client{};
-                int size = sizeof(client);
-                const int n = recvfrom(udp,
-                                       reinterpret_cast<char*>(packet.data()),
-                                       static_cast<int>(packet.size()),
-                                       0,
-                                       reinterpret_cast<sockaddr*>(&client),
-                                       &size);
-                if (n == SOCKET_ERROR) {
-                    if (WSAGetLastError() == WSAEWOULDBLOCK)
-                        continue;
-                    throw Error("PROXY_IO", "UDP receive failed");
+                for (;;) {
+                    sockaddr_storage client{};
+                    int size = sizeof(client);
+                    const int n = recvfrom(udp,
+                                           reinterpret_cast<char*>(scratch.data()),
+                                           static_cast<int>(scratch.size()),
+                                           0,
+                                           reinterpret_cast<sockaddr*>(&client),
+                                           &size);
+                    if (n == SOCKET_ERROR) {
+                        const int err = WSAGetLastError();
+                        if (err == WSAEWOULDBLOCK)
+                            break;
+                        if (err == WSAECONNRESET || err == WSAENETRESET)
+                            continue;
+                        throw Error("PROXY_IO", "UDP receive failed: " + std::to_string(err));
+                    }
+                    Packet packet(scratch.begin(), scratch.begin() + n);
+                    if (!udp_handlers.submit(
+                            [this, packet = std::move(packet), client, size]() mutable {
+                                handle_udp(std::move(packet), client, size);
+                            })) {
+                        try {
+                            const auto servfail = make_error_response(
+                                Packet(scratch.begin(), scratch.begin() + n), 2);
+                            (void)sendto(udp,
+                                         reinterpret_cast<const char*>(servfail.data()),
+                                         static_cast<int>(servfail.size()),
+                                         0,
+                                         reinterpret_cast<const sockaddr*>(&client),
+                                         size);
+                        } catch (...) {
+                        }
+                        logger.write_limited(Level::errors_only,
+                                             "proxy-udp-busy",
+                                             "PROXY_BUSY",
+                                             "Local UDP proxy queue is full; returned SERVFAIL");
+                    }
                 }
-                packet.resize(static_cast<size_t>(n));
-                if (!udp_handlers.submit(
-                        [this, packet = std::move(packet), client, size]() mutable {
-                            handle_udp(std::move(packet), client, size);
-                        }))
-                    logger.write(Level::errors_only,
-                                 "PROXY_BUSY",
-                                 "Local UDP proxy queue is full; query dropped");
             }
         } catch (const std::exception& error) {
             logger.write(Level::errors_only, "PROXY_IO", error.what());
@@ -293,6 +312,17 @@ void LocalProxy::start() {
                            reinterpret_cast<const char*>(&exclusive),
                            sizeof(exclusive)))
                 throw Error("PROXY_IO", "Cannot secure listener binding");
+            BOOL connreset = FALSE;
+            DWORD bytes_returned = 0;
+            (void)WSAIoctl(p.udp,
+                           SIO_UDP_CONNRESET,
+                           &connreset,
+                           sizeof(connreset),
+                           nullptr,
+                           0,
+                           &bytes_returned,
+                           nullptr,
+                           nullptr);
             uint32_t random_port = 0;
             if (!p.requested_port && BCryptGenRandom(nullptr,
                                                      reinterpret_cast<PUCHAR>(&random_port),

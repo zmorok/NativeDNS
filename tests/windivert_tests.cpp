@@ -312,6 +312,57 @@ void tcp_proxy_roundtrip() {
         closesocket(short_lived);
     }
     proxy.stop();
+    {
+        // Verify IPv4-only startup when IPv6 is unavailable on the host.
+        nd::Logger v4_log;
+        nd::Router v4_router(config, v4_log);
+        nd::detail::TcpDnsProxy v4_proxy(v4_router, v4_log, 53, 200);
+        nd::detail::set_fault_stage_for_testing("tcp_proxy.ipv6_socket", true);
+        const auto v4_port = v4_proxy.start();
+        nd::detail::clear_fault_stage_for_testing();
+        check(v4_port != 0, "TCP proxy must start in IPv4-only mode when IPv6 is unavailable");
+        const auto events = v4_log.snapshot(nd::Level::normal);
+        check(std::any_of(events.begin(), events.end(), [](const nd::LogEvent& event) {
+                  return event.code == "TCP_PROXY_IPV4_ONLY";
+              }),
+              "IPv4-only TCP proxy startup must log TCP_PROXY_IPV4_ONLY");
+        SOCKET v4_client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        check(v4_client != INVALID_SOCKET, "IPv4-only proxy client socket");
+        sockaddr_in v4_local{};
+        v4_local.sin_family = AF_INET;
+        v4_local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        check(bind(v4_client, reinterpret_cast<sockaddr*>(&v4_local), sizeof(v4_local)) == 0,
+              "IPv4-only proxy client bind");
+        int v4_local_size = sizeof(v4_local);
+        check(getsockname(v4_client, reinterpret_cast<sockaddr*>(&v4_local), &v4_local_size) == 0,
+              "IPv4-only proxy client endpoint");
+        v4_proxy.expect_connection("127.0.0.1", ntohs(v4_local.sin_port));
+        sockaddr_in v4_addr{};
+        v4_addr.sin_family = AF_INET;
+        v4_addr.sin_port = htons(v4_port);
+        v4_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        check(connect(v4_client, reinterpret_cast<sockaddr*>(&v4_addr), sizeof(v4_addr)) == 0,
+              "IPv4-only proxy connect");
+        check(send(v4_client,
+                   reinterpret_cast<const char*>(frame.data()),
+                   static_cast<int>(frame.size()),
+                   0) == static_cast<int>(frame.size()),
+              "IPv4-only proxy send");
+        uint8_t v4_prefix[2]{};
+        check(recv(v4_client, reinterpret_cast<char*>(v4_prefix), 2, MSG_WAITALL) == 2,
+              "IPv4-only proxy prefix");
+        nd::Packet v4_resp(static_cast<size_t>((v4_prefix[0] << 8) | v4_prefix[1]));
+        check(recv(v4_client,
+                   reinterpret_cast<char*>(v4_resp.data()),
+                   static_cast<int>(v4_resp.size()),
+                   MSG_WAITALL) == static_cast<int>(v4_resp.size()),
+              "IPv4-only proxy response");
+        check(nd::parse_response(v4_resp, nd::parse_question(query)).addresses ==
+                  std::vector<std::string>{"0.0.0.0"},
+              "IPv4-only proxy serves DNS over IPv4");
+        closesocket(v4_client);
+        v4_proxy.stop();
+    }
 }
 void filter_semantics() {
     const auto module =
@@ -351,7 +402,12 @@ void filter_semantics() {
     write16(short_packet.data() + 24, 8 + 11);
     check(!filtered(short_packet), "Short DNS payload unexpectedly captured");
     check(filtered(ipv4_tcp(50000, 53)), "TCP/53 excluded");
+    check(filtered(ipv4_tcp(45000, 50000)), "Reflected outbound proxy TCP excluded");
     check(!filtered(ipv4_tcp(50000, 443)), "Encrypted non-DNS TCP unexpectedly captured");
+    address.Outbound = 0;
+    check(!filtered(ipv4_tcp(53, 50000)), "Inbound TCP/53 must not be captured");
+    check(!filtered(ipv4_tcp(50000, 45000)), "Inbound proxy TCP must not be captured");
+    address.Outbound = 1;
     FreeLibrary(module);
     nd::Logger logger;
     nd::WinDivertInterception stopped(nd::default_config(), logger);

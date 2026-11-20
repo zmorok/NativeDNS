@@ -192,14 +192,18 @@ Packet exchange_network(const Packet& request,
         socket_error("UDP send");
     if (sent != static_cast<int>(request.size()))
         throw Error("SOCKET", "Incomplete UDP send");
-    Packet response(65535);
-    ready(socket, false, deadline);
-    const int received = recv(
-        socket, reinterpret_cast<char*>(response.data()), static_cast<int>(response.size()), 0);
-    if (received == SOCKET_ERROR)
-        socket_error("UDP receive");
-    response.resize(static_cast<size_t>(received));
-    return response;
+    thread_local Packet scratch(65535);
+    for (;;) {
+        ready(socket, false, deadline);
+        const int received = recv(
+            socket, reinterpret_cast<char*>(scratch.data()), static_cast<int>(scratch.size()), 0);
+        if (received == SOCKET_ERROR) {
+            if (WSAGetLastError() == WSAEWOULDBLOCK)
+                continue;
+            socket_error("UDP receive");
+        }
+        return Packet(scratch.begin(), scratch.begin() + received);
+    }
 }
 } // namespace detail
 namespace {
@@ -287,6 +291,7 @@ private:
         if (selected->connection && Clock::now() - selected->last_used > std::chrono::seconds(30))
             selected->connection.reset();
         for (unsigned attempt = 0; attempt < 2; ++attempt) {
+            const bool reused = selected->connection != nullptr;
             try {
                 if (!selected->connection)
                     selected->connection =
@@ -296,8 +301,10 @@ private:
                 return response;
             } catch (const Error& error) {
                 selected->connection.reset();
-                if (attempt ||
-                    !(error.code == "TIMEOUT" || error.code == "SOCKET" || error.code == "DNS_EOF"))
+                const bool retryable =
+                    error.code == "SOCKET" || error.code == "DNS_EOF" ||
+                    (reused && error.code == "TIMEOUT");
+                if (attempt || !retryable || Clock::now() >= deadline)
                     throw;
             }
         }

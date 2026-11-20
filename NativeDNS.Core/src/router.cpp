@@ -515,7 +515,45 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         if (logger_.enabled(Level::verbose))
             log(Level::verbose, "DNS_UPSTREAM", route_log_message(question, rule, &routed_server));
         exchange_started = std::chrono::steady_clock::now();
-        auto exchanged = exchange_cached(snapshot, request, routed_server, rule.server_id != 0);
+        ExchangeResult exchanged;
+        if (!decision.route.interface_id.empty() && !rule.server_id &&
+            decision.interface_dns.size() > 1) {
+            const auto total_deadline =
+                exchange_started + std::chrono::milliseconds(routed_server.timeout_ms);
+            std::exception_ptr last_error;
+            bool succeeded = false;
+            for (size_t i = 0; i < decision.interface_dns.size(); ++i) {
+                const auto now = std::chrono::steady_clock::now();
+                if (now >= total_deadline)
+                    break;
+                const auto remaining_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(total_deadline - now)
+                        .count();
+                const auto left = decision.interface_dns.size() - i;
+                auto candidate = routed_server;
+                candidate.ip = decision.interface_dns[i];
+                candidate.port = 53;
+                candidate.timeout_ms = static_cast<uint32_t>(
+                    std::max<int64_t>(1, remaining_ms / static_cast<int64_t>(left)));
+                try {
+                    exchanged = exchange_cached(snapshot, request, candidate, false);
+                    routed_server = std::move(candidate);
+                    succeeded = true;
+                    break;
+                } catch (const Error& error) {
+                    if (error.code == "CANCELLED")
+                        throw;
+                    last_error = std::current_exception();
+                }
+            }
+            if (!succeeded) {
+                if (last_error)
+                    std::rethrow_exception(last_error);
+                throw Error("TIMEOUT", "Interface DNS resolvers timed out");
+            }
+        } else {
+            exchanged = exchange_cached(snapshot, request, routed_server, rule.server_id != 0);
+        }
         result.packet = std::move(exchanged.packet);
         result.server_id = exchanged.used_server_id;
         if (result.server_id) {
