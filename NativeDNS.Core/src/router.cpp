@@ -68,7 +68,9 @@ Router::SnapshotPtr Router::snapshot() const {
 }
 void Router::reload(Config config) const {
     validate(config);
-    snapshot_.store(std::make_shared<Snapshot>(std::move(config)));
+    auto next = std::make_shared<Snapshot>(std::move(config));
+    platform::set_captive_portal_polling_enabled(next->options.captive_portal_detection);
+    snapshot_.store(std::move(next));
 }
 void Router::cancel_pending() const {
     cancellation_.load()->request_stop();
@@ -151,10 +153,12 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
     uint64_t budget_ms = 0;
     for (const auto* server : candidates)
         budget_ms = std::min<uint64_t>(120000, budget_ms + server->timeout_ms);
+    budget_ms = std::max<uint64_t>(primary.timeout_ms, std::min<uint64_t>(30000, budget_ms));
     const auto deadline = started + std::chrono::milliseconds(budget_ms);
     const auto health_key = [&](const Server* server) {
         return std::to_string(server->id) + '|' + network_route_key(primary.route);
     };
+    const Server* claimed_probe = nullptr;
     {
         std::lock_guard lock(snapshot.health_mutex);
         const auto now = std::chrono::steady_clock::now();
@@ -164,18 +168,19 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             snapshot.health.try_emplace(health_key(candidate));
         const bool any_ready =
             std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                return snapshot.health.at(health_key(server)).retry_after <= now;
+                const auto& h = snapshot.health.at(health_key(server));
+                return h.retry_after <= now && !h.probing;
             });
         std::stable_sort(
             candidates.begin(), candidates.end(), [&](const Server* left, const Server* right) {
                 const auto& a = snapshot.health.at(health_key(left));
                 const auto& b = snapshot.health.at(health_key(right));
-                const bool a_open = any_ready && a.retry_after > now,
-                           b_open = any_ready && b.retry_after > now;
+                const bool a_open = any_ready && (a.retry_after > now || a.probing),
+                           b_open = any_ready && (b.retry_after > now || b.probing);
                 if (a_open != b_open)
                     return !a_open;
-                const bool a_probe = a.consecutive_failures >= 2 && a.retry_after <= now,
-                           b_probe = b.consecutive_failures >= 2 && b.retry_after <= now;
+                const bool a_probe = a.consecutive_failures >= 2 && a.retry_after <= now && !a.probing,
+                           b_probe = b.consecutive_failures >= 2 && b.retry_after <= now && !b.probing;
                 if (a_probe != b_probe)
                     return a_probe;
                 if (a.latency_ms.has_value() != b.latency_ms.has_value())
@@ -184,7 +189,26 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
                     return *a.latency_ms < *b.latency_ms;
                 return false;
             });
+        for (const auto* candidate : candidates) {
+            auto& h = snapshot.health.at(health_key(candidate));
+            if (h.consecutive_failures >= 2 && h.retry_after <= now && !h.probing) {
+                h.probing = true;
+                claimed_probe = candidate;
+                break;
+            }
+        }
     }
+    struct ProbeRelease {
+        const Snapshot& snapshot;
+        std::string key;
+        ~ProbeRelease() {
+            if (!key.empty()) {
+                std::lock_guard lock(snapshot.health_mutex);
+                if (const auto it = snapshot.health.find(key); it != snapshot.health.end())
+                    it->second.probing = false;
+            }
+        }
+    } probe_release{snapshot, claimed_probe ? health_key(claimed_probe) : std::string{}};
     std::string last_code = "UPSTREAM_UNAVAILABLE", last_message = "No upstream attempt completed";
     std::optional<std::pair<Packet, const Server*>> fallback_rcode_reply;
     for (size_t index = 0; index < candidates.size(); ++index) {
@@ -270,6 +294,7 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
 }
 Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
                                                const Packet& request,
+                                               const Question& question,
                                                const Server& primary,
                                                bool configured) const {
     if (request.size() < 2)
@@ -290,22 +315,24 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
     {
         std::unique_lock lock(snapshot.cache_mutex);
         const auto now = std::chrono::steady_clock::now();
-        for (auto entry = snapshot.cache.begin(); entry != snapshot.cache.end();) {
-            if (entry->second.expires <= now) {
-                snapshot.cache_bytes -= entry->second.packet.size() + entry->first.size();
-                entry = snapshot.cache.erase(entry);
-            } else
-                ++entry;
-        }
         if (const auto found = snapshot.cache.find(key); found != snapshot.cache.end()) {
-            const auto elapsed = static_cast<uint32_t>(
-                std::chrono::duration_cast<std::chrono::seconds>(now - found->second.stored)
-                    .count());
-            if (logger_.enabled(Level::debug))
-                logger_.write(Level::debug, "DNS_CACHE_HIT", "server=" + primary.name);
-            return {age_dns_response(found->second.packet, transaction_id, elapsed),
-                    found->second.used_server_id,
-                    ExchangeSource::cache};
+            if (found->second.expires <= now) {
+                snapshot.cache_bytes -= found->second.packet.size() + found->first.size();
+                snapshot.cache_lru.erase(found->second.lru_it);
+                snapshot.cache.erase(found);
+            } else {
+                snapshot.cache_lru.splice(
+                    snapshot.cache_lru.begin(), snapshot.cache_lru, found->second.lru_it);
+                const auto elapsed = static_cast<uint32_t>(
+                    std::chrono::duration_cast<std::chrono::seconds>(now - found->second.stored)
+                        .count());
+                if (logger_.enabled(Level::debug))
+                    logger_.write(Level::debug, "DNS_CACHE_HIT", "server=" + primary.name);
+                return {age_dns_response(found->second.packet, transaction_id, elapsed),
+                        found->second.parsed,
+                        found->second.used_server_id,
+                        ExchangeSource::cache};
+            }
         }
         const auto found = snapshot.pending.find(key);
         if (found != snapshot.pending.end())
@@ -320,7 +347,10 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
         if (!leader) {
             if (logger_.enabled(Level::debug))
                 logger_.write(Level::debug, "DNS_COALESCED", "server=" + primary.name);
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+            const auto wait_ms = std::min<uint64_t>(
+                120000, std::max<uint64_t>(primary.timeout_ms, 5000) * 2);
+            const auto deadline =
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
             while (!pending->done)
                 if (detail::wait_until_change(pending->changed, lock, deadline) ==
                     std::cv_status::timeout)
@@ -328,6 +358,7 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
             if (!pending->error_code.empty())
                 throw Error(pending->error_code, pending->error_message);
             return {age_dns_response(pending->packet, transaction_id, 0),
+                    pending->parsed,
                     pending->used_server_id,
                     ExchangeSource::coalesced};
         }
@@ -336,7 +367,7 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
         auto exchanged = exchange_group(snapshot, request, primary);
         exchanged.first =
             clamp_dns_ttl(exchanged.first, snapshot.options.ttl_min, snapshot.options.ttl_max);
-        const auto parsed = parse_response(exchanged.first, parse_question(request));
+        auto parsed = parse_response(exchanged.first, question);
         const uint32_t used_id = configured ? exchanged.second->id : 0;
         {
             std::lock_guard lock(snapshot.cache_mutex);
@@ -344,31 +375,50 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
             if (parsed.cacheable) {
                 constexpr size_t max_cache_bytes = 32 * 1024 * 1024;
                 const auto entry_bytes = exchanged.first.size() + key.size();
-                while (snapshot.cache.size() >= 4096 ||
-                       snapshot.cache_bytes + entry_bytes > max_cache_bytes) {
-                    const auto oldest =
-                        std::min_element(snapshot.cache.begin(),
-                                         snapshot.cache.end(),
-                                         [](const auto& left, const auto& right) {
-                                             return left.second.expires < right.second.expires;
-                                         });
-                    if (oldest == snapshot.cache.end())
+                if (const auto existing = snapshot.cache.find(key);
+                    existing != snapshot.cache.end()) {
+                    snapshot.cache_bytes -= existing->second.packet.size() + existing->first.size();
+                    snapshot.cache_lru.erase(existing->second.lru_it);
+                    snapshot.cache.erase(existing);
+                }
+                for (unsigned pruned = 0; pruned < 4 && !snapshot.cache_lru.empty(); ++pruned) {
+                    const auto tail = snapshot.cache.find(snapshot.cache_lru.back());
+                    if (tail == snapshot.cache.end() || tail->second.expires > now)
                         break;
-                    snapshot.cache_bytes -= oldest->second.packet.size() + oldest->first.size();
-                    snapshot.cache.erase(oldest);
+                    snapshot.cache_bytes -= tail->second.packet.size() + tail->first.size();
+                    snapshot.cache.erase(tail);
+                    snapshot.cache_lru.pop_back();
+                }
+                while (!snapshot.cache_lru.empty() &&
+                       (snapshot.cache.size() >= 4096 ||
+                        snapshot.cache_bytes + entry_bytes > max_cache_bytes)) {
+                    const auto victim = snapshot.cache.find(snapshot.cache_lru.back());
+                    if (victim != snapshot.cache.end()) {
+                        snapshot.cache_bytes -= victim->second.packet.size() + victim->first.size();
+                        snapshot.cache.erase(victim);
+                    }
+                    snapshot.cache_lru.pop_back();
                 }
                 const auto ttl = std::min<uint32_t>(parsed.cache_ttl, 86400);
-                snapshot.cache[key] = {
-                    exchanged.first, now, now + std::chrono::seconds(ttl), used_id};
+                snapshot.cache_lru.push_front(key);
+                snapshot.cache.emplace(
+                    key,
+                    CacheEntry{exchanged.first,
+                               parsed,
+                               now,
+                               now + std::chrono::seconds(ttl),
+                               used_id,
+                               snapshot.cache_lru.begin()});
                 snapshot.cache_bytes += entry_bytes;
             }
             pending->packet = exchanged.first;
+            pending->parsed = parsed;
             pending->used_server_id = used_id;
             pending->done = true;
             snapshot.pending.erase(key);
         }
         pending->changed.notify_all();
-        return {std::move(exchanged.first), used_id, ExchangeSource::upstream};
+        return {std::move(exchanged.first), std::move(parsed), used_id, ExchangeSource::upstream};
     } catch (const Error& error) {
         {
             std::lock_guard lock(snapshot.cache_mutex);
@@ -384,6 +434,16 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
             std::lock_guard lock(snapshot.cache_mutex);
             pending->error_code = "INTERNAL";
             pending->error_message = error.what();
+            pending->done = true;
+            snapshot.pending.erase(key);
+        }
+        pending->changed.notify_all();
+        throw;
+    } catch (...) {
+        {
+            std::lock_guard lock(snapshot.cache_mutex);
+            pending->error_code = "INTERNAL";
+            pending->error_message = "Unknown upstream routing exception";
             pending->done = true;
             snapshot.pending.erase(key);
         }
@@ -440,7 +500,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
         valid_question = true;
         context.address = question.name;
         context.dns_type = dns_type_name(question.type);
-        const auto decision = evaluate_rule(snapshot.config, question.name);
+        const auto decision = evaluate_compiled_rule(snapshot.compiled_rules, question.name);
         const auto& rule = *decision.rule;
         counters_.rules_evaluated.fetch_add(1, std::memory_order_relaxed);
         if (rule.action == Action::block)
@@ -536,7 +596,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 candidate.timeout_ms = static_cast<uint32_t>(
                     std::max<int64_t>(1, remaining_ms / static_cast<int64_t>(left)));
                 try {
-                    exchanged = exchange_cached(snapshot, request, candidate, false);
+                    exchanged = exchange_cached(snapshot, request, question, candidate, false);
                     routed_server = std::move(candidate);
                     succeeded = true;
                     break;
@@ -552,7 +612,8 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 throw Error("TIMEOUT", "Interface DNS resolvers timed out");
             }
         } else {
-            exchanged = exchange_cached(snapshot, request, routed_server, rule.server_id != 0);
+            exchanged =
+                exchange_cached(snapshot, request, question, routed_server, rule.server_id != 0);
         }
         result.packet = std::move(exchanged.packet);
         result.server_id = exchanged.used_server_id;
@@ -567,7 +628,7 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
                 routed_server.route = route;
             }
         }
-        const auto parsed = parse_response(result.packet, question);
+        const auto& parsed = exchanged.parsed;
         const auto elapsed = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - exchange_started)
                                  .count();

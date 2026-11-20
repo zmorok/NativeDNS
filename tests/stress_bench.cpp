@@ -34,7 +34,7 @@ void close_socket(Socket value) {
 
 namespace {
 struct Resources {
-    uint64_t memory = 0, handles = 0, threads = 0;
+    uint64_t memory = 0, handles = 0, threads = 0, cpu_ms = 0;
 };
 Resources resources() {
 #ifdef _WIN32
@@ -42,7 +42,15 @@ Resources resources() {
     GetProcessMemoryInfo(GetCurrentProcess(), &memory, sizeof(memory));
     DWORD handles = 0;
     GetProcessHandleCount(GetCurrentProcess(), &handles);
-    return {memory.WorkingSetSize, handles, 0};
+    FILETIME creation{}, exit_time{}, kernel{}, user{};
+    uint64_t cpu_ms = 0;
+    if (GetProcessTimes(GetCurrentProcess(), &creation, &exit_time, &kernel, &user)) {
+        const auto to_u64 = [](FILETIME ft) {
+            return (static_cast<uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        };
+        cpu_ms = (to_u64(kernel) + to_u64(user)) / 10000ULL;
+    }
+    return {memory.WorkingSetSize, handles, 0, cpu_ms};
 #else
     Resources value;
     if (DIR* directory = opendir("/proc/self/fd")) {
@@ -56,8 +64,12 @@ Resources resources() {
         closedir(directory);
     }
     rusage usage{};
-    if (getrusage(RUSAGE_SELF, &usage) == 0)
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
         value.memory = static_cast<uint64_t>(usage.ru_maxrss) * 1024;
+        value.cpu_ms =
+            static_cast<uint64_t>(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000ULL +
+            static_cast<uint64_t>(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000ULL;
+    }
     return value;
 #endif
 }
@@ -151,6 +163,7 @@ int main(int argc, char** argv) {
     try {
         uint64_t seconds = 30, clients = 16;
         bool debug_logging = false;
+        bool rules_cache_mode = false;
         for (int i = 1; i < argc; ++i) {
             const std::string arg = argv[i];
             if (arg == "--seconds" && i + 1 < argc)
@@ -159,15 +172,91 @@ int main(int argc, char** argv) {
                 clients = number(argv[++i]);
             else if (arg == "--debug-logging")
                 debug_logging = true;
+            else if (arg == "--rules-cache")
+                rules_cache_mode = true;
             else
                 throw std::runtime_error(
-                    "usage: nativedns_stress [--seconds N] [--clients N] [--debug-logging]");
+                    "usage: nativedns_stress [--seconds N] [--clients N] [--debug-logging] [--rules-cache]");
         }
 #ifdef _WIN32
         WSADATA sockets{};
         if (WSAStartup(MAKEWORD(2, 2), &sockets))
             throw std::runtime_error("WSAStartup failed");
 #endif
+        if (rules_cache_mode) {
+            auto config = nd::default_config();
+            for (uint32_t r = 0; r < 200; ++r) {
+                nd::Rule rule;
+                rule.id = 100 + r;
+                rule.name = "rule-" + std::to_string(r);
+                rule.patterns = {"*.sub" + std::to_string(r) + ".example",
+                                 "host" + std::to_string(r) + ".example"};
+                rule.action = nd::Action::block;
+                rule.block_mode = nd::BlockMode::zero_address;
+                config.rules.insert(config.rules.begin() + static_cast<ptrdiff_t>(r), rule);
+            }
+            config.rules.back().action = nd::Action::block;
+            config.rules.back().block_mode = nd::BlockMode::zero_address;
+            config.logging.screen = debug_logging ? nd::Level::debug : nd::Level::errors_only;
+            nd::Logger logger(4096);
+            logger.set_display_level(config.logging.screen);
+            auto router = std::make_shared<nd::Router>(config, logger);
+            std::vector<nd::Packet> queries;
+            queries.reserve(4096);
+            for (unsigned i = 0; i < 4096; ++i)
+                queries.push_back(nd::make_query("node" + std::to_string(i) + ".sub" +
+                                                 std::to_string(i % 200) + ".example"));
+            const auto before = resources();
+            std::atomic_uint64_t successes = 0;
+            std::vector<std::vector<uint64_t>> thread_latencies(static_cast<size_t>(clients));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+            std::vector<std::jthread> workers;
+            for (uint64_t index = 0; index < clients; ++index)
+                workers.emplace_back([&, index] {
+                    auto& local_lat = thread_latencies[static_cast<size_t>(index)];
+                    local_lat.reserve(200000);
+                    nd::Server dummy;
+                    uint64_t seq = index * 97;
+                    while (std::chrono::steady_clock::now() < deadline) {
+                        const auto& q = queries[static_cast<size_t>(seq++ & 4095u)];
+                        const auto start = std::chrono::steady_clock::now();
+                        const auto res = router->route(q, dummy);
+                        const auto ns = static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - start)
+                                .count());
+                        if (!res.packet.empty()) {
+                            ++successes;
+                            if (local_lat.size() < 200000)
+                                local_lat.push_back(ns / 1000ULL);
+                        }
+                    }
+                });
+            for (auto& w : workers)
+                w.join();
+            std::vector<uint64_t> latencies;
+            for (const auto& v : thread_latencies)
+                latencies.insert(latencies.end(), v.begin(), v.end());
+            std::sort(latencies.begin(), latencies.end());
+            const auto percentile = [&](double p) {
+                return latencies.empty()
+                           ? 0ULL
+                           : latencies[std::min(latencies.size() - 1,
+                                                static_cast<size_t>(p * latencies.size()))];
+            };
+            const auto after = resources();
+            const double qps = static_cast<double>(successes.load()) / static_cast<double>(seconds);
+            std::cout << "mode=rules-cache requests=" << successes.load() << " qps=" << qps
+                      << " p50_us=" << percentile(.50) << " p95_us=" << percentile(.95)
+                      << " p99_us=" << percentile(.99)
+                      << " cpu_ms=" << (after.cpu_ms - before.cpu_ms)
+                      << " memory_before=" << before.memory << " memory_after=" << after.memory
+                      << '\n';
+#ifdef _WIN32
+            WSACleanup();
+#endif
+            return successes.load() >= clients ? 0 : 1;
+        }
         auto config = nd::default_config();
         config.rules.back().action = nd::Action::block;
         config.rules.back().block_mode = nd::BlockMode::zero_address;
@@ -229,7 +318,9 @@ int main(int argc, char** argv) {
                   << " udp_failures=" << udp_failures.load()
                   << " tcp_failures=" << tcp_failures.load() << " qps=" << qps
                   << " p50_us=" << percentile(.50) << " p95_us=" << percentile(.95)
-                  << " p99_us=" << percentile(.99) << " memory_before=" << before.memory
+                  << " p99_us=" << percentile(.99)
+                  << " cpu_ms=" << (after.cpu_ms - before.cpu_ms)
+                  << " memory_before=" << before.memory
                   << " memory_after=" << after.memory << " handles_before=" << before.handles
                   << " handles_after=" << after.handles << " threads_before=" << before.threads
                   << " threads_after=" << after.threads << '\n';

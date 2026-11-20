@@ -39,6 +39,21 @@ struct RuleDecision {
     std::vector<std::string> interface_dns;
     std::string error_code, message;
 };
+struct CompiledRuleEntry {
+    size_t rule_index = 0;
+    std::vector<std::string> patterns;
+    std::string interface_selector;
+    std::string interface_match;
+};
+struct CompiledRules {
+    const Config* config = nullptr;
+    RuntimeOptions options;
+    std::vector<CompiledRuleEntry> entries;
+};
+CompiledRules compile_rules(const Config& config);
+RuleDecision evaluate_compiled_rule(const CompiledRules& compiled,
+                                    const std::string& normalized_hostname,
+                                    NetworkSnapshotPtr network = {});
 // Shared policy decision for the Router and packet fast path. The caller owns
 // the configuration snapshot for the lifetime of the returned rule pointer.
 RuleDecision

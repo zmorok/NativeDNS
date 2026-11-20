@@ -618,13 +618,13 @@ struct WinDivertInterception::Impl {
     void receive_loop() {
         receiver_active = true;
         try {
+            Packet recv_buffer(WINDIVERT_MTU_MAX);
             while (state == State::running) {
-                Packet packet(WINDIVERT_MTU_MAX);
                 UINT length = 0;
                 WINDIVERT_ADDRESS address{};
                 if (!recv(handle,
-                          packet.data(),
-                          static_cast<UINT>(packet.size()),
+                          recv_buffer.data(),
+                          static_cast<UINT>(recv_buffer.size()),
                           &length,
                           &address)) {
                     const auto error = GetLastError();
@@ -643,7 +643,7 @@ struct WinDivertInterception::Impl {
                 }
                 counters.packets_received.fetch_add(1, std::memory_order_relaxed);
                 counters.last_capture_timestamp.store(now_ms(), std::memory_order_relaxed);
-                packet.resize(length);
+                Packet packet(recv_buffer.begin(), recv_buffer.begin() + length);
                 bool policy_selected = false;
                 try {
                     if (is_tcp_packet(packet)) {
@@ -727,7 +727,7 @@ struct WinDivertInterception::Impl {
                         throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
                     auto snapshot = router.snapshot();
                     const auto captured_decision =
-                        evaluate_rule(snapshot->config, captured_question.name);
+                        evaluate_compiled_rule(snapshot->compiled_rules, captured_question.name);
                     const auto& captured_rule = *captured_decision.rule;
                     if (logger.enabled(Level::debug))
                         logger.write(

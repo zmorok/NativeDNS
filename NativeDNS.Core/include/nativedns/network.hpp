@@ -63,6 +63,7 @@ struct InterceptionConflict {
 std::vector<InterceptionConflict> interception_conflicts();
 std::vector<InterfaceInfo> enumerate_interfaces();
 std::vector<std::string> captive_portal_adapters();
+void set_captive_portal_polling_enabled(bool enabled) noexcept;
 void bind_upstream_interface(std::intptr_t socket, const NetworkRoute& route);
 } // namespace platform
 } // namespace nd

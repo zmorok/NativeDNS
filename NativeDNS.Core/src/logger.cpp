@@ -317,6 +317,19 @@ void Logger::file_loop() {
         FileTask task;
         {
             std::unique_lock lock(file_mutex_);
+            if (file_tasks_.empty() && file_stream_.is_open()) {
+                if (!file_changed_.wait_for(lock, std::chrono::milliseconds(500), [&] {
+                        return !file_tasks_.empty();
+                    })) {
+                    lock.unlock();
+                    try {
+                        file_stream_.flush();
+                        file_stream_.close();
+                    } catch (...) {
+                    }
+                    continue;
+                }
+            }
             file_changed_.wait(lock, [&] { return !file_tasks_.empty(); });
             task = std::move(file_tasks_.front());
             file_tasks_.pop_front();
@@ -349,6 +362,11 @@ void Logger::file_loop() {
                     std::lock_guard lock(file_status_mutex_);
                     observed_file_path_ = task.path;
                 }
+                if (file_stream_.is_open()) {
+                    file_stream_.flush();
+                    file_stream_.close();
+                }
+                current_file_bytes_ = 0;
                 file_level_ = task.level;
                 if (task.enabled) {
                     const auto parent = task.path.parent_path();
@@ -370,6 +388,11 @@ void Logger::file_loop() {
                 file_enabled_ = task.enabled;
                 file_failed_ = false;
             } else if (task.kind == FileTask::Kind::clear) {
+                if (file_stream_.is_open()) {
+                    file_stream_.flush();
+                    file_stream_.close();
+                }
+                current_file_bytes_ = 0;
                 if (!file_path_.empty() && std::filesystem::exists(file_path_)) {
                     std::ofstream stream(file_path_, std::ios::binary | std::ios::trunc);
                     if (!stream)
@@ -379,6 +402,13 @@ void Logger::file_loop() {
                         throw std::runtime_error("cannot flush cleared log file");
                 }
             } else if (task.kind == FileTask::Kind::flush) {
+                if (file_stream_.is_open()) {
+                    file_stream_.flush();
+                    const bool ok = static_cast<bool>(file_stream_);
+                    file_stream_.close();
+                    if (!ok)
+                        throw std::runtime_error("cannot flush log file");
+                }
                 // Every completed batch is flushed before reaching this barrier.
                 if (file_failed_) {
                     if (task.completion)
@@ -387,6 +417,10 @@ void Logger::file_loop() {
                     continue;
                 }
             } else if (task.kind == FileTask::Kind::stop) {
+                if (file_stream_.is_open()) {
+                    file_stream_.flush();
+                    file_stream_.close();
+                }
                 writer_active_ = false;
                 if (task.completion)
                     task.completion->set_value();
@@ -395,6 +429,9 @@ void Logger::file_loop() {
             if (task.completion)
                 task.completion->set_value();
         } catch (...) {
+            if (file_stream_.is_open())
+                file_stream_.close();
+            current_file_bytes_ = 0;
             const auto failure = std::current_exception();
             sink_enabled = false;
             file_enabled_ = false;
@@ -445,11 +482,12 @@ void Logger::rotate_file(uint64_t incoming_bytes) {
     }
 }
 void Logger::write_file_batch(const std::vector<LogEvent>& events) {
-    std::ofstream stream;
-    std::error_code error;
-    uint64_t current = std::filesystem::file_size(file_path_, error);
-    if (error)
-        current = 0;
+    if (!file_stream_.is_open()) {
+        std::error_code error;
+        current_file_bytes_ = std::filesystem::file_size(file_path_, error);
+        if (error)
+            current_file_bytes_ = 0;
+    }
     for (const auto& event : events) {
         const auto instant = std::chrono::system_clock::to_time_t(event.time);
         tm local{};
@@ -458,32 +496,32 @@ void Logger::write_file_batch(const std::vector<LogEvent>& events) {
         line << '[' << std::put_time(&local, "%d.%m.%Y %H:%M:%S") << "] " << event.sequence << " ["
              << level_name(event.level) << "] " << event.code << ' ' << event.message << "\r\n";
         const auto text = line.str();
-        if (current + text.size() > maximum_bytes_) {
-            if (stream.is_open()) {
-                stream.flush();
-                if (!stream)
+        if (current_file_bytes_ + text.size() > maximum_bytes_) {
+            if (file_stream_.is_open()) {
+                file_stream_.flush();
+                if (!file_stream_)
                     throw std::runtime_error("cannot flush log file");
-                stream.close();
+                file_stream_.close();
             }
             rotate_file(text.size());
-            error.clear();
-            current = std::filesystem::file_size(file_path_, error);
+            std::error_code error;
+            current_file_bytes_ = std::filesystem::file_size(file_path_, error);
             if (error)
-                current = 0;
+                current_file_bytes_ = 0;
         }
-        if (!stream.is_open()) {
-            stream.open(file_path_, std::ios::binary | std::ios::app);
-            if (!stream)
+        if (!file_stream_.is_open()) {
+            file_stream_.open(file_path_, std::ios::binary | std::ios::app);
+            if (!file_stream_)
                 throw std::runtime_error("cannot append log file");
         }
-        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
-        if (!stream)
+        file_stream_.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (!file_stream_)
             throw std::runtime_error("cannot append log file");
-        current += text.size();
+        current_file_bytes_ += text.size();
     }
-    if (stream.is_open()) {
-        stream.flush();
-        if (!stream)
+    if (file_stream_.is_open()) {
+        file_stream_.flush();
+        if (!file_stream_)
             throw std::runtime_error("cannot flush log file");
     }
     written_file_events_.fetch_add(events.size());

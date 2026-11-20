@@ -11,6 +11,8 @@ namespace nd::platform {
 std::vector<std::string> captive_portal_adapters() {
     return {}; // No Windows NCSI-equivalent source is assumed on POSIX.
 }
+void set_captive_portal_polling_enabled(bool) noexcept {
+}
 void flush_dns_cache() {
     throw Error("NOT_IMPLEMENTED",
                 "System DNS cache flush requires a configured Linux resolver service");

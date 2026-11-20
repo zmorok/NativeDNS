@@ -137,6 +137,59 @@ Packet padded_certificate_request(Packet request) {
     request.insert(request.end(), padding, 0);
     return request;
 }
+Packet build_dnscrypt_query_prepared(const Packet& request,
+                                     const DnsCryptCertificate& certificate,
+                                     std::span<const uint8_t, 32> client_public,
+                                     std::span<const uint8_t, 32> shared,
+                                     std::span<const uint8_t, 12> client_nonce,
+                                     size_t minimum_wire_size) {
+    sodium_ready();
+    if (request.size() < 12 || request.size() > 4000 || minimum_wire_size > 4096)
+        throw Error("DNSCRYPT_SIZE", "DNSCrypt query size is outside protocol bounds");
+    const size_t needed = std::max(
+        request.size() + 1,
+        minimum_wire_size > query_overhead ? minimum_wire_size - query_overhead : size_t{1});
+    const size_t padded_size = (needed + 63) / 64 * 64;
+    if (padded_size + query_overhead > 4096)
+        throw Error("DNSCRYPT_SIZE", "Encrypted DNSCrypt query exceeds 4096 bytes");
+    Packet padded(padded_size);
+    std::copy(request.begin(), request.end(), padded.begin());
+    padded[request.size()] = 0x80;
+    std::array<uint8_t, 24> nonce{};
+    std::copy(client_nonce.begin(), client_nonce.end(), nonce.begin());
+    Packet result;
+    result.reserve(query_overhead + padded.size());
+    result.insert(result.end(), certificate.client_magic.begin(), certificate.client_magic.end());
+    result.insert(result.end(), client_public.begin(), client_public.end());
+    result.insert(result.end(), client_nonce.begin(), client_nonce.end());
+    const size_t encrypted_at = result.size();
+    result.resize(result.size() + padded.size() + crypto_box_curve25519xchacha20poly1305_MACBYTES);
+    const int encrypted =
+        certificate.encryption_system == 1
+            ? crypto_box_easy_afternm(result.data() + encrypted_at,
+                                      padded.data(),
+                                      static_cast<unsigned long long>(padded.size()),
+                                      nonce.data(),
+                                      shared.data())
+            : crypto_box_curve25519xchacha20poly1305_easy_afternm(
+                  result.data() + encrypted_at,
+                  padded.data(),
+                  static_cast<unsigned long long>(padded.size()),
+                  nonce.data(),
+                  shared.data());
+    if (encrypted != 0)
+        throw Error("DNSCRYPT_CRYPTO", "DNSCrypt query encryption failed");
+    return result;
+}
+detail::NetworkClock::time_point udp_attempt_deadline(detail::NetworkClock::time_point total_deadline) {
+    const auto now = detail::NetworkClock::now();
+    if (now >= total_deadline)
+        return total_deadline;
+    const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(total_deadline - now);
+    if (left <= std::chrono::milliseconds(1000))
+        return total_deadline;
+    return now + std::max(std::chrono::milliseconds(500), left * 2 / 3);
+}
 std::vector<Packet> fetch_certificates(const Server& server,
                                        const Packet& request,
                                        const Question& question,
@@ -147,26 +200,29 @@ std::vector<Packet> fetch_certificates(const Server& server,
             through_relay ? build_anonymized_dnscrypt_certificate_packet(request, server) : request;
         const auto target = through_relay ? relay_endpoint(server) : endpoint(server);
         try {
-            return detail::exchange_network(outgoing, target, false, deadline);
+            return detail::exchange_network(outgoing, target, false, udp_attempt_deadline(deadline));
         } catch (const Error& error) {
-            if (!retryable(error))
+            if (!retryable(error) || detail::NetworkClock::now() >= deadline)
                 throw;
             return detail::exchange_network(outgoing, target, true, deadline);
         }
     };
+    bool used_relay = anonymized;
     Packet response;
     try {
         response = exchange(anonymized);
     } catch (const Error&) {
-        if (!anonymized || !server.allow_direct_certificate_fallback)
+        if (!anonymized || !server.allow_direct_certificate_fallback ||
+            detail::NetworkClock::now() >= deadline)
             throw;
+        used_relay = false;
         response = exchange(false);
     }
     auto parsed = parse_response(response, question);
     if (parsed.truncated) {
         const auto outgoing =
-            anonymized ? build_anonymized_dnscrypt_certificate_packet(request, server) : request;
-        const auto target = anonymized ? relay_endpoint(server) : endpoint(server);
+            used_relay ? build_anonymized_dnscrypt_certificate_packet(request, server) : request;
+        const auto target = used_relay ? relay_endpoint(server) : endpoint(server);
         response = detail::exchange_network(outgoing, target, true, deadline);
         parsed = parse_response(response, question);
     }
@@ -222,18 +278,20 @@ public:
                 target = query_overhead + request.size() + minimum_padding +
                          static_cast<size_t>(randombytes_uniform(choices)) * 64;
             }
-            auto encrypted = build_dnscrypt_query(request, cert, client_secret, nonce, target);
+            auto encrypted =
+                build_dnscrypt_query_prepared(request, cert, client_public, shared, nonce, target);
             Packet outgoing =
                 anonymized_ ? build_anonymized_dnscrypt_packet(encrypted, server) : encrypted;
             auto destination = anonymized_ ? relay_endpoint(server) : endpoint(server);
-            auto response = detail::exchange_network(outgoing, destination, tcp, deadline);
+            const auto attempt_limit = tcp ? deadline : udp_attempt_deadline(deadline);
+            auto response = detail::exchange_network(outgoing, destination, tcp, attempt_limit);
             return open_dnscrypt_response(response, shared, nonce, cert.encryption_system);
         };
         Packet response;
         try {
             response = perform(false);
         } catch (const Error& error) {
-            if (!retryable(error))
+            if (!retryable(error) || detail::NetworkClock::now() >= deadline)
                 throw;
             response = perform(true);
         }
@@ -505,46 +563,19 @@ Packet build_dnscrypt_query(const Packet& request,
                             std::span<const uint8_t, 12> client_nonce,
                             size_t minimum_wire_size) {
     sodium_ready();
-    if (request.size() < 12 || request.size() > 4000 || minimum_wire_size > 4096)
-        throw Error("DNSCRYPT_SIZE", "DNSCrypt query size is outside protocol bounds");
-    const size_t needed = std::max(
-        request.size() + 1,
-        minimum_wire_size > query_overhead ? minimum_wire_size - query_overhead : size_t{1});
-    const size_t padded_size = (needed + 63) / 64 * 64;
-    if (padded_size + query_overhead > 4096)
-        throw Error("DNSCRYPT_SIZE", "Encrypted DNSCrypt query exceeds 4096 bytes");
-    Packet padded(padded_size);
-    std::copy(request.begin(), request.end(), padded.begin());
-    padded[request.size()] = 0x80;
     std::array<uint8_t, 32> client_public{};
     if (crypto_scalarmult_curve25519_base(client_public.data(), client_secret.data()) != 0)
         throw Error("CRYPTO_INIT", "Cannot derive DNSCrypt client public key");
-    const auto shared = dnscrypt_shared_key(client_secret, certificate);
-    std::array<uint8_t, 24> nonce{};
-    std::copy(client_nonce.begin(), client_nonce.end(), nonce.begin());
-    Packet result;
-    result.reserve(query_overhead + padded.size());
-    result.insert(result.end(), certificate.client_magic.begin(), certificate.client_magic.end());
-    result.insert(result.end(), client_public.begin(), client_public.end());
-    result.insert(result.end(), client_nonce.begin(), client_nonce.end());
-    const size_t encrypted_at = result.size();
-    result.resize(result.size() + padded.size() + crypto_box_curve25519xchacha20poly1305_MACBYTES);
-    const int encrypted =
-        certificate.encryption_system == 1
-            ? crypto_box_easy_afternm(result.data() + encrypted_at,
-                                      padded.data(),
-                                      static_cast<unsigned long long>(padded.size()),
-                                      nonce.data(),
-                                      shared.data())
-            : crypto_box_curve25519xchacha20poly1305_easy_afternm(
-                  result.data() + encrypted_at,
-                  padded.data(),
-                  static_cast<unsigned long long>(padded.size()),
-                  nonce.data(),
-                  shared.data());
-    if (encrypted != 0)
-        throw Error("DNSCRYPT_CRYPTO", "DNSCrypt query encryption failed");
-    return result;
+    auto shared = dnscrypt_shared_key(client_secret, certificate);
+    struct Wipe {
+        void* bytes;
+        size_t size;
+        ~Wipe() {
+            sodium_memzero(bytes, size);
+        }
+    } wipe_shared{shared.data(), shared.size()};
+    return build_dnscrypt_query_prepared(
+        request, certificate, client_public, shared, client_nonce, minimum_wire_size);
 }
 
 Packet open_dnscrypt_response(const Packet& response,

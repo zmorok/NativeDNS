@@ -1,9 +1,11 @@
 #pragma once
 #include <nativedns/dns.hpp>
 #include <array>
+#include <list>
 #include <mutex>
 #include <optional>
 #include <map>
+#include <unordered_map>
 #include <condition_variable>
 #include <atomic>
 #include <memory>
@@ -35,15 +37,19 @@ private:
         unsigned consecutive_failures = 0;
         std::chrono::steady_clock::time_point retry_after{};
         std::optional<double> latency_ms;
+        bool probing = false;
     };
     struct CacheEntry {
         Packet packet;
+        DnsAnswer parsed;
         std::chrono::steady_clock::time_point stored, expires;
         uint32_t used_server_id = 0;
+        std::list<std::string>::iterator lru_it;
     };
     struct Pending {
         bool done = false;
         Packet packet;
+        DnsAnswer parsed;
         uint32_t used_server_id = 0;
         std::string error_code, error_message;
         std::condition_variable changed;
@@ -52,19 +58,24 @@ private:
 public:
     struct Snapshot {
         explicit Snapshot(Config value)
-            : config(std::move(value)), options(runtime_options(config)) {
+            : config(std::move(value)), compiled_rules(compile_rules(config)),
+              options(compiled_rules.options) {
         }
+        Snapshot(const Snapshot&) = delete;
+        Snapshot& operator=(const Snapshot&) = delete;
         Config config;
+        CompiledRules compiled_rules;
         RuntimeOptions options;
 
     private:
         friend class Router;
         mutable std::mutex health_mutex;
-        mutable std::map<std::string, Health> health;
+        mutable std::unordered_map<std::string, Health> health;
         mutable std::mutex cache_mutex;
-        mutable std::map<std::string, CacheEntry> cache;
+        mutable std::list<std::string> cache_lru;
+        mutable std::unordered_map<std::string, CacheEntry> cache;
         mutable size_t cache_bytes = 0;
-        mutable std::map<std::string, std::shared_ptr<Pending>> pending;
+        mutable std::unordered_map<std::string, std::shared_ptr<Pending>> pending;
     };
     using SnapshotPtr = std::shared_ptr<const Snapshot>;
     explicit Router(Config config, Logger& logger);
@@ -81,6 +92,7 @@ private:
     enum class ExchangeSource { upstream, cache, coalesced };
     struct ExchangeResult {
         Packet packet;
+        DnsAnswer parsed;
         uint32_t used_server_id = 0;
         ExchangeSource source = ExchangeSource::upstream;
     };
@@ -88,6 +100,7 @@ private:
     exchange_group(const Snapshot& snapshot, const Packet& request, const Server& primary) const;
     ExchangeResult exchange_cached(const Snapshot& snapshot,
                                    const Packet& request,
+                                   const Question& question,
                                    const Server& primary,
                                    bool configured) const;
     Logger& logger_;

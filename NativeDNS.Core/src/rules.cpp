@@ -328,28 +328,49 @@ const Rule& match_rule(const Config& config, const std::string& hostname) {
     }
     throw Error("DEFAULT", "No matching rule: invalid configuration");
 }
-RuleDecision
-evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshotPtr network) {
-    const auto host = normalize_dns_name(hostname);
+CompiledRules compile_rules(const Config& config) {
+    CompiledRules compiled;
+    compiled.config = &config;
+    compiled.options = runtime_options(config);
+    compiled.entries.reserve(config.rules.size());
+    for (size_t i = 0; i < config.rules.size(); ++i) {
+        const auto& rule = config.rules[i];
+        if (!rule.enabled)
+            continue;
+        CompiledRuleEntry entry;
+        entry.rule_index = i;
+        entry.patterns.reserve(rule.patterns.size());
+        for (const auto& pattern : rule.patterns)
+            entry.patterns.push_back(normalize_dns_name(pattern, true));
+        entry.interface_selector = rule.interface_id;
+        entry.interface_match = "id";
+        if (const auto item = rule.metadata.find("interface_id_type"); item != rule.metadata.end())
+            entry.interface_match = item->second;
+        if (entry.interface_match == "name") {
+            if (const auto item = rule.metadata.find("interface_name");
+                item != rule.metadata.end() && !item->second.empty())
+                entry.interface_selector = item->second;
+        }
+        compiled.entries.push_back(std::move(entry));
+    }
+    return compiled;
+}
+RuleDecision evaluate_compiled_rule(const CompiledRules& compiled,
+                                    const std::string& host,
+                                    NetworkSnapshotPtr network) {
     RuleDecision decision;
-    const auto options = runtime_options(config);
-    for (const auto& rule : config.rules) {
-        if (!rule.enabled ||
-            std::none_of(rule.patterns.begin(), rule.patterns.end(), [&](const auto& pattern) {
-                return host_matches(host, normalize_dns_name(pattern, true));
+    const auto& config = *compiled.config;
+    const auto& options = compiled.options;
+    for (const auto& entry : compiled.entries) {
+        const auto& rule = config.rules[entry.rule_index];
+        if (std::none_of(entry.patterns.begin(), entry.patterns.end(), [&](const auto& pattern) {
+                return host_matches(host, pattern);
             }))
             continue;
         decision = {};
         decision.rule = &rule;
-        auto selector = rule.interface_id;
-        auto match = std::string("id");
-        if (const auto item = rule.metadata.find("interface_id_type"); item != rule.metadata.end())
-            match = item->second;
-        if (match == "name") {
-            if (const auto item = rule.metadata.find("interface_name");
-                item != rule.metadata.end() && !item->second.empty())
-                selector = item->second;
-        }
+        const auto& selector = entry.interface_selector;
+        const auto& match = entry.interface_match;
         if (!selector.empty()) {
             if (!network)
                 network = NetworkMonitor::shared().snapshot();
@@ -402,6 +423,12 @@ evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshot
         return decision;
     }
     throw Error("DEFAULT", "No usable Default rule");
+}
+RuleDecision
+evaluate_rule(const Config& config, const std::string& hostname, NetworkSnapshotPtr network) {
+    const auto host = normalize_dns_name(hostname);
+    const auto compiled = compile_rules(config);
+    return evaluate_compiled_rule(compiled, host, std::move(network));
 }
 ConfigEditor::ConfigEditor(Config config) : config_(std::move(config)) {
     validate(config_);

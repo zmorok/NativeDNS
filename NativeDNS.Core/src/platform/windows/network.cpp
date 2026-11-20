@@ -7,6 +7,9 @@
 #include <algorithm>
 
 namespace nd::platform {
+namespace {
+std::atomic_bool captive_portal_polling_enabled{false};
+} // namespace
 void bind_upstream_interface(std::intptr_t raw, const NetworkRoute& route) {
     if (route.interface_id.empty())
         return;
@@ -81,7 +84,9 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         throw Error("INTERFACE_ENUMERATION",
                     "Cannot enumerate adapters: " + std::to_string(result));
     std::vector<InterfaceInfo> interfaces;
-    const auto captive = captive_portal_adapters();
+    const auto captive = captive_portal_polling_enabled.load(std::memory_order_relaxed)
+                             ? captive_portal_adapters()
+                             : std::vector<std::string>{};
     for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
         InterfaceInfo info;
         info.id = adapter->AdapterName ? adapter->AdapterName : "";
@@ -109,5 +114,8 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         interfaces.push_back(std::move(info));
     }
     return interfaces;
+}
+void set_captive_portal_polling_enabled(bool enabled) noexcept {
+    captive_portal_polling_enabled.store(enabled, std::memory_order_relaxed);
 }
 } // namespace nd::platform

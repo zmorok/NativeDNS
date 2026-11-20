@@ -380,6 +380,8 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
 Packet clamp_dns_ttl(const Packet& response, uint32_t minimum, uint32_t maximum) {
     if (minimum > maximum)
         throw Error("CONFIG_SETTING", "TTL minimum must not exceed maximum");
+    if (minimum == 0 && maximum == 2147483647u)
+        return response;
     auto result = response;
     const auto question = parse_question(result);
     const auto parsed = parse_response(result, question);

@@ -5,6 +5,7 @@
 #include <deque>
 #include <mutex>
 #include <filesystem>
+#include <fstream>
 #include <atomic>
 #include <future>
 #include <thread>
@@ -100,6 +101,8 @@ private:
     std::filesystem::path observed_file_path_;
     std::string last_file_error_;
     std::filesystem::path file_path_;
+    std::ofstream file_stream_;
+    uint64_t current_file_bytes_ = 0;
     uint64_t maximum_bytes_ = 4 * 1024 * 1024;
     uint32_t retained_files_ = 3;
 };
