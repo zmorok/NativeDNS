@@ -25,21 +25,17 @@ CoreHost::CoreHost(Config config,
     : config_(std::move(config)), original_(std::move(original)), mode_(mode),
       local_port_(local_port), pipe_name_(std::move(pipe_name)),
       config_path_(std::move(config_path)), diagnostic_logging_(diagnostic_logging),
+      startup_diagnostic_logging_(diagnostic_logging),
       log_pipe_name_(pipe_name_ == core_pipe_name ? core_log_pipe_name : pipe_name_ + ".logs"),
       logger_(4096) {
+    saved_config_id_ = configuration_fingerprint(config_);
+    saved_logging_ = config_.logging;
     if (diagnostic_logging_) enable_diagnostic_logging(config_);
     validate(config_);
     logger_.set_display_level(config_.logging.screen);
     for (auto& server : config_.servers)
         server.use_system_bootstrap = mode == InterceptionMode::transparent;
-    try {
-        if (config_.logging.file_enabled)
-            file_log_path_ = timestamped_log_path(file_log_directory());
-        logger_.configure_file(config_.logging.file_enabled, config_.logging.file, file_log_path_);
-        file_log_enabled_ = config_.logging.file_enabled;
-    } catch (const std::exception& error) {
-        logger_.write(Level::errors_only, "FILE_LOG_INIT_FAILED", error.what());
-    }
+    configure_logging();
     logger_.write(Level::normal, "CORE_INITIALIZING", "Core host initialization started");
     const auto network = NetworkMonitor::shared().snapshot();
     logger_.write(Level::verbose,
@@ -79,12 +75,38 @@ CoreHost::CoreHost(Config config,
 CoreHost::~CoreHost() {
     stop();
 }
+void CoreHost::configure_logging() {
+    logger_.set_display_level(config_.logging.screen);
+    const bool enabled = config_.logging.file_enabled;
+    try {
+        if (enabled && (!logger_.file_status().enabled || file_log_path_.empty()))
+            file_log_path_ = timestamped_log_path(file_log_directory());
+        else if (enabled)
+            file_log_path_ = logger_.file_status().path;
+        logger_.configure_file(enabled, config_.logging.file, file_log_path_);
+    } catch (const std::exception& error) {
+        logger_.write(Level::errors_only, "FILE_LOG_PRIMARY_FAILED", error.what());
+        if (enabled) {
+            try {
+                file_log_path_ = timestamped_log_path(platform::user_config_directory() / "logs");
+                logger_.configure_file(true, config_.logging.file, file_log_path_);
+                logger_.write(Level::normal, "FILE_LOG_FALLBACK", "Using user data log directory");
+            } catch (const std::exception& fallback) {
+                logger_.write(Level::errors_only, "FILE_LOG_INIT_FAILED", fallback.what());
+            }
+        }
+    }
+}
 void CoreHost::log_configuration() {
-    logger_.write(Level::normal, "CONFIG_SUMMARY",
-                  "version=" + std::string(NativeDns_GetBuildVersion()) +
-                      " path=\"" + (config_path_.empty() ? "in-memory" :
-                          platform::path_to_utf8(std::filesystem::absolute(config_path_))) +
-                      "\" config_id=" + configuration_fingerprint(config_) +
+    logger_.write(Level::normal,
+                  "CONFIG_SUMMARY",
+                  "version=" + std::string(NativeDns_GetBuildVersion()) + " path=\"" +
+                      (config_path_.empty()
+                           ? "in-memory"
+                           : platform::path_to_utf8(std::filesystem::absolute(config_path_))) +
+                      "\" config_id=" + configuration_fingerprint(config_) + " saved_config_id=" +
+                      saved_config_id_ + " routing_config_id=" + routing_fingerprint(config_) +
+                      " runtime_profile=" + (diagnostic_logging_ ? "Debug" : "Normal") +
                       " servers=" + std::to_string(config_.servers.size()) +
                       " rules=" + std::to_string(config_.rules.size()) + " mode=" +
                       (mode_ == InterceptionMode::transparent ? "transparent" : "local_proxy"));
@@ -241,6 +263,11 @@ void CoreHost::stop() {
     *shutdown_requested_ = true;
     shutdown_cv_.notify_all();
     logger_.write(Level::normal, "CORE_STOPPED", "Core host stopped");
+    try {
+        logger_.flush_file();
+    } catch (const std::exception& error) {
+        logger_.write(Level::errors_only, "FILE_LOG_FLUSH_FAILED", error.what());
+    }
 }
 void CoreHost::wait_for_shutdown() {
     std::unique_lock lock(mutex_);
@@ -315,11 +342,86 @@ InterceptionStatus CoreHost::status() const {
 }
 IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload) {
     if (operation != IpcOperation::logs && operation != IpcOperation::configure_file_log &&
-        operation != IpcOperation::reload_config &&
+        operation != IpcOperation::reload_config && operation != IpcOperation::diagnostic_profile &&
         !payload.empty())
         throw Error("IPC_PROTOCOL", "This operation requires an empty payload");
     if (operation == IpcOperation::ping)
         return {0, "NativeDNS Core API 1"};
+    if (operation == IpcOperation::interception_test) {
+        if (!payload.empty())
+            throw Error("IPC_PROTOCOL", "Interception test accepts no arguments");
+        const auto result = interception_->self_test();
+        return {result.success() ? 0u : 1u, format_interception_test(result)};
+    }
+    if (operation == IpcOperation::flush_file_log) {
+        if (!payload.empty())
+            throw Error("IPC_PROTOCOL", "Flush accepts no arguments");
+        logger_.flush_file();
+        return {0, "FILE_LOG_FLUSHED"};
+    }
+    if (operation == IpcOperation::diagnostic_profile) {
+        if (payload != "Normal" && payload != "Debug")
+            throw Error("IPC_PROTOCOL", "Profile must be Normal or Debug");
+        std::lock_guard reload_lock(reload_mutex_);
+        std::lock_guard lock(mutex_);
+        diagnostic_logging_ = payload == "Debug";
+        config_.logging = saved_logging_;
+        if (diagnostic_logging_)
+            enable_diagnostic_logging(config_);
+        configure_logging();
+        logger_.write(Level::normal,
+                      "RUNTIME_PROFILE",
+                      payload +
+                          "; changed after startup; early initialization capture is unchanged");
+        return {0, "runtime_profile=" + payload};
+    }
+    if (operation == IpcOperation::interception_status) {
+        if (!payload.empty())
+            throw Error("IPC_PROTOCOL", "Diagnostics accepts no arguments");
+        std::ostringstream out;
+        out << format_interception_diagnostics(interception_->diagnostics());
+        {
+            std::lock_guard lock(mutex_);
+            out << "saved_config_id=" << saved_config_id_
+                << "\nrouting_config_id=" << routing_fingerprint(config_)
+                << "\nruntime_profile=" << (diagnostic_logging_ ? "Debug" : "Normal")
+                << "\nstartup_runtime_profile="
+                << (startup_diagnostic_logging_ ? "Debug" : "Normal")
+                << "\neffective_logging_screen=" << static_cast<int>(config_.logging.screen)
+                << '\n';
+        }
+        const auto backend = interception_->status();
+        out << "interception_error_code=" << backend.error_code
+            << "\ninterception_error_message=" << backend.error_message << '\n'
+            << "router_health=UNVERIFIED\nupstream_health=UNVERIFIED\n";
+        if (!config_path_.empty()) {
+            try {
+                const auto disk = load_config(config_path_);
+                const auto disk_routing = routing_fingerprint(disk);
+                std::lock_guard lock(mutex_);
+                out << "disk_saved_config_id=" << configuration_fingerprint(disk)
+                    << "\ndisk_routing_config_id=" << disk_routing
+                    << "\ndisk_routing_matches_applied="
+                    << (disk_routing == routing_fingerprint(config_)) << '\n';
+            } catch (const std::exception& error) {
+                out << "disk_config_error=" << error.what() << '\n';
+            }
+        }
+        const auto file = logger_.file_status();
+        out << "logging_state=" << file.state << "\nlogging_enabled=" << file.enabled
+            << "\nlogging_path=" << platform::path_to_utf8(file.path)
+            << "\neffective_logging_file=" << static_cast<int>(file.level)
+            << "\nlogging_writer_active=" << file.writer_active
+            << "\nlogging_written_events=" << file.written_events
+            << "\nlogging_lost_events=" << file.lost_events
+            << "\nlogging_last_write_ms=" << file.last_write_timestamp_ms
+            << "\nlogging_last_error=" << file.last_error << '\n';
+        out << "command_ipc_active=" << ipc_->running()
+            << "\nlog_ipc_active=" << log_ipc_->running() << '\n';
+        for (const auto& conflict : platform::interception_conflicts())
+            out << "finding=" << conflict.code << ' ' << conflict.message << '\n';
+        return {0, out.str()};
+    }
     if (operation == IpcOperation::reload_config) {
         std::lock_guard reload_lock(reload_mutex_);
         auto expected = payload;
@@ -333,6 +435,12 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             expected.resize(separator);
             if (expected.empty()) throw Error("IPC_PROTOCOL", "Capture profile requires a configuration ID");
         }
+        const bool routing_id = expected.starts_with("routing=");
+        if (routing_id) {
+            expected.erase(0, 8);
+            if (expected.empty())
+                throw Error("IPC_PROTOCOL", "Routing ID is empty");
+        }
         if (!expected.empty() &&
             (expected.size() != 64 || !std::all_of(expected.begin(), expected.end(), [](char c) {
                 return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
@@ -341,8 +449,11 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         if (config_path_.empty())
             throw Error("CONFIG_IO", "CoreHost has no configuration path to reload");
         auto next = load_config(config_path_);
+        const auto saved_id = configuration_fingerprint(next);
+        const auto saved_logging = next.logging;
         if (diagnostic) enable_diagnostic_logging(next);
-        const auto next_id = configuration_fingerprint(next);
+        const auto next_id =
+            routing_id ? routing_fingerprint(next) : configuration_fingerprint(next);
         if (!expected.empty() && expected != next_id) {
             const auto message = "CoreHost configuration does not match the GUI: path=\"" +
                 platform::path_to_utf8(std::filesystem::absolute(config_path_)) +
@@ -357,6 +468,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             std::lock_guard lock(mutex_);
             interception_->reload(next);
             diagnostic_logging_ = diagnostic;
+            saved_config_id_ = saved_id;
+            saved_logging_ = saved_logging;
             config_ = std::move(next);
             logger_.set_display_level(config_.logging.screen);
             const bool prepared = interception_->status().state == State::running && prepare_network();
@@ -370,15 +483,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
                     logger_.write(Level::errors_only, error.code, error.what());
                 }
             }
-            try {
-                if (config_.logging.file_enabled && !file_log_enabled_)
-                    file_log_path_ = timestamped_log_path(file_log_directory());
-                logger_.configure_file(
-                    config_.logging.file_enabled, config_.logging.file, file_log_path_);
-                file_log_enabled_ = config_.logging.file_enabled;
-            } catch (const std::exception& error) {
-                logger_.write(Level::errors_only, "FILE_LOG_CONFIG_FAILED", error.what());
-            }
+            configure_logging();
             log_configuration();
             inspect_network();
         }
@@ -409,6 +514,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         auto text = std::string(state) + " port=" + std::to_string(value.port) +
                     " transparent=" + (value.transparent ? "1" : "0") +
                     " udp=" + (value.udp ? "1" : "0") + " tcp=" + (value.tcp ? "1" : "0");
+        if (value.transparent)
+            text += " verification=" + interception_->diagnostics().health;
         if (!value.error_code.empty())
             text += " error=" + value.error_code + " " + value.error_message;
         return {0, std::move(text)};
@@ -523,10 +630,11 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         const bool enabled = enabled_text == "1";
         if (diagnostic_logging_ && (!enabled || requested_level != 3))
             throw Error("DIAGNOSTIC_MODE", "Diagnostic capture requires file logging at Debug level");
-        if (enabled && !file_log_enabled_)
-            file_log_path_ = timestamped_log_path(file_log_directory());
-        logger_.configure_file(enabled, static_cast<Level>(requested_level), file_log_path_);
-        file_log_enabled_ = enabled;
+        config_.logging.file_enabled = enabled;
+        config_.logging.file = static_cast<Level>(requested_level);
+        configure_logging();
+        if (enabled && !logger_.file_status().enabled)
+            throw Error("FILE_LOG_FAILED", logger_.file_status().last_error);
         if (enabled)
             logger_.write(Level::normal,
                           "FILE_LOG_CONFIGURED",

@@ -23,6 +23,7 @@ std::vector<std::string> split_patterns(const std::string& text);
 bool host_matches(const std::string& normalized_host, const std::string& normalized_pattern);
 void validate(const Config& config);
 struct RuntimeOptions {
+    int16_t windivert_priority = 123;
     bool clear_dns_cache = false, block_tcp53 = false, intercept_others = false;
     bool captive_portal_detection = false, ignore_interface_down = false;
     bool prepare_system_dns = true;

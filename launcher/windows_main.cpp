@@ -75,13 +75,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         for (int i = 1; i < argc; ++i)
             args.emplace_back(argv[i]);
         LocalFree(argv);
+#ifdef NATIVEDNS_CLI_LAUNCHER
+        args.insert(args.begin(), L"--cli");
+#endif
         quiet = contains(args, L"--quiet");
         args.erase(std::remove(args.begin(), args.end(), L"--quiet"), args.end());
         wchar_t path[32768]{};
         const auto length = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
         if (!length || length >= std::size(path))
             throw std::runtime_error("Cannot locate NativeDNS package");
-        const auto root = std::filesystem::path(path).parent_path();
+        auto root = std::filesystem::path(path).parent_path();
+#ifdef NATIVEDNS_CLI_LAUNCHER
+        root = root.parent_path().parent_path();
+#endif
         const auto library = root / L"app" / L"lib";
         std::wstring name = L"NativeDNS.GUI.exe";
         bool wait = contains(args, L"--layout-check"), worker = false, collect = false;
@@ -97,7 +103,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             wait = worker = collect = true;
         } else if (!args.empty() && args.front() == L"--cli") {
             args.erase(args.begin());
-            name = L"nativednsctl.exe";
+            name = L"NativeDNS.Cli.exe";
             wait = worker = true;
             quiet = true;
         }
@@ -121,6 +127,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         for (const auto& arg : args) {
             command += L' ';
             command += quote(arg);
+        }
+        if (name == L"NativeDNS.Cli.exe") {
+            const auto output = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (!output || output == INVALID_HANDLE_VALUE)
+                (void)AttachConsole(ATTACH_PARENT_PROCESS);
         }
         STARTUPINFOW startup{sizeof(startup)};
         const auto stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE),
@@ -203,3 +214,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 5;
     }
 }
+
+#ifdef NATIVEDNS_CLI_LAUNCHER
+int wmain() {
+    return wWinMain(GetModuleHandleW(nullptr), nullptr, nullptr, SW_HIDE);
+}
+#endif

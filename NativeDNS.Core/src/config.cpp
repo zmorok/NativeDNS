@@ -422,6 +422,14 @@ RuntimeOptions runtime_options(const Config& config) {
         return result;
     };
     RuntimeOptions options;
+    if (const auto text = value("windivertPriority")) {
+        int priority = 0;
+        const auto parsed = std::from_chars(text->data(), text->data() + text->size(), priority);
+        if (parsed.ec != std::errc{} || parsed.ptr != text->data() + text->size() ||
+            priority < -30000 || priority > 30000)
+            throw Error("CONFIG_SETTING", "windivertPriority must be -30000..30000");
+        options.windivert_priority = static_cast<int16_t>(priority);
+    }
     options.clear_dns_cache = boolean("clearDnsCache");
     options.block_tcp53 = boolean("blockTcpPort53");
     options.intercept_others = boolean("interceptOthers");

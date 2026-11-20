@@ -68,6 +68,38 @@ int main(int argc, char** native_argv) {
         check(fingerprint.size() == 64 &&
                   fingerprint == nd::configuration_fingerprint(nd::parse_config(nd::serialize_config(config))),
               "Config fingerprint must survive XML round trip");
+        const auto routing_id = nd::routing_fingerprint(config);
+        auto debug = config;
+        nd::enable_diagnostic_logging(debug);
+        check(nd::routing_fingerprint(debug) == routing_id, "Debug changed DNS routing identity");
+        check(nd::configuration_fingerprint(debug) != fingerprint,
+              "Saved identity ignored logging");
+        debug.logging.directory = "different-logs";
+        check(nd::routing_fingerprint(debug) == routing_id,
+              "Log directory changed routing identity");
+        for (const auto* setting :
+             {"interceptOthers", "windivertPriority", "ttlMin", "windowsPrepareSystemDns"}) {
+            auto changed = config;
+            changed.settings[setting] = "1";
+            check(nd::routing_fingerprint(changed) != routing_id,
+                  "Network setting excluded from routing identity");
+        }
+        auto changed = config;
+        changed.rules.front().action = nd::Action::bypass;
+        check(nd::routing_fingerprint(changed) != routing_id,
+              "Rule action excluded from routing identity");
+        nd::Server server;
+        server.id = 999;
+        server.name = "Fingerprint upstream";
+        server.ip = "1.1.1.1";
+        changed.servers.push_back(server);
+        const auto server_id = nd::routing_fingerprint(changed);
+        changed.servers.back().bootstrap = {"8.8.8.8"};
+        check(nd::routing_fingerprint(changed) != server_id,
+              "Bootstrap excluded from routing identity");
+        changed.servers.back().ip = "9.9.9.9";
+        check(nd::routing_fingerprint(changed) != server_id,
+              "Upstream excluded from routing identity");
         config.rules.front().patterns = {"different.example"};
         check(fingerprint != nd::configuration_fingerprint(config), "Config change has the same fingerprint");
         const auto text = "Кириллица 日本語 😀/NativeDNS.xml";

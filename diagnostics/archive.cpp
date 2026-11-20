@@ -3,6 +3,8 @@
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QSet>
+#include <QRegularExpression>
+#include <QDateTime>
 #include <cstdint>
 #include <stdexcept>
 #include <vector>
@@ -22,6 +24,22 @@ quint32 crc32(const QByteArray& data) {
     return ~crc;
 }
 } // namespace
+QString redactDiagnosticText(const QString& text) {
+    auto result = text;
+    // Reports intentionally omit configuration XML and redact credentials from text logs.
+    result.replace(QRegularExpression(R"((https?://)[^\s/@]+:[^\s/@]+@)",
+                                      QRegularExpression::CaseInsensitiveOption),
+                   "\\1[REDACTED]@");
+    result.replace(QRegularExpression(R"((https?://[^\s?]+)\?[^\s]+)",
+                                      QRegularExpression::CaseInsensitiveOption),
+                   "\\1?[REDACTED]");
+    result.replace(
+        QRegularExpression(
+            R"(\b(authorization|token|password|secret|private[_-]?key|api[_-]?key)\s*[:=]\s*[^\r\n]+)",
+            QRegularExpression::CaseInsensitiveOption),
+        "\\1=[REDACTED]");
+    return result;
+}
 void writeDiagnosticArchive(const QString& destination, const QStringList& files) {
     constexpr qint64 limit = 16 * 1024 * 1024;
     struct Entry {
@@ -43,9 +61,13 @@ void writeDiagnosticArchive(const QString& destination, const QStringList& files
             throw std::runtime_error("Unsafe or duplicate diagnostic filename");
         if (input.size() < 0 || input.size() > limit - total)
             throw std::runtime_error("Diagnostic archive exceeds 16 MiB");
-        const auto data = input.read(limit - total + 1);
+        auto data = input.read(limit - total + 1);
         if (input.error() != QFileDevice::NoError || data.size() > limit - total)
             throw std::runtime_error("Cannot read bounded archive input");
+        if (QFileInfo(path).suffix() == "log")
+            data = redactDiagnosticText(QString::fromUtf8(data)).toUtf8();
+        if (data.size() > limit - total)
+            throw std::runtime_error("Redacted diagnostic archive exceeds 16 MiB");
         total += data.size();
         names.insert(name);
         Entry entry{name.toUtf8(),

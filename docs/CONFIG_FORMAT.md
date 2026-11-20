@@ -226,6 +226,7 @@ take precedence over imported `yoga.settings.` keys. Boolean values accept
 | `windowsPrepareSystemDns` | Default `1`; temporarily disable Windows DNS encryption in transparent mode and restore it on Stop/Exit or the next start after a crash. |
 | `ttlMin`, `ttlMax` | Clamp ordinary RR TTLs in Process replies before caching; range 0..2147483647, minimum <= maximum. |
 | `blockTcpPort53` | Reject external TCP/53 with a reset, retaining Core-owned upstream sockets. |
+| `windivertPriority` | Signed WinDivert priority, -30000..30000, default `123`; requires a full CoreHost restart to reopen the filter. Windows only. |
 | `interceptOthers` | Include third-party injected packets when enabled; changing it requires a CoreHost restart. |
 | `captivePortalDetection` | Permit NCSI discovery queries through the unbound Process Default. On an OS-confirmed captive interface, that Default retains the original resolver until the portal clears. |
 
@@ -272,3 +273,20 @@ Export writes the current valid working copy using atomic file replacement, with
 applying it to the saved GUI list. Exported files remain on disk when the dialog is closed.
 See [log-filters.xml](../examples/log-filters.xml) for filters for DNS record types, rule
 actions, Default routing, error conditions, and Microsoft connectivity queries.
+
+## Saved configuration and runtime diagnostics
+
+The XML schema remains version 1. Diagnostic profiles do not write forced Debug
+levels into the user document. Diagnostics expose separate saved and routing
+SHA-256 IDs; changes only to logging do not alter the routing ID. All server
+parameters, bootstrap/fallback/interface settings, interception settings and
+unknown metadata remain part of the routing identity.
+
+For WinDivert 2.2, higher numeric priorities run before lower ones. The default
+`123` is retained. A priority change is an explicit diagnostic experiment and
+requires shutdown/start, not a routing reload. It does not guarantee precedence
+over another product's WFP layers. `interceptOthers` remains off by default;
+turning it on includes impostor packets and can expose interactions with other
+injecting drivers. NativeDNS retains upstream-socket bypass and WinDivert's
+hop-limit loop protection, and reports send/loop failures. Do not enable it as
+an assumed fix for an unconfirmed conflict.

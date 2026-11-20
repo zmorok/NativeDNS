@@ -72,6 +72,26 @@ struct Translation {
     const char* russian;
 };
 constexpr std::array translations{
+    Translation{"Interception Diagnostics", "Диагностика перехвата"},
+    Translation{"Running means the mechanism is started. Verified requires a successful active "
+                "UDP/IPv4 test.",
+                "Работает – механизм запущен. Для подтверждения перехвата требуется успешный "
+                "активный тест UDP/IPv4."},
+    Translation{"Run safe interception test", "Проверить перехват"},
+    Translation{"Sends one UDP/53 query to a reserved TEST-NET address with TTL 1. It may leave "
+                "the computer if interception fails.",
+                "Один запрос UDP/53 к зарезервированному адресу TEST-NET с TTL 1. При отказе "
+                "перехвата пакет может покинуть компьютер."},
+    Translation{"Interception unverified", "Перехват не проверен"},
+    Translation{"Interception degraded", "Проблема перехвата"},
+    Translation{"Scheduled CoreHost launch failed: ",
+                "Ошибка запуска CoreHost через планировщик: "},
+    Translation{"CoreHost startup or IPC connection timed out.",
+                "Истекло время запуска CoreHost или подключения IPC."},
+    Translation{"Debug logging enabled after scheduled startup; early initialization used the "
+                "task's logging profile.",
+                "Debug включён после запуска через планировщик; ранние события записывались "
+                "согласно профилю задания."},
     Translation{"Show...", "Показывать..."},
     Translation{"Filters", "Фильтры"},
     Translation{"Selected record", "Выбранная запись"},
@@ -199,11 +219,14 @@ constexpr std::array translations{
     Translation{"Cross-platform DNS client", "Кроссплатформенный DNS-клиент"},
     Translation{"GitHub repository", "Репозиторий GitHub"},
     Translation{"DNS Servers", "DNS-серверы"},
-    Translation{"Temporarily disable Windows encrypted DNS", "Временно отключать шифрование DNS Windows"},
+    Translation{"Temporarily disable Windows encrypted DNS",
+                "Временно отключать шифрование DNS Windows"},
     Translation{"Configuration saved; CoreHost confirmation is pending.",
                 "Конфигурация сохранена; подтверждение от CoreHost ещё не получено."},
-    Translation{"Original Windows DNS encryption is restored on Stop or Exit, or on the next start after a crash. DNS addresses and hosts are preserved.",
-                "Исходное шифрование DNS Windows восстанавливается при остановке, выходе или следующем запуске после сбоя. Адреса DNS и файл hosts сохраняются."},
+    Translation{"Original Windows DNS encryption is restored on Stop or Exit, or on the next start "
+                "after a crash. DNS addresses and hosts are preserved.",
+                "Исходное шифрование DNS Windows восстанавливается при остановке, выходе или "
+                "следующем запуске после сбоя. Адреса DNS и файл hosts сохраняются."},
     Translation{"Add DNS Server", "Добавление DNS-сервера"},
     Translation{"New DNS Server", "Новый DNS-сервер"},
     Translation{"Name:", "Имя:"},
@@ -252,7 +275,8 @@ constexpr std::array translations{
     Translation{"Clone", "Копировать"},
     Translation{"New Rule", "Новое правило"},
     Translation{"Default rule cannot be removed.", "Правило по умолчанию нельзя удалить."},
-    Translation{"Default rule must remain enabled.", "Правило Default должно оставаться включённым."},
+    Translation{"Default rule must remain enabled.",
+                "Правило Default должно оставаться включённым."},
     Translation{"&File", "&Файл"},
     Translation{"New Configuration", "Новая конфигурация"},
     Translation{"Import Configuration", "Импорт конфигурации"},
@@ -294,10 +318,13 @@ constexpr std::array translations{
     Translation{"Collect diagnostic report...", "Собрать диагностический отчёт..."},
     Translation{"Domain to test:", "Домен для проверки:"},
     Translation{"Collecting diagnostic report...", "Сбор диагностического отчёта..."},
-    Translation{"Diagnostic collection failed. Check the logs folder.", "Не удалось собрать диагностику. Проверьте папку logs."},
+    Translation{"Diagnostic collection failed. Check the logs folder.",
+                "Не удалось собрать диагностику. Проверьте папку logs."},
     Translation{"Diagnostic capture", "Диагностическая запись"},
-    Translation{"NativeDNS is already running in another mode. Exit it before switching between normal and diagnostic mode.",
-                "NativeDNS уже работает в другом режиме. Завершите приложение перед переключением обычного и диагностического режима."},
+    Translation{"NativeDNS is already running in another mode. Exit it before switching between "
+                "normal and diagnostic mode.",
+                "NativeDNS уже работает в другом режиме. Завершите приложение перед переключением "
+                "обычного и диагностического режима."},
     Translation{"Configuration file: ", "Файл конфигурации: "},
     Translation{"CoreHost did not confirm the expected configuration",
                 "CoreHost не подтвердил ожидаемую конфигурацию"},

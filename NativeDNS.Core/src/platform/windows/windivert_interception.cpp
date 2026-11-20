@@ -14,6 +14,8 @@
 #include <deque>
 #include <thread>
 #include <cwctype>
+#include <iphlpapi.h>
+#include <sodium.h>
 
 namespace nd {
 namespace {
@@ -385,6 +387,14 @@ Packet make_reflected_tcp_packet(const Packet& captured,
     return result;
 }
 
+std::string windivert_filter(bool intercept_others, uint16_t target_port, uint16_t proxy_port) {
+    const std::string injected = intercept_others ? "" : "!impostor and ";
+    const auto target = std::to_string(target_port), proxy = std::to_string(proxy_port);
+    return "(outbound and !loopback and " + injected +
+           "!fragment and udp.DstPort == 53 and udp.PayloadLength >= 12) or (" + injected +
+           "tcp and !fragment and (tcp.DstPort == " + target + " or tcp.SrcPort == " + target +
+           " or tcp.DstPort == " + proxy + " or tcp.SrcPort == " + proxy + "))";
+}
 struct WinDivertInterception::Impl {
     using Open = decltype(&WinDivertOpen);
     using Recv = decltype(&WinDivertRecv);
@@ -399,6 +409,67 @@ struct WinDivertInterception::Impl {
     detail::TcpDnsProxy tcp_proxy;
     detail::FirewallPortRule firewall;
     mutable std::mutex lifecycle;
+    std::mutex operations, test_operation;
+    struct Counters {
+        std::atomic_uint64_t packets_received{0}, udp_dns_captured{0}, tcp_dns_captured{0};
+        std::atomic_uint64_t dns_parse_errors{0}, rules_evaluated{0}, queries_processed{0};
+        std::atomic_uint64_t queries_bypassed{0}, queries_blocked{0}, upstream_bypassed{0};
+        std::atomic_uint64_t packets_injected{0}, send_errors{0}, receive_errors{0};
+        std::atomic_uint64_t worker_queue_overflows{0}, processing_errors{0},
+            last_capture_timestamp{0};
+        std::atomic_uint64_t active_workers{0};
+    } counters;
+    std::atomic_bool receiver_active{false}, probe_active{false};
+    std::atomic_uint64_t verified_send_errors{0};
+    mutable std::mutex probe_mutex;
+    InterceptionTestResult last_test;
+    Packet probe_query;
+    uint32_t probe_source = 0, probe_destination = 0;
+    uint16_t probe_port = 0;
+    std::chrono::steady_clock::time_point probe_deadline{}, next_probe{};
+    std::string active_filter;
+    static uint64_t now_ms() {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch())
+                                         .count());
+    }
+    void fail(const std::string& code, const std::string& message) {
+        {
+            std::lock_guard lock(lifecycle);
+            if (state != State::running)
+                return;
+            error_code = code;
+            error_message = message;
+            state = State::error;
+            shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
+        }
+        router.cancel_pending();
+        queue_changed.notify_all();
+        logger.write_limited(Level::errors_only, "fatal|" + code, code, message);
+    }
+    bool capture_probe(const Packet& packet, const UdpView& view, WINDIVERT_ADDRESS address) {
+        if (!probe_active.load(std::memory_order_acquire) || view.ipv6)
+            return false;
+        std::lock_guard lock(probe_mutex);
+        if (!probe_active || std::chrono::steady_clock::now() > probe_deadline ||
+            !address.Outbound || address.Loopback ||
+            address.Network.IfIdx != last_test.interface_index ||
+            read16(packet.data() + view.udp) != probe_port ||
+            std::memcmp(packet.data() + 12, &probe_source, 4) != 0 ||
+            std::memcmp(packet.data() + 16, &probe_destination, 4) != 0 ||
+            packet.size() - view.payload != probe_query.size() ||
+            !std::equal(probe_query.begin(), probe_query.end(), packet.begin() + view.payload))
+            return false;
+        last_test.captured = true;
+        (void)parse_question(probe_query);
+        last_test.parsed = true;
+        auto response = make_intercepted_udp_response(packet, make_error_response(probe_query, 3));
+        address.Outbound = 0;
+        address.IPChecksum = 0;
+        address.UDPChecksum = 0;
+        last_test.injected = inject(response, address);
+        return true;
+    }
     std::atomic<State> state = State::stopped;
     std::string error_code, error_message;
     HMODULE module = nullptr;
@@ -416,7 +487,7 @@ struct WinDivertInterception::Impl {
         WINDIVERT_ADDRESS address{};
         Router::SnapshotPtr snapshot;
     };
-    std::mutex queue_mutex;
+    mutable std::mutex queue_mutex;
     std::condition_variable queue_changed;
     std::deque<Job> jobs;
     size_t queued_bytes = 0;
@@ -435,20 +506,24 @@ struct WinDivertInterception::Impl {
             throw Error("WINDIVERT_LOAD", std::string("Missing WinDivert export: ") + name);
         return reinterpret_cast<T>(address);
     }
-    void inject(const Packet& packet, WINDIVERT_ADDRESS address) {
+    bool inject(const Packet& packet, WINDIVERT_ADDRESS address) {
         UINT sent = 0;
-        if (!send(handle, packet.data(), static_cast<UINT>(packet.size()), &sent, &address) ||
-            sent != packet.size()) {
-            if (address.Impostor && GetLastError() == ERROR_HOST_UNREACHABLE) {
+        const auto ok =
+            send(handle, packet.data(), static_cast<UINT>(packet.size()), &sent, &address);
+        if (!ok || sent != packet.size()) {
+            const auto error = ok ? ERROR_WRITE_FAULT : GetLastError();
+            counters.send_errors.fetch_add(1, std::memory_order_relaxed);
+            if (address.Impostor && error == ERROR_HOST_UNREACHABLE) {
                 logger.write_limited(Level::errors_only,
                                      "impostor-loop",
                                      "INTERCEPT_LOOP_PREVENTED",
                                      "Injected packet exhausted its hop limit");
-                return;
+                return false;
             }
-            throw Error("WINDIVERT_SEND",
-                        "WinDivertSend failed: " + std::to_string(GetLastError()));
+            throw Error("WINDIVERT_SEND", "WinDivertSend failed: " + std::to_string(error));
         }
+        counters.packets_injected.fetch_add(1, std::memory_order_relaxed);
+        return true;
     }
     void process(Job job) {
         try {
@@ -475,20 +550,22 @@ struct WinDivertInterception::Impl {
             inject(response, job.address);
         } catch (const Error& error) {
             if (state == State::running) {
-                if (error.code == "WINDIVERT_SEND") {
-                    std::lock_guard lock(lifecycle);
-                    error_code = error.code;
-                    error_message = error.what();
-                    state = State::error;
-                    shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
-                    queue_changed.notify_all();
-                }
+                counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+                if (error.code == "WINDIVERT_SEND")
+                    fail(error.code, error.what());
                 logger.write_limited(
                     Level::errors_only, "worker|" + error.code, error.code, error.what());
             }
+        } catch (const std::exception& error) {
+            counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+            fail("INTERCEPT_WORKER", error.what());
+        } catch (...) {
+            counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+            fail("INTERCEPT_WORKER", "Unknown routing worker exception");
         }
     }
     void reject_overload(const Packet& packet, const UdpView& view, WINDIVERT_ADDRESS address) {
+        counters.worker_queue_overflows.fetch_add(1, std::memory_order_relaxed);
         const Packet query(packet.begin() + static_cast<ptrdiff_t>(view.payload), packet.end());
         const auto response = make_intercepted_udp_response(packet, make_error_response(query, 2));
         address.Outbound = 0;
@@ -503,6 +580,7 @@ struct WinDivertInterception::Impl {
                 "Routing queue is full; returned SERVFAIL (count=" + std::to_string(count) + ")");
     }
     void receive_loop() {
+        receiver_active = true;
         try {
             while (state == State::running) {
                 Packet packet(WINDIVERT_MTU_MAX);
@@ -514,15 +592,27 @@ struct WinDivertInterception::Impl {
                           &length,
                           &address)) {
                     const auto error = GetLastError();
-                    if (state != State::running)
+                    if (state != State::running) {
+                        if (error != ERROR_NO_DATA && error != ERROR_OPERATION_ABORTED) {
+                            counters.receive_errors.fetch_add(1, std::memory_order_relaxed);
+                            std::lock_guard lock(lifecycle);
+                            error_code = "WINDIVERT_RECV";
+                            error_message =
+                                "Receive failed during shutdown: " + std::to_string(error);
+                        }
                         break;
+                    }
+                    counters.receive_errors.fetch_add(1, std::memory_order_relaxed);
                     throw Error("WINDIVERT_RECV", "WinDivertRecv failed: " + std::to_string(error));
                 }
+                counters.packets_received.fetch_add(1, std::memory_order_relaxed);
+                counters.last_capture_timestamp.store(now_ms(), std::memory_order_relaxed);
                 packet.resize(length);
                 bool policy_selected = false;
                 try {
                     if (is_tcp_packet(packet)) {
                         const auto view = tcp_view(packet);
+                        counters.tcp_dns_captured.fetch_add(1, std::memory_order_relaxed);
                         const auto source_port = read16(packet.data() + view.tcp);
                         const auto destination_port = read16(packet.data() + view.tcp + 2);
                         if (!address.Outbound) {
@@ -531,6 +621,7 @@ struct WinDivertInterception::Impl {
                         }
                         if (destination_port == intercepted_tcp_port &&
                             detail::is_network_upstream(true, source_port, view.ipv6)) {
+                            counters.upstream_bypassed.fetch_add(1, std::memory_order_relaxed);
                             inject(packet, address);
                             continue;
                         }
@@ -578,10 +669,14 @@ struct WinDivertInterception::Impl {
                         continue;
                     }
                     const auto view = udp_view(packet);
+                    counters.udp_dns_captured.fetch_add(1, std::memory_order_relaxed);
+                    if (capture_probe(packet, view, address))
+                        continue;
                     const auto source_port = read16(packet.data() + view.udp);
                     const bool upstream =
                         detail::is_network_upstream(false, source_port, view.ipv6);
                     if (upstream) {
+                        counters.upstream_bypassed.fetch_add(1, std::memory_order_relaxed);
                         if (logger.enabled(Level::debug))
                             logger.write(Level::debug,
                                          "WINDIVERT_UPSTREAM_BYPASS",
@@ -610,6 +705,10 @@ struct WinDivertInterception::Impl {
                                 " action=" + action_name(captured_rule.action) +
                                 " server=" + std::to_string(captured_rule.server_id));
                     if (captured_decision.reinject_udp) {
+                        counters.rules_evaluated.fetch_add(1, std::memory_order_relaxed);
+                        if (captured_rule.action == Action::bypass)
+                            counters.queries_bypassed.fetch_add(1, std::memory_order_relaxed);
+                        counters.queries_processed.fetch_add(1, std::memory_order_relaxed);
                         const auto original = original_server(packet, view);
                         if (logger.enabled(Level::normal))
                             logger.write(
@@ -640,6 +739,9 @@ struct WinDivertInterception::Impl {
                     else
                         reject_overload(packet, view, address);
                 } catch (const Error& error) {
+                    counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+                    if (error.code == "DNS_MALFORMED" || error.code == "INTERCEPT_PACKET")
+                        counters.dns_parse_errors.fetch_add(1, std::memory_order_relaxed);
                     if (error.code == "WINDIVERT_SEND")
                         throw;
                     logger.write_limited(
@@ -654,20 +756,27 @@ struct WinDivertInterception::Impl {
                 }
             }
         } catch (const Error& error) {
-            if (handle != INVALID_HANDLE_VALUE)
-                shutdown(handle, WINDIVERT_SHUTDOWN_BOTH);
-            std::lock_guard lock(lifecycle);
-            if (state == State::running) {
-                error_code = error.code;
-                error_message = error.what();
-                state = State::error;
-                router.cancel_pending();
-                logger.write(Level::errors_only, error.code, error.what());
-            }
+            fail(error.code, error.what());
+        } catch (const std::exception& error) {
+            counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+            fail("INTERCEPT_RECEIVER", error.what());
+        } catch (...) {
+            counters.processing_errors.fetch_add(1, std::memory_order_relaxed);
+            fail("INTERCEPT_RECEIVER", "Unknown receiver exception");
         }
+        receiver_active = false;
         queue_changed.notify_all();
     }
     void worker_loop() {
+        struct Active {
+            std::atomic_uint64_t& count;
+            explicit Active(std::atomic_uint64_t& value) : count(value) {
+                ++count;
+            }
+            ~Active() {
+                --count;
+            }
+        } active(counters.active_workers);
         for (;;) {
             Job job;
             {
@@ -726,12 +835,17 @@ WinDivertInterception::~WinDivertInterception() {
 }
 void WinDivertInterception::start() {
     auto& p = *impl_;
+    std::lock_guard operation(p.operations);
     std::unique_lock lock(p.lifecycle);
     if (p.state != State::stopped)
         throw Error("LIFECYCLE", "WinDivert interception is not stopped");
     p.state = State::starting;
     p.error_code.clear();
     p.error_message.clear();
+    {
+        std::lock_guard probe_lock(p.probe_mutex);
+        p.last_test = {};
+    }
     try {
         p.router.resume();
         p.firewall.disable();
@@ -772,16 +886,10 @@ void WinDivertInterception::start() {
         p.set_param = p.symbol<Impl::SetParam>("WinDivertSetParam");
         p.compile = p.symbol<Impl::Compile>("WinDivertHelperCompileFilter");
         p.calc_checksums = p.symbol<Impl::CalcChecksums>("WinDivertHelperCalcChecksums");
-        const std::string target = std::to_string(p.intercepted_tcp_port),
-                          proxy = std::to_string(p.tcp_proxy_port);
-        const std::string injected =
-            p.router.snapshot()->options.intercept_others ? "" : "!impostor and ";
-        const std::string filter = "(outbound and !loopback and " + injected +
-                                   "!fragment and udp.DstPort == 53 and "
-                                   "udp.PayloadLength >= 12) or (" +
-                                   injected + "tcp and !fragment and (tcp.DstPort == " + target +
-                                   " or tcp.SrcPort == " + target + " or tcp.DstPort == " + proxy +
-                                   " or tcp.SrcPort == " + proxy + "))";
+        const auto filter = windivert_filter(p.router.snapshot()->options.intercept_others,
+                                             p.intercepted_tcp_port,
+                                             p.tcp_proxy_port);
+        p.active_filter = filter;
         const char* filter_error = nullptr;
         UINT filter_position = 0;
         if (!p.compile(filter.c_str(),
@@ -794,7 +902,10 @@ void WinDivertInterception::start() {
                         std::string(filter_error ? filter_error : "Invalid filter") + " at " +
                             std::to_string(filter_position));
         detail::fault_point("windivert.open");
-        p.handle = p.open(filter.c_str(), WINDIVERT_LAYER_NETWORK, 123, 0);
+        p.handle = p.open(filter.c_str(),
+                          WINDIVERT_LAYER_NETWORK,
+                          p.router.snapshot()->options.windivert_priority,
+                          0);
         if (p.handle == INVALID_HANDLE_VALUE) {
             const auto error = GetLastError();
             throw Error(error == ERROR_ACCESS_DENIED ? "ELEVATION_REQUIRED" : "WINDIVERT_OPEN",
@@ -812,7 +923,15 @@ void WinDivertInterception::start() {
         p.state = State::running;
         const auto worker_count = std::clamp(std::thread::hardware_concurrency(), 4u, 16u);
         for (unsigned i = 0; i < worker_count; ++i)
-            p.workers.emplace_back([&p] { p.worker_loop(); });
+            p.workers.emplace_back([&p] {
+                try {
+                    p.worker_loop();
+                } catch (const std::exception& error) {
+                    p.fail("INTERCEPT_WORKER", error.what());
+                } catch (...) {
+                    p.fail("INTERCEPT_WORKER", "Unknown worker loop failure");
+                }
+            });
         p.receiver = std::jthread([&p] { p.receive_loop(); });
         p.logger.write(Level::normal,
                        "WINDIVERT_STARTED",
@@ -822,10 +941,12 @@ void WinDivertInterception::start() {
         p.logger.write(
             Level::verbose,
             "INTERCEPTION_SCOPE",
-            "backend=WinDivert priority=123 UDP/TCP port=53; encrypted OS/application DNS "
-            "on HTTPS/TLS/QUIC ports is outside this filter; network-layer process ID is "
-            "unavailable; "
-            "interceptOthers=" +
+            "backend=WinDivert priority=" +
+                std::to_string(p.router.snapshot()->options.windivert_priority) +
+                " UDP/TCP port=53; encrypted OS/application DNS "
+                "on HTTPS/TLS/QUIC ports is outside this filter; network-layer process ID is "
+                "unavailable; "
+                "interceptOthers=" +
                 std::to_string(p.router.snapshot()->options.intercept_others));
     } catch (...) {
         const auto failure = std::current_exception();
@@ -863,6 +984,7 @@ void WinDivertInterception::start() {
 }
 void WinDivertInterception::stop() {
     auto& p = *impl_;
+    std::lock_guard operation(p.operations);
     {
         std::lock_guard lock(p.lifecycle);
         if (p.state == State::stopped)
@@ -891,9 +1013,12 @@ void WinDivertInterception::stop() {
     }
 }
 void WinDivertInterception::reload(Config config) {
-    if (runtime_options(config).intercept_others !=
-        impl_->router.snapshot()->options.intercept_others)
-        throw Error("RESTART_REQUIRED", "Changing interceptOthers requires a CoreHost restart");
+    std::lock_guard operation(impl_->operations);
+    const auto options = runtime_options(config);
+    if (options.intercept_others != impl_->router.snapshot()->options.intercept_others ||
+        options.windivert_priority != impl_->router.snapshot()->options.windivert_priority)
+        throw Error("RESTART_REQUIRED",
+                    "Changing interceptOthers or windivertPriority requires a CoreHost restart");
     impl_->router.reload(std::move(config));
 }
 void WinDivertInterception::cancel_pending() {
@@ -903,5 +1028,213 @@ InterceptionStatus WinDivertInterception::status() const {
     const auto& p = *impl_;
     std::lock_guard lock(p.lifecycle);
     return {p.state.load(), p.tcp_proxy_port, true, true, true, p.error_code, p.error_message};
+}
+
+InterceptionDiagnostics WinDivertInterception::diagnostics() const {
+    auto& p = *impl_;
+    InterceptionDiagnostics v;
+    {
+        std::lock_guard lock(p.lifecycle);
+        v.supported = true;
+        v.library_loaded = p.module != nullptr;
+        v.handle_open = p.handle != INVALID_HANDLE_VALUE;
+        v.priority = p.router.snapshot()->options.windivert_priority;
+        v.filter = p.active_filter;
+        v.health = p.state == State::error ? "ERROR" : "UNVERIFIED";
+        std::lock_guard probe_lock(p.probe_mutex);
+        v.last_test = p.last_test;
+        if (p.state == State::running) {
+            if (v.last_test.success())
+                v.health = "VERIFIED";
+            else if (!v.last_test.in_progress && v.last_test.failure_stage != "NOT_RUN")
+                v.health = "DEGRADED";
+        }
+    }
+    v.receiver_active = p.receiver_active.load();
+#define ND_LOAD(name) v.name = p.counters.name.load(std::memory_order_relaxed)
+    ND_LOAD(packets_received);
+    ND_LOAD(udp_dns_captured);
+    ND_LOAD(tcp_dns_captured);
+    ND_LOAD(dns_parse_errors);
+    ND_LOAD(rules_evaluated);
+    ND_LOAD(queries_processed);
+    ND_LOAD(queries_bypassed);
+    ND_LOAD(queries_blocked);
+    ND_LOAD(upstream_bypassed);
+    ND_LOAD(packets_injected);
+    ND_LOAD(send_errors);
+    ND_LOAD(receive_errors);
+    ND_LOAD(worker_queue_overflows);
+    ND_LOAD(processing_errors);
+    ND_LOAD(last_capture_timestamp);
+    ND_LOAD(active_workers);
+#undef ND_LOAD
+    const auto routed = p.router.statistics();
+    v.rules_evaluated += routed.rules_evaluated;
+    v.queries_processed += routed.queries_completed;
+    v.queries_blocked += routed.blocked;
+    v.queries_bypassed += routed.bypassed;
+    v.dns_parse_errors += routed.parse_errors;
+    v.processing_errors += routed.route_errors;
+    v.upstream_attempts = routed.upstream_attempts;
+    v.upstream_replies = routed.upstream_replies;
+    v.upstream_errors = routed.upstream_errors;
+    {
+        std::lock_guard lock(p.queue_mutex);
+        v.queued_jobs = p.jobs.size();
+        v.queued_bytes = p.queued_bytes;
+    }
+    if (v.health == "VERIFIED" && v.send_errors > p.verified_send_errors.load())
+        v.health = "DEGRADED";
+    return v;
+}
+InterceptionTestResult WinDivertInterception::self_test() {
+    auto& p = *impl_;
+    std::unique_lock test_lock(p.test_operation, std::try_to_lock);
+    if (!test_lock.owns_lock())
+        throw Error("DIAGNOSTIC_BUSY", "An interception test is already running");
+    std::lock_guard operation(p.operations); // Handle remains open for this bounded operation.
+    if (p.state != State::running)
+        throw Error("LIFECYCLE", "Interception must be running");
+    if (std::chrono::steady_clock::now() < p.next_probe)
+        throw Error("DIAGNOSTIC_BUSY", "Wait five seconds between active interception tests");
+    p.next_probe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    {
+        std::lock_guard lock(p.probe_mutex);
+        p.last_test = {};
+        p.last_test.in_progress = true;
+        p.last_test.timestamp_ms = Impl::now_ms();
+        p.last_test.failure_stage = "SOCKET";
+    }
+    struct Socket {
+        SOCKET value = INVALID_SOCKET;
+        ~Socket() {
+            if (value != INVALID_SOCKET)
+                closesocket(value);
+        }
+    } client;
+    const auto require = [](bool ok, const char* message) {
+        if (!ok)
+            throw Error("INTERCEPTION_TEST",
+                        std::string(message) + " error=" + std::to_string(WSAGetLastError()));
+    };
+    try {
+        if (sodium_init() < 0)
+            throw Error("RANDOM", "Cannot initialize secure probe randomness");
+        std::array<unsigned char, 16> nonce{};
+        randombytes_buf(nonce.data(), nonce.size());
+        char hex[33]{};
+        sodium_bin2hex(hex, sizeof(hex), nonce.data(), nonce.size());
+        auto request = make_query(std::string(hex) + ".interception.invalid");
+        randombytes_buf(request.data(), 2);
+        sockaddr_in destination{};
+        destination.sin_family = AF_INET;
+        destination.sin_port = htons(53);
+        // TEST-NET address, never a public resolver. TTL 1 further limits leakage.
+        InetPtonA(AF_INET, "192.0.2.1", &destination.sin_addr);
+        SOCKADDR_INET target{};
+        target.Ipv4 = destination;
+        SOCKADDR_INET source{};
+        MIB_IPFORWARD_ROW2 route{};
+        const auto route_error = GetBestRoute2(nullptr, 0, nullptr, &target, 0, &route, &source);
+        if (route_error != NO_ERROR || source.si_family != AF_INET ||
+            (ntohl(source.Ipv4.sin_addr.s_addr) >> 24) == 127 || source.Ipv4.sin_addr.s_addr == 0)
+            throw Error("INTERCEPTION_TEST",
+                        "No usable non-loopback IPv4 route; error=" + std::to_string(route_error));
+        client.value =
+            socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP); // Not an upstream-registered socket.
+        require(client.value != INVALID_SOCKET, "Cannot create probe socket");
+        const DWORD iface = htonl(route.InterfaceIndex);
+        const int ttl = 1;
+        require(setsockopt(client.value,
+                           IPPROTO_IP,
+                           IP_UNICAST_IF,
+                           reinterpret_cast<const char*>(&iface),
+                           sizeof(iface)) == 0,
+                "Cannot bind probe interface");
+        require(setsockopt(client.value,
+                           IPPROTO_IP,
+                           IP_TTL,
+                           reinterpret_cast<const char*>(&ttl),
+                           sizeof(ttl)) == 0,
+                "Cannot set probe TTL");
+        source.Ipv4.sin_port = 0;
+        require(
+            bind(client.value, reinterpret_cast<sockaddr*>(&source.Ipv4), sizeof(sockaddr_in)) == 0,
+            "Cannot bind probe address");
+        require(connect(client.value,
+                        reinterpret_cast<sockaddr*>(&destination),
+                        sizeof(destination)) == 0,
+                "Cannot connect probe socket");
+        sockaddr_in local{};
+        int size = sizeof(local);
+        require(getsockname(client.value, reinterpret_cast<sockaddr*>(&local), &size) == 0,
+                "Cannot inspect probe socket");
+        u_long nonblocking = 1;
+        require(ioctlsocket(client.value, FIONBIO, &nonblocking) == 0,
+                "Cannot make probe nonblocking");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        {
+            std::lock_guard lock(p.probe_mutex);
+            p.probe_query = request;
+            p.probe_source = local.sin_addr.s_addr;
+            p.probe_destination = destination.sin_addr.s_addr;
+            p.probe_port = ntohs(local.sin_port);
+            p.probe_deadline = deadline;
+            p.last_test.interface_index = route.InterfaceIndex;
+            p.last_test.failure_stage = "SEND";
+            p.probe_active.store(true, std::memory_order_release);
+        }
+        require(send(client.value,
+                     reinterpret_cast<const char*>(request.data()),
+                     static_cast<int>(request.size()),
+                     0) == static_cast<int>(request.size()),
+                "Cannot send UDP/53 probe");
+        {
+            std::lock_guard lock(p.probe_mutex);
+            p.last_test.sent = true;
+            p.last_test.failure_stage = "CAPTURE";
+        }
+        platform::wait_socket(static_cast<std::intptr_t>(client.value), false, deadline);
+        Packet response(512);
+        const auto count = recv(client.value,
+                                reinterpret_cast<char*>(response.data()),
+                                static_cast<int>(response.size()),
+                                0);
+        require(count > 0, "No UDP probe response");
+        response.resize(static_cast<size_t>(count));
+        const auto expected = make_error_response(request, 3);
+        std::lock_guard lock(p.probe_mutex);
+        p.last_test.received = response == expected;
+        if (!p.last_test.received)
+            p.last_test.message = "Unexpected response; synthetic reply was not delivered";
+    } catch (const std::exception& error) {
+        std::lock_guard lock(p.probe_mutex);
+        p.last_test.message = error.what();
+    }
+    std::lock_guard lock(p.probe_mutex);
+    p.probe_active.store(false, std::memory_order_release);
+    p.probe_query.clear();
+    auto& result = p.last_test;
+    result.in_progress = false;
+    if (result.success()) {
+        p.verified_send_errors = p.counters.send_errors.load();
+        result.failure_stage = "NONE";
+        result.message = "UDP/IPv4 capture and synthetic reply delivery verified; IPv6, TCP and "
+                         "upstream routing are not verified by this probe";
+    } else {
+        if (result.sent)
+            result.failure_stage = !result.captured   ? "CAPTURE"
+                                   : !result.parsed   ? "DNS_PARSE"
+                                   : !result.injected ? "INJECTION"
+                                                      : "DELIVERY";
+        result.message +=
+            "; possible causes include a competing DNS interceptor, filter scope, network "
+            "restrictions or a NativeDNS error; no specific cause is confirmed";
+    }
+    p.logger.write(result.success() ? Level::normal : Level::errors_only,
+                   "INTERCEPTION_SELF_TEST",
+                   "stage=" + result.failure_stage + " " + result.message);
+    return result;
 }
 } // namespace nd

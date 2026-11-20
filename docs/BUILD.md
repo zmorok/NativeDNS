@@ -251,8 +251,8 @@ in `app/lib` are available even before their main function and after elevation.
 For manual CLI inspection:
 
 ```powershell
-./NativeDNS.exe --cli diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com
-./NativeDNS.exe --cli resolve "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com 1.1.1.1 --type AAAA
+./app/bin/nativednsctl.exe diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com
+./app/bin/nativednsctl.exe resolve "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com 1.1.1.1 --type AAAA
 ```
 
 On Linux use `NativeDNS --diagnostics`, `NativeDNSCoreHost --diagnostics` and
@@ -335,3 +335,42 @@ Linux:   NativeDNSCoreHost
 ```
 
 The GUI should run unprivileged. Transparent interception privileges belong to CoreHost.
+
+## Interception CLI and target-machine validation
+
+The packaged `app/bin/nativednsctl.exe` is a static console bootstrap. It sets the
+private DLL search directory before launching `NativeDNS.Cli.exe`, so no external
+Qt installation or PATH modification is needed. Prefer this console entry point
+in PowerShell: it waits, prints stdout/stderr and returns the worker exit code.
+The GUI-subsystem `NativeDNS.exe --cli ...` also attaches to an available parent
+console when needed, but PowerShell may return its prompt before a GUI program
+finishes. For redirected capture, pipe it or use the console entry point.
+
+```powershell
+& ./app/bin/nativednsctl.exe core status
+& ./app/bin/nativednsctl.exe core interception-status
+& ./app/bin/nativednsctl.exe core interception-test
+& ./app/bin/nativednsctl.exe core profile Debug
+& ./app/bin/nativednsctl.exe core flush-file
+& ./app/bin/nativednsctl.exe core profile Normal
+```
+
+The interception-status command is read-only. The test sends the bounded reserved
+UDP/IPv4 probe described in IPC_PROTOCOL.md and returns nonzero unless capture,
+synthetic injection and delivery all succeed. It requires an already running
+transparent Windows CoreHost. It does not need a new UAC prompt. Profile switching
+through IPC does not restart interception; startup Debug events cannot be recovered
+when Debug is enabled later. Installed task path/config mismatches are rejected;
+a missing or invalid task uses the existing explicit elevation flow.
+
+Before running `windivert_live_tests`, close NativeDNS and manually stop competing
+DNS interception through each product's own UI, then use an administrator terminal.
+The test now includes active self-test and counter/verification assertions. Its
+controlled configuration disables Windows DNS preparation/cache flushing, so it
+does not modify resolver settings. It still affects DNS while its test filter is
+open and uses the external network for Process/Bypass checks. The result is not a
+substitute for an actual target-machine run. Compare before/after diagnostics for
+YogaDNS only with the operator's approval; do not change its priorities or services
+automatically. Real UAC consent/cancellation, Task Scheduler startup, multiple
+WinDivert handles/impostor interactions, IPv6, Windows 10 and Linux privileged
+routing require their respective live environments.

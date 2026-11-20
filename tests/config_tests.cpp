@@ -29,6 +29,27 @@ int main() {
             options_config.settings["ttlMin"] = "10";
             options_config.settings["yoga.settings.ttlMax"] = "60";
             options_config.settings["interceptOthers"] = "1";
+            check(nd::runtime_options(options_config).windivert_priority == 123,
+                  "Default WinDivert priority changed");
+            for (const auto* value : {"-30000", "0", "123", "30000"}) {
+                options_config.settings["windivertPriority"] = value;
+                check(nd::runtime_options(options_config).windivert_priority == std::stoi(value),
+                      "Priority not applied");
+                check(nd::runtime_options(nd::parse_config(nd::serialize_config(options_config)))
+                              .windivert_priority == std::stoi(value),
+                      "Priority XML round trip");
+            }
+            for (const auto* value : {"-30001", "30001", "123x", "", "9999999999999999999"}) {
+                options_config.settings["windivertPriority"] = value;
+                bool invalid = false;
+                try {
+                    (void)nd::runtime_options(options_config);
+                } catch (const nd::Error&) {
+                    invalid = true;
+                }
+                check(invalid, "Invalid WinDivert priority accepted");
+            }
+            options_config.settings.erase("windivertPriority");
             const auto options = nd::runtime_options(options_config);
             check(options.clear_dns_cache && options.intercept_others && options.ttl_min == 10 &&
                       options.ttl_max == 60,

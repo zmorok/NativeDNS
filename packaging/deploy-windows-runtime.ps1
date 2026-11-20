@@ -32,7 +32,7 @@ if ($Configuration -eq 'Debug') {
 }
 # A single shared CRT/Qt directory is inherited by every worker launched by
 # the static root bootstrap, including elevated CoreHost and CLI processes.
-foreach ($relative in 'NativeDNS.exe','NativeDNS.Debug.exe','app\bin\NativeDNS.GUI.exe','app\bin\NativeDNS.CoreHost.exe','app\bin\NativeDNS.Diagnostics.exe','app\lib\Qt6Core.dll','app\drivers\windivert\WinDivert64.sys','platforms\qwindows.dll') {
+foreach ($relative in 'NativeDNS.exe','NativeDNS.Debug.exe','app\bin\NativeDNS.GUI.exe','app\bin\NativeDNS.CoreHost.exe','app\bin\NativeDNS.Diagnostics.exe','app\bin\nativednsctl.exe','app\bin\NativeDNS.Cli.exe','app\lib\Qt6Core.dll','app\drivers\windivert\WinDivert64.sys','platforms\qwindows.dll') {
     if ($Configuration -eq 'Debug') { $relative = $relative.Replace('Qt6Core.dll','Qt6Cored.dll').Replace('qwindows.dll','qwindowsd.dll') }
     if (-not (Test-Path -LiteralPath (Join-Path $package $relative) -PathType Leaf)) { throw "Incomplete package: $relative" }
 }

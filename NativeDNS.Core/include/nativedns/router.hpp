@@ -17,6 +17,11 @@ struct RouteResult {
     Action action = Action::process;
     std::string error_code, message;
 };
+struct RoutingStatistics {
+    uint64_t queries_completed = 0, rules_evaluated = 0, blocked = 0, bypassed = 0;
+    uint64_t parse_errors = 0, route_errors = 0;
+    uint64_t upstream_attempts = 0, upstream_replies = 0, upstream_errors = 0;
+};
 std::string route_log_message(const Question& question,
                               const Rule& rule,
                               const Server* server,
@@ -69,6 +74,7 @@ public:
     RouteResult route(const Packet& request, const Server& original) const;
     RouteResult route(const Packet& request, const Server& original, SnapshotPtr snapshot) const;
     Packet exchange(const Packet& request, const Server& server) const;
+    RoutingStatistics statistics() const;
 
 private:
     std::pair<Packet, const Server*>
@@ -83,5 +89,11 @@ private:
         std::make_shared<std::stop_source>()};
     mutable std::mutex transport_mutex_;
     mutable std::array<std::shared_ptr<IDnsTransport>, 8> transports_;
+    struct Counters {
+        std::atomic_uint64_t queries_completed{0}, rules_evaluated{0}, blocked{0}, bypassed{0};
+        std::atomic_uint64_t parse_errors{0}, route_errors{0};
+        std::atomic_uint64_t upstream_attempts{0}, upstream_replies{0}, upstream_errors{0};
+    };
+    mutable Counters counters_;
 };
 } // namespace nd

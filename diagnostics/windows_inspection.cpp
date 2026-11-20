@@ -105,8 +105,21 @@ QStringList inspectWindowsDiagnostics() {
                     DWORD size = static_cast<DWORD>(std::size(path));
                     if (QueryFullProcessImageNameW(process, 0, path, &size))
                         text += " path=" + QString::fromWCharArray(path);
+                    HANDLE token = nullptr;
+                    if (OpenProcessToken(process, TOKEN_QUERY, &token)) {
+                        TOKEN_ELEVATION elevation{};
+                        DWORD token_bytes = 0;
+                        if (GetTokenInformation(
+                                token, TokenElevation, &elevation, sizeof(elevation), &token_bytes))
+                            text += " elevated=" + QString::number(elevation.TokenIsElevated);
+                        else
+                            text += " elevation_unavailable=" + QString::number(GetLastError());
+                        CloseHandle(token);
+                    } else
+                        text += " elevation_unavailable=" + QString::number(GetLastError());
                     CloseHandle(process);
-                }
+                } else
+                    text += " process_inspection_unavailable=" + QString::number(GetLastError());
                 lines << text;
             } while (Process32NextW(snapshot, &entry));
         CloseHandle(snapshot);

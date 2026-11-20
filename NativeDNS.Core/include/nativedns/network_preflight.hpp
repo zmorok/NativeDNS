@@ -10,6 +10,7 @@ struct PreflightFinding {
 };
 // SHA-256 of the canonical serialized config, not of XML whitespace/formatting.
 std::string configuration_fingerprint(const Config& config);
+std::string routing_fingerprint(const Config& config);
 // Inspect only: an external override must never be silently deleted.
 std::vector<PreflightFinding> inspect_hosts_overrides(const Config& config,
                                                      const NetworkSnapshot& network,

@@ -1465,11 +1465,17 @@ void NativeDnsWindow::buildUi() {
     statusBar()->addPermanentWidget(coreStatus_);
 
     auto* file = addMenu("&File");
+    auto* interceptionDiagnostics = addAction(file, "Interception Diagnostics");
+    connect(interceptionDiagnostics,
+            &QAction::triggered,
+            this,
+            &NativeDnsWindow::openInterceptionDiagnostics);
     auto* newCfg = addAction(file, "New Configuration");
     auto* import = addAction(file, "Import Configuration");
     auto* exportCfg = addAction(file, "Export Configuration");
 #ifdef _WIN32
     auto* collectDiagnostics = addAction(file, "Collect diagnostic report...");
+    collectDiagnostics->setObjectName("collectDiagnosticsAction");
     connect(collectDiagnostics, &QAction::triggered, this, [this, collectDiagnostics] {
         bool accepted = false;
         const auto host = QInputDialog::getText(this, uiText("Collect diagnostic report..."),
@@ -1484,8 +1490,18 @@ void NativeDnsWindow::buildUi() {
         auto finish = [this, process, progress, collectDiagnostics](bool success) {
             progress->close(); progress->deleteLater(); collectDiagnostics->setEnabled(true);
             process->deleteLater();
-            if (success) QDesktopServices::openUrl(QUrl::fromLocalFile(qPath(nd::platform::application_root_directory() / "logs")));
-            else QMessageBox::warning(this, "NativeDNS", uiText("Diagnostic collection failed. Check the logs folder."));
+            if (success) {
+                QString directory = qPath(nd::platform::application_root_directory() / "logs");
+                for (const auto& row :
+                     QString::fromUtf8(process->readAllStandardOutput()).split('\n'))
+                    if (row.startsWith("Archive="))
+                        directory = QFileInfo(row.mid(8).trimmed()).absolutePath();
+                QDesktopServices::openUrl(QUrl::fromLocalFile(directory));
+            } else
+                QMessageBox::warning(
+                    this,
+                    "NativeDNS",
+                    uiText("Diagnostic collection failed. Check the logs folder."));
         };
         connect(process, &QProcess::finished, this, [finish](int code, QProcess::ExitStatus status) { finish(code == 0 && status == QProcess::NormalExit); });
         connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) { if (error == QProcess::FailedToStart) finish(false); });
@@ -1915,12 +1931,10 @@ void NativeDnsWindow::syncConfigurationActions() {
         "Original Windows DNS encryption is restored on Stop or Exit, or on the next start after a crash. DNS addresses and hosts are preserved."));
 }
 std::string NativeDnsWindow::effectiveFingerprint() const {
-    auto effective = config_;
-    if (diagnosticLogging_) nd::enable_diagnostic_logging(effective);
-    return nd::configuration_fingerprint(effective);
+    return nd::routing_fingerprint(config_);
 }
 std::string NativeDnsWindow::reloadRequest(const std::string& id) const {
-    return id + (diagnosticLogging_ ? "\tdiagnostics=1" : "\tdiagnostics=0");
+    return "routing=" + id + (diagnosticLogging_ ? "\tdiagnostics=1" : "\tdiagnostics=0");
 }
 bool NativeDnsWindow::restartCore() {
     reloadRejected_ = false;
@@ -2013,6 +2027,76 @@ void NativeDnsWindow::applyFileLogging() {
         // The setting is persisted and will be applied when CoreHost starts.
     }
 }
+void NativeDnsWindow::openInterceptionDiagnostics() {
+    QDialog dialog(this);
+    dialog.setWindowTitle(uiText("Interception Diagnostics"));
+    dialog.resize(820, 620);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* explanation = new QLabel(uiText("Running means the mechanism is started. Verified "
+                                          "requires a successful active UDP/IPv4 test."),
+                                   &dialog);
+    explanation->setWordWrap(true);
+    layout->addWidget(explanation);
+    auto* text = new QPlainTextEdit(&dialog);
+    text->setReadOnly(true);
+    layout->addWidget(text);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    auto* refresh = buttons->addButton(uiText("Refresh"), QDialogButtonBox::ActionRole);
+    auto* test =
+        buttons->addButton(uiText("Run safe interception test"), QDialogButtonBox::ActionRole);
+    test->setToolTip(uiText("Sends one UDP/53 query to a reserved TEST-NET address with TTL 1. It "
+                            "may leave the computer if interception fails."));
+#ifdef _WIN32
+    auto* collect =
+        buttons->addButton(uiText("Collect diagnostic report..."), QDialogButtonBox::ActionRole);
+    connect(collect, &QPushButton::clicked, this, [this] {
+        if (auto* action = findChild<QAction*>("collectDiagnosticsAction"))
+            action->trigger();
+    });
+#endif
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    const auto load = [text, refresh, test](bool active) {
+        refresh->setEnabled(false);
+        test->setEnabled(false);
+        QPointer<QPlainTextEdit> output(text);
+        QPointer<QPushButton> refreshButton(refresh), testButton(test);
+        QThreadPool::globalInstance()->start([output, refreshButton, testButton, active] {
+            QString result;
+            try {
+                if (active) {
+                    const auto probe = nd::pipe_request(
+                        nd::core_pipe_name, nd::IpcOperation::interception_test, {}, 5000);
+                    result += q(probe.payload) + "\n";
+                }
+                result += q(readCoreStatus().payload) + "\n";
+                const auto status = nd::pipe_request(
+                    nd::core_pipe_name, nd::IpcOperation::interception_status, {}, 5000);
+                if (status.status)
+                    throw std::runtime_error(status.payload);
+                result += q(status.payload);
+            } catch (const std::exception& error) {
+                result += q(error.what());
+            }
+            QMetaObject::invokeMethod(
+                qApp,
+                [output, refreshButton, testButton, result] {
+                    if (output)
+                        output->setPlainText(result);
+                    if (refreshButton)
+                        refreshButton->setEnabled(true);
+                    if (testButton)
+                        testButton->setEnabled(true);
+                },
+                Qt::QueuedConnection);
+        });
+    };
+    connect(refresh, &QPushButton::clicked, &dialog, [load] { load(false); });
+    connect(test, &QPushButton::clicked, &dialog, [load] { load(true); });
+    load(false);
+    positionDialog(dialog, this);
+    dialog.exec();
+}
 void NativeDnsWindow::openServers() {
     ServerDialog dialog(this, config_, [this] { return applyConfiguration(); });
     positionDialog(dialog, this);
@@ -2081,8 +2165,16 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
         setStatusText(uiText("Core: starting..."));
     QPointer<NativeDnsWindow> self(this);
     QThreadPool::globalInstance()->start(
-        [self, helper, args, configuration, transparent, reportFailure, launchState, captureRequest, diagnostic = diagnosticLogging_] {
-            bool success = false, running = false;
+        [self,
+         helper,
+         args,
+         configuration,
+         transparent,
+         reportFailure,
+         launchState,
+         captureRequest,
+         diagnostic = diagnosticLogging_] {
+            bool success = false, running = false, scheduledDebug = false;
             QString failure;
             try {
                 const auto response = readCoreStatus();
@@ -2109,8 +2201,12 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             if (success && running) {
                 try {
                     const auto applied = nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, captureRequest, 10000);
-                    if (applied.status) throw std::runtime_error(applied.payload);
-                } catch (const std::exception& error) { success = false; failure = q(error.what()); }
+                    if (applied.status)
+                        throw std::runtime_error(applied.payload);
+                } catch (const std::exception& error) {
+                    success = false;
+                    failure = q(error.what());
+                }
             }
             if (!success && failure.isEmpty() && !launchState->cancelled) {
                 // A missing/timed-out IPC endpoint does not mean its process
@@ -2128,10 +2224,20 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             if (!success && failure.isEmpty() && !launchState->cancelled) {
                 bool launched = false;
 #ifdef _WIN32
-                if (transparent && !diagnostic) {
+                if (transparent) {
                     try {
                         launched = nd::start_autostart_core(fsPath(helper), configuration);
-                    } catch (...) { /* Fall back to the normal elevation prompt. */
+                        scheduledDebug = launched && diagnostic;
+                    } catch (const std::exception& error) {
+                        QMetaObject::invokeMethod(
+                            qApp,
+                            [self, detail = q(error.what())] {
+                                if (self)
+                                    self->appendLocalLog(
+                                        uiText("Scheduled CoreHost launch failed: ") + detail,
+                                        true);
+                            },
+                            Qt::QueuedConnection);
                     }
                 }
 #endif
@@ -2142,11 +2248,43 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                 launchState->issued = launched;
                 if (!success && !launchState->cancelled)
                     failure = launch_error;
+                if (launched) {
+                    const auto deadline =
+                        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                    success = false;
+                    while (!launchState->cancelled && std::chrono::steady_clock::now() < deadline) {
+                        try {
+                            const auto ready = readCoreStatus();
+                            if (ready.status || !ready.payload.starts_with("RUNNING")) {
+                                failure = q(ready.payload);
+                                break;
+                            }
+                            const auto applied = nd::pipe_request(nd::core_pipe_name,
+                                                                  nd::IpcOperation::reload_config,
+                                                                  captureRequest,
+                                                                  10000);
+                            if (applied.status) {
+                                failure = q(applied.payload);
+                                break;
+                            }
+                            success = running = true;
+                            break;
+                        } catch (const nd::Error& error) {
+                            if (error.code != "IPC_CONNECT" && error.code != "IPC_TIMEOUT") {
+                                failure = q(error.what());
+                                break;
+                            }
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    }
+                    if (!success && failure.isEmpty())
+                        failure = uiText("CoreHost startup or IPC connection timed out.");
+                }
             }
             launchState->pending = false;
             QMetaObject::invokeMethod(
                 qApp,
-                [self, success, running, failure, reportFailure, launchState] {
+                [self, success, running, failure, reportFailure, launchState, scheduledDebug] {
                     if (!self)
                         return;
                     self->coreStartOperationPending_ = false;
@@ -2161,6 +2299,10 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                             QMessageBox::critical(self, "NativeDNS", failure);
                         return;
                     }
+                    if (scheduledDebug)
+                        self->appendLocalLog(
+                            uiText("Debug logging enabled after scheduled startup; early "
+                                   "initialization used the task's logging profile."));
                     self->coreLaunchPending_ = !running;
                     if (running)
                         self->refreshStatus();
@@ -2490,8 +2632,14 @@ void NativeDnsWindow::refreshStatus() {
                     self->coreLaunchPending_ = false;
                     self->restartWhenNetworkReturns_ = false;
                     self->setStatusText(friendlyCoreStatus(status) +
+                                            (status.contains("verification=UNVERIFIED")
+                                                 ? " | " + uiText("Interception unverified")
+                                             : status.contains("verification=DEGRADED")
+                                                 ? " | " + uiText("Interception degraded")
+                                                 : QString{}) +
                                             (available ? QString{} : " | " + uiText("Offline")),
-                                        status.startsWith("ERROR") || !available);
+                                        status.startsWith("ERROR") ||
+                                            status.contains("verification=DEGRADED") || !available);
                 } else if (processAlive && !self->coreLaunchPending_) {
                     self->coreHealthyTimer_.invalidate();
                     self->setStatusText(uiText("Core: control unavailable"), true);

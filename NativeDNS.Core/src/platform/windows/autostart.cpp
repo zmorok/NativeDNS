@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <taskschd.h>
 #include <oleauto.h>
+#include <sddl.h>
 
 namespace nd {
 namespace {
@@ -138,6 +139,71 @@ std::filesystem::path core_entrypoint(const std::filesystem::path& executable) {
     if (binary.filename() == L"bin" && binary.parent_path().filename() == L"app" &&
         std::filesystem::is_regular_file(root / L"NativeDNS.exe")) return root / L"NativeDNS.exe";
     return executable;
+}
+
+bool trusted_task_principal(IRegisteredTask* task, ITaskDefinition* definition) {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return false;
+    DWORD bytes = 0;
+    GetTokenInformation(token, TokenUser, nullptr, 0, &bytes);
+    std::vector<BYTE> storage(bytes);
+    const bool obtained =
+        bytes && GetTokenInformation(token, TokenUser, storage.data(), bytes, &bytes);
+    CloseHandle(token);
+    if (!obtained)
+        return false;
+    const auto user = reinterpret_cast<TOKEN_USER*>(storage.data())->User.Sid;
+    ComPtr<IPrincipal> principal;
+    check(definition->get_Principal(principal.put()), "Read task principal");
+    TASK_RUNLEVEL_TYPE runlevel{};
+    TASK_LOGON_TYPE logon{};
+    check(principal->get_RunLevel(&runlevel), "Read task run level");
+    check(principal->get_LogonType(&logon), "Read task logon type");
+    if (runlevel != TASK_RUNLEVEL_HIGHEST || logon != TASK_LOGON_INTERACTIVE_TOKEN)
+        return false;
+    OutBstr account;
+    check(principal->get_UserId(account.put()), "Read task user");
+    if (!account.value)
+        return false;
+    PSID sid = nullptr;
+    bool same_user = false;
+    if (ConvertStringSidToSidW(account.value, &sid)) {
+        same_user = EqualSid(sid, user) != FALSE;
+        LocalFree(sid);
+    } else {
+        DWORD sid_bytes = 0, domain_chars = 0;
+        SID_NAME_USE use{};
+        LookupAccountNameW(
+            nullptr, account.value, nullptr, &sid_bytes, nullptr, &domain_chars, &use);
+        std::vector<BYTE> resolved(sid_bytes);
+        std::vector<wchar_t> domain(domain_chars);
+        if (sid_bytes && LookupAccountNameW(nullptr,
+                                            account.value,
+                                            resolved.data(),
+                                            &sid_bytes,
+                                            domain.data(),
+                                            &domain_chars,
+                                            &use))
+            same_user = EqualSid(resolved.data(), user) != FALSE;
+    }
+    if (!same_user)
+        return false;
+    OutBstr security;
+    check(task->GetSecurityDescriptor(OWNER_SECURITY_INFORMATION, security.put()),
+          "Read task owner");
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!security.value || !ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                               security.value, SDDL_REVISION_1, &descriptor, nullptr))
+        return false;
+    PSID owner = nullptr;
+    BOOL defaulted = FALSE;
+    bool trusted = false;
+    if (GetSecurityDescriptorOwner(descriptor, &owner, &defaulted) && owner)
+        trusted = EqualSid(owner, user) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) ||
+                  IsWellKnownSid(owner, WinLocalSystemSid);
+    LocalFree(descriptor);
+    return trusted;
 }
 } // namespace
 
@@ -378,24 +444,32 @@ bool start_autostart_core(const std::filesystem::path& executable,
 
     ComPtr<ITaskDefinition> definition;
     check(task->get_Definition(definition.put()), "Read NativeDNS Core task definition");
+    if (!trusted_task_principal(task.value, definition.value))
+        return false;
     ComPtr<IActionCollection> actions;
     check(definition->get_Actions(actions.put()), "Read NativeDNS Core task actions");
+    LONG action_count = 0;
+    check(actions->get_Count(&action_count), "Count NativeDNS Core task actions");
+    if (action_count != 1)
+        return false;
     ComPtr<IAction> action;
     check(actions->get_Item(1, action.put()), "Read NativeDNS Core task action");
     ComPtr<IExecAction> execute;
     check(action->QueryInterface(IID_PPV_ARGS(execute.put())),
           "Read NativeDNS Core task executable");
-    OutBstr path, arguments;
+    OutBstr path, arguments, working_directory;
     check(execute->get_Path(path.put()), "Read NativeDNS Core executable path");
     check(execute->get_Arguments(arguments.put()), "Read NativeDNS Core arguments");
 
+    check(execute->get_WorkingDirectory(working_directory.put()), "Read task working directory");
     const auto absolute_executable = std::filesystem::absolute(executable).lexically_normal();
     const auto absolute_config = std::filesystem::absolute(config).lexically_normal();
     const auto entry = core_entrypoint(absolute_executable);
     const std::wstring expected_arguments = (entry != absolute_executable ? L"--core-host " : L"") +
         std::wstring(L"--config ") + quote_argument(absolute_config.wstring()) + L" --transparent";
     if (!path.value || !arguments.value || _wcsicmp(path.value, entry.c_str()) != 0 ||
-        expected_arguments != arguments.value)
+        expected_arguments != arguments.value || !working_directory.value ||
+        _wcsicmp(working_directory.value, absolute_executable.parent_path().c_str()) != 0)
         return false;
 
     auto empty = empty_variant();

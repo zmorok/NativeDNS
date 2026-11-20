@@ -21,20 +21,23 @@ int print_test(const nd::TestResult& result) {
     return result.success ? 0 : 1;
 }
 void usage() {
-    std::cerr << "Usage:\n"
-                 "  nativednsctl core status|start|stop|logs [AFTER "
-                 "[WAIT_MS]]|clear-file|clear-display|shutdown|restart|reload\n"
-                 "  nativednsctl config import-yoga INPUT OUTPUT\n"
-                 "  nativednsctl config export INPUT OUTPUT\n"
-                 "  nativednsctl rules list CONFIG\n"
-                 "  nativednsctl rules match CONFIG HOST\n"
-                 "  nativednsctl diagnose CONFIG [HOST]\n"
-                 "  nativednsctl servers list CONFIG\n"
-                 "  nativednsctl servers test CONFIG ID\n"
-                 "  nativednsctl probe udp|tcp IP [HOST [PORT]]\n"
-                 "  nativednsctl resolve CONFIG HOST ORIGINAL_IP [ORIGINAL_PORT] [--type A|AAAA|HTTPS]\n"
-                 "  nativednsctl serve CONFIG ORIGINAL_IP [LOCAL_PORT]\n"
-                 "  nativednsctl autostart status|enable COREHOST CONFIG|disable\n";
+    std::cerr
+        << "Usage:\n"
+           "  nativednsctl core status|start|stop|logs [AFTER "
+           "[WAIT_MS]]|clear-file|clear-display|shutdown|restart|reload\n"
+           "  nativednsctl core interception-status|interception-test|flush-file\n"
+           "  nativednsctl core profile Normal|Debug\n"
+           "  nativednsctl config import-yoga INPUT OUTPUT\n"
+           "  nativednsctl config export INPUT OUTPUT\n"
+           "  nativednsctl rules list CONFIG\n"
+           "  nativednsctl rules match CONFIG HOST\n"
+           "  nativednsctl diagnose CONFIG [HOST]\n"
+           "  nativednsctl servers list CONFIG\n"
+           "  nativednsctl servers test CONFIG ID\n"
+           "  nativednsctl probe udp|tcp IP [HOST [PORT]]\n"
+           "  nativednsctl resolve CONFIG HOST ORIGINAL_IP [ORIGINAL_PORT] [--type A|AAAA|HTTPS]\n"
+           "  nativednsctl serve CONFIG ORIGINAL_IP [LOCAL_PORT]\n"
+           "  nativednsctl autostart status|enable COREHOST CONFIG|disable\n";
 }
 } // namespace
 int main(int argc, char** native_argv) {
@@ -56,6 +59,15 @@ int main(int argc, char** native_argv) {
                 conflict = conflict || error;
                 std::cout << (error ? "ERROR " : "INFO ") << finding.code << ' ' << finding.message << '\n';
             }
+            for (const auto& finding : nd::platform::interception_conflicts()) {
+                if (finding.code == "INTERCEPT_CONFLICT") {
+                    std::cout << "INFO COREHOST_PRESENT A NativeDNS CoreHost process is present; "
+                                 "inspect its IPC status\n";
+                    continue;
+                }
+                std::cout << (finding.suspected ? "WARNING " : "INFO ") << finding.code << ' '
+                          << finding.message << '\n';
+            }
             if (argc == 4) {
                 const auto decision = nd::evaluate_rule(config, argv[3], network);
                 std::cout << "RULE name=" << argv[3] << " id=" << decision.rule->id
@@ -73,7 +85,15 @@ int main(int argc, char** native_argv) {
         if (argc >= 3 && std::string(argv[1]) == "core") {
             const std::string cmd = argv[2];
             nd::IpcOperation op;
-            if (cmd == "status")
+            if (cmd == "interception-status")
+                op = nd::IpcOperation::interception_status;
+            else if (cmd == "interception-test")
+                op = nd::IpcOperation::interception_test;
+            else if (cmd == "profile")
+                op = nd::IpcOperation::diagnostic_profile;
+            else if (cmd == "flush-file")
+                op = nd::IpcOperation::flush_file_log;
+            else if (cmd == "status")
                 op = nd::IpcOperation::status;
             else if (cmd == "start")
                 op = nd::IpcOperation::start;
@@ -103,9 +123,11 @@ int main(int argc, char** native_argv) {
             auto r = nd::pipe_request(endpoint,
                                       op,
                                       payload,
-                                      op == nd::IpcOperation::logs            ? 2000
-                                      : op == nd::IpcOperation::reload_config ? 10000
-                                                                              : 3000);
+                                      op == nd::IpcOperation::logs                  ? 2000
+                                      : op == nd::IpcOperation::interception_test   ? 5000
+                                      : op == nd::IpcOperation::interception_status ? 5000
+                                      : op == nd::IpcOperation::reload_config       ? 10000
+                                                                                    : 3000);
             std::cout << r.payload;
             if (r.payload.empty() || r.payload.back() != '\n')
                 std::cout << '\n';

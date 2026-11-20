@@ -17,6 +17,7 @@ set(NATIVEDNS_CORE_COMMON_SOURCES
   src/dnscrypt.cpp
   src/router.cpp
   src/host.cpp
+  src/interception_diagnostics.cpp
   src/ipc_wire.cpp
   src/fault_injection.cpp
   src/network.cpp
@@ -83,7 +84,7 @@ foreach(target NativeDNS.Core NativeDNS.Core.Internal)
   target_include_directories(${target} PUBLIC include)
   target_link_libraries(${target} PUBLIC CURL::libcurl Sodium::sodium)
   if(WIN32)
-    target_link_libraries(${target} PUBLIC ole32 oleaut32 uuid taskschd advapi32 shell32 ws2_32 normaliz iphlpapi)
+    target_link_libraries(${target} PUBLIC ole32 oleaut32 uuid taskschd advapi32 shell32 ws2_32 normaliz iphlpapi fwpuclnt)
   else()
     target_link_libraries(${target} PUBLIC pthread)
   endif()

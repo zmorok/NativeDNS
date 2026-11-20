@@ -45,6 +45,7 @@ private:
     std::string reloadRequest(const std::string& id) const;
     void requestCoreRestart();
     void applyFileLogging();
+    void openInterceptionDiagnostics();
     void openServers();
     void openRules();
     void importConfiguration();

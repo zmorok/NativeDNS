@@ -79,6 +79,10 @@ Current operations include:
 | 9 | Restart |
 | 10 | Configure file log (`enabled<TAB>level`) |
 | 11 | Reload config (empty payload or expected config ID) |
+| 12 | Interception diagnostics (empty payload, read-only) |
+| 13 | Active interception test (empty payload, bounded UDP/IPv4 probe) |
+| 14 | Runtime logging profile (`Normal` or `Debug`) |
+| 15 | Flush file logging (empty payload, ordered writer barrier) |
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
 
@@ -177,3 +181,61 @@ fingerprint before changing its runtime profile. A normal GUI can therefore
 restore saved logging levels when reusing a host, and a Debug GUI forces Debug
 file/display levels without rewriting the XML. Empty and SHA-256-only legacy
 payloads retain the host's current capture profile.
+
+## Interception and logging diagnostics
+
+New operations retain framing version 1 and existing operation IDs. Older hosts
+reject unsupported operations. Status retains its `RUNNING port=...` prefix and
+adds `verification=UNVERIFIED|VERIFIED|DEGRADED|ERROR` for transparent providers.
+`RUNNING` describes a started mechanism, not verified DNS routing. Linux reports
+unverified interception and does not implement the Windows active probe.
+
+Operation 12 returns UTF-8 `key=value` lines with `diagnostic_version=1`. Repeated
+`finding` keys contain bounded read-only process/service/WFP findings. Counters
+are independently sampled atomics, not a transactionally consistent packet trace.
+WinDivert packet counters include TCP reflection and NativeDNS upstream packets;
+routing counters cover completed UDP/TCP routing plus the UDP fast path. Probe
+traffic is excluded from user rule evaluation. Counters persist through Stop;
+Start clears probe verification. `last_capture_timestamp` is Unix milliseconds.
+
+`saved_config_id` identifies the canonical document last loaded successfully.
+`routing_config_id` includes all server/rule/network settings and metadata, while
+excluding logging and server-test UI settings. `disk_saved_config_id`,
+`disk_routing_config_id` and `disk_routing_matches_applied` compare the current
+file with applied routing; a disk read error is explicit. `runtime_profile` and
+`effective_logging_*` describe memory state, not XML changes.
+`startup_runtime_profile` retains the launch profile after later IPC changes. To validate routing
+independently of logging, Reload accepts
+`routing=<64 lowercase hex>[<TAB>diagnostics=0|1]`. The reply remains
+`RELOADED config_id=<requested-id>`. Legacy plain SHA-256 payloads still validate
+the complete effective configuration, including the legacy Debug overlay.
+
+`logging_state` is `ENABLED`, `DISABLED`, `DEGRADED` (lost queued events), or
+`FAILED`. Diagnostics include the actual current file path after rotation,
+writer activity, flushed event count, conservative lost-event count, last error
+and last successful batch timestamp. Recovering the sink retains error/loss
+history. A failed file sink does not stop routing or the memory journal.
+
+Operation 13 sends one ordinary UDP/53 packet on a selected non-loopback IPv4
+interface to `192.0.2.1`, with TTL 1 and a cryptographic nonce in
+`<nonce>.interception.invalid`. The socket is deliberately outside the upstream
+bypass registry. Matching requires exact DNS bytes, source/destination IPv4,
+source/destination ports, interface and a two-second deadline. NativeDNS injects
+NXDOMAIN without consulting rules/upstreams and checks delivery of that exact
+reply to the connected client. A packet can leave the host if capture fails;
+TEST-NET and TTL 1 minimize its effect. One probe runs at a time, at most once
+per five seconds. No destination, command, path or timeout is accepted from IPC.
+
+The result reports send, capture, parse, injection and delivery separately;
+nonzero response status means failed verification. Only all five stages mark
+UDP/IPv4 interception `VERIFIED`. This does not verify TCP, IPv6, user rules,
+upstreams or future network conditions. No-traffic periods never become failures.
+A failed probe identifies a stage and possible causes, not a proven competitor.
+Repeat the probe before/after manually stopping another interceptor to compare
+snapshots. NativeDNS never stops another product or modifies its filters.
+
+Operation 14 changes only memory logging settings and leaves routing, XML and
+interception handles intact. It cannot retroactively capture early startup
+Debug events. `--diagnostics` is still required for full early Debug capture.
+The same restricted per-user Named Pipe ACL and local-only transport apply to
+all new operations; none accepts arbitrary privileged commands or output paths.

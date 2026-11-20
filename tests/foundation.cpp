@@ -1,4 +1,5 @@
 #include <nativedns/logger.hpp>
+#include <nativedns/router.hpp>
 #include <nativedns/core_api.h>
 #include <nativedns/platform.hpp>
 #include "../NativeDNS.Core/src/bounded_executor.hpp"
@@ -104,6 +105,21 @@ int main() {
             check(limited.snapshot(nd::Level::errors_only).size() == 1,
                   "Clearing display exposes the next failure immediately");
         }
+        {
+            auto policy = nd::default_config();
+            policy.rules.front().action = nd::Action::block;
+            nd::Router counted(policy, logger);
+            (void)counted.route(nd::make_query("stats.invalid"), {});
+            policy.rules.front().action = nd::Action::bypass;
+            counted.reload(policy);
+            (void)counted.route(nd::make_query("stats.invalid"), {});
+            (void)counted.route(nd::Packet{0}, {});
+            const auto stats = counted.statistics();
+            check(stats.queries_completed == 3 && stats.rules_evaluated == 2 &&
+                      stats.blocked == 1 && stats.bypassed == 1 && stats.parse_errors == 1 &&
+                      stats.route_errors == 1 && stats.upstream_attempts == 0,
+                  "Routing stage counters disagree with actual operations");
+        }
         const auto directory = std::filesystem::current_path() /
                                ("logger-test-" + std::to_string(nd::platform::process_id()));
         std::filesystem::create_directories(directory);
@@ -159,6 +175,53 @@ int main() {
             std::filesystem::remove(entry.path());
         }
         check(timestamped_file_count == 3, "timestamped log retention");
+        {
+            const auto healthy = logger.file_status();
+            check(healthy.written_events >= 80 && healthy.writer_active &&
+                      healthy.last_write_timestamp_ms > 0,
+                  "Writer diagnostics missed actual writes");
+            const auto blocked_path = directory / "blocked";
+            {
+                std::ofstream file(blocked_path);
+                file << "not a directory";
+            }
+            bool failed = false;
+            try {
+                logger.configure_file(true, nd::Level::debug, blocked_path / "output.log");
+            } catch (...) {
+                failed = true;
+            }
+            const auto status = logger.file_status();
+            check(failed && status.state == "FAILED" && !status.enabled &&
+                      !status.last_error.empty() && status.path.is_absolute(),
+                  "Log open failure not observable");
+            logger.write(nd::Level::errors_only, "MEMORY_FALLBACK", "survives file failure");
+            const auto memory = logger.snapshot(nd::Level::debug);
+            check(std::any_of(memory.begin(),
+                              memory.end(),
+                              [](const auto& e) { return e.code == "MEMORY_FALLBACK"; }),
+                  "File failure lost memory events");
+            const auto recovery = directory / "recovered.log";
+            logger.configure_file(true, nd::Level::debug, recovery);
+            logger.write(nd::Level::debug, "RECOVERED", "actual disk write");
+            logger.flush_file();
+            check(logger.file_status().state == "ENABLED" &&
+                      logger.file_status().path == std::filesystem::absolute(recovery),
+                  "Logger did not recover after configuration repair");
+            // Replacing the owned file with a directory forces a real append failure.
+            std::filesystem::remove(recovery);
+            std::filesystem::create_directory(recovery);
+            logger.write(nd::Level::debug, "WRITE_FAILURE", "cannot append");
+            try {
+                logger.flush_file();
+            } catch (...) {
+            }
+            check(logger.file_status().state == "FAILED" && logger.file_status().lost_events > 0,
+                  "Append failure not counted or sink still reports enabled");
+            std::filesystem::remove(recovery);
+            logger.configure_file(false, nd::Level::normal, {});
+            std::filesystem::remove(blocked_path);
+        }
         std::filesystem::remove(directory);
         {
             const auto unicode_directory = std::filesystem::temp_directory_path() /
