@@ -340,7 +340,9 @@ test_server(const Server& server, const std::string& hostname, uint16_t type, Lo
         result.authenticated_data = answer.authenticated_data;
         result.addresses = answer.addresses;
         if (answer.rcode)
-            throw Error("DNS_RCODE", "DNS failure response: RCODE " + std::to_string(answer.rcode));
+            throw Error("DNS_RCODE",
+                        "DNS failure response: RCODE " + std::to_string(answer.rcode) + " (" +
+                            dns_rcode_name(answer.rcode) + ")");
         if (answer.addresses.empty())
             throw Error("DNS_NO_ADDRESS", "DNS response has no matching address answer");
         result.success = true;

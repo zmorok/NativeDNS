@@ -20,6 +20,7 @@ struct RouteResult {
 struct RoutingStatistics {
     uint64_t queries_completed = 0, rules_evaluated = 0, blocked = 0, bypassed = 0;
     uint64_t parse_errors = 0, route_errors = 0;
+    uint64_t negative_replies = 0, upstream_error_rcodes = 0;
     uint64_t upstream_attempts = 0, upstream_replies = 0, upstream_errors = 0;
 };
 std::string route_log_message(const Question& question,
@@ -77,12 +78,18 @@ public:
     RoutingStatistics statistics() const;
 
 private:
+    enum class ExchangeSource { upstream, cache, coalesced };
+    struct ExchangeResult {
+        Packet packet;
+        uint32_t used_server_id = 0;
+        ExchangeSource source = ExchangeSource::upstream;
+    };
     std::pair<Packet, const Server*>
     exchange_group(const Snapshot& snapshot, const Packet& request, const Server& primary) const;
-    std::pair<Packet, uint32_t> exchange_cached(const Snapshot& snapshot,
-                                                const Packet& request,
-                                                const Server& primary,
-                                                bool configured) const;
+    ExchangeResult exchange_cached(const Snapshot& snapshot,
+                                   const Packet& request,
+                                   const Server& primary,
+                                   bool configured) const;
     Logger& logger_;
     mutable std::atomic<SnapshotPtr> snapshot_;
     mutable std::atomic<std::shared_ptr<std::stop_source>> cancellation_{
@@ -92,6 +99,7 @@ private:
     struct Counters {
         std::atomic_uint64_t queries_completed{0}, rules_evaluated{0}, blocked{0}, bypassed{0};
         std::atomic_uint64_t parse_errors{0}, route_errors{0};
+        std::atomic_uint64_t negative_replies{0}, upstream_error_rcodes{0};
         std::atomic_uint64_t upstream_attempts{0}, upstream_replies{0}, upstream_errors{0};
     };
     mutable Counters counters_;

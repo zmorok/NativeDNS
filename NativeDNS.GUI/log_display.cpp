@@ -68,8 +68,11 @@ Presentation present(const LogRecord& record) {
             parts << uiText("Rule: %1").arg(record.rule);
         if (!p.duration.isEmpty())
             parts << p.duration + " ms";
-        if (record.message.contains("cache hit", Qt::CaseInsensitive))
+        if (record.message.contains("source=cache", Qt::CaseInsensitive) ||
+            record.message.contains("cache hit", Qt::CaseInsensitive))
             parts << uiText("Cache");
+        if (record.message.contains("rcode_name=NXDOMAIN"))
+            parts << "NXDOMAIN";
         parts.removeAll(QString{});
         p.summary = parts.join("  ·  ");
     }

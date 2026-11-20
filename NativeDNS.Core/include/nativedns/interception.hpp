@@ -30,6 +30,7 @@ struct InterceptionDiagnostics {
     uint64_t queries_bypassed = 0, queries_blocked = 0, upstream_bypassed = 0;
     uint64_t packets_injected = 0, send_errors = 0, receive_errors = 0;
     uint64_t worker_queue_overflows = 0, processing_errors = 0, last_capture_timestamp = 0;
+    uint64_t negative_replies = 0, upstream_error_rcodes = 0;
     uint64_t active_workers = 0, queued_jobs = 0, queued_bytes = 0;
     uint64_t upstream_attempts = 0, upstream_replies = 0, upstream_errors = 0;
     InterceptionTestResult last_test;

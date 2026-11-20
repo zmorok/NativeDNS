@@ -15,6 +15,9 @@ struct DnsAnswer {
     uint16_t rcode = 0;
     bool truncated = false, authenticated_data = false;
     std::vector<std::string> addresses;
+    uint32_t answer_count = 0;
+    bool has_authority_soa = false;
+    uint32_t soa_ttl = 0;
     uint32_t cache_ttl = 0;
     bool cacheable = false;
 };
@@ -28,6 +31,7 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
 Packet age_dns_response(const Packet& response, uint16_t transaction_id, uint32_t elapsed_seconds);
 Packet clamp_dns_ttl(const Packet& response, uint32_t minimum, uint32_t maximum);
 std::string dns_type_name(uint16_t type);
+std::string dns_rcode_name(uint16_t rcode);
 class IDnsTransport {
 public:
     virtual ~IDnsTransport() = default;

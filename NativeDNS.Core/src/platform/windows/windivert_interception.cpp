@@ -750,7 +750,11 @@ struct WinDivertInterception::Impl {
                             logger.write(
                                 Level::normal,
                                 "DNS_ROUTE",
-                                route_log_message(captured_question, captured_rule, &original));
+                                route_log_message(captured_question, captured_rule, &original),
+                                {captured_question.name,
+                                 dns_type_name(captured_question.type),
+                                 captured_rule.name,
+                                 action_name(captured_rule.action)});
                         if (logger.enabled(Level::debug))
                             logger.write(
                                 Level::debug,
@@ -1113,6 +1117,8 @@ InterceptionDiagnostics WinDivertInterception::diagnostics() const {
     v.queries_bypassed += routed.bypassed;
     v.dns_parse_errors += routed.parse_errors;
     v.processing_errors += routed.route_errors;
+    v.negative_replies = routed.negative_replies;
+    v.upstream_error_rcodes = routed.upstream_error_rcodes;
     v.upstream_attempts = routed.upstream_attempts;
     v.upstream_replies = routed.upstream_replies;
     v.upstream_errors = routed.upstream_errors;

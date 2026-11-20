@@ -106,8 +106,8 @@ Log rows are UTF-8 tab-separated values: sequence, level, Unix timestamp in mill
 
 Appending `\tstructured` to a logs request (`after_sequence<TAB>wait_ms<TAB>level<TAB>structured`)
 opts into four additional fields: query address, DNS record type, rule name, and rule action
-(`process`, `block`, or `bypass`). DNS routing events carry this context; other events leave
-those fields empty. Fields cannot contain tabs or line breaks. Requests without this suffix
+(`process`, `block`, or `bypass`). DNS routing events (including Windows UDP fast-path events) carry this context; other events leave
+those fields empty. Route messages report the actual answering `server_id` (plus `rule_server_id` when a fallback server answered), `rcode`, `rcode_name`, `source` (`upstream`, `cache`, `coalesced`, or `local_block`), `answer_count`, and SOA authority metadata. Fields cannot contain tabs or line breaks. Requests without this suffix
 retain the five-field format. The GUI falls back to the older format when an older CoreHost
 rejects the suffix.
 

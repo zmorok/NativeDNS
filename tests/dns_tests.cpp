@@ -126,6 +126,8 @@ enum class Mode {
     malformed,
     mismatch,
     servfail,
+    nxdomain,
+    refused,
     no_data,
     timeout,
     eof,
@@ -292,13 +294,17 @@ private:
                 else if (mode_ != Mode::eof) {
                     if (mode_ == Mode::slow_good)
                         std::this_thread::sleep_for(std::chrono::milliseconds(120));
-                    auto response = reply(query, nd::parse_question(query).type == 28);
+                    auto response = mode_ == Mode::nxdomain
+                                        ? negative_reply(query)
+                                        : reply(query, nd::parse_question(query).type == 28);
                     if (mode_ == Mode::malformed)
                         response.resize(12); // complete frame, missing question
                     if (mode_ == Mode::mismatch)
                         response[0] ^= 1;
                     if (mode_ == Mode::servfail)
                         response[3] = 0x82;
+                    if (mode_ == Mode::refused)
+                        response[3] = 0x85;
                     if (mode_ == Mode::no_data) {
                         response.resize(query.size());
                         response[7] = 0;
@@ -771,6 +777,98 @@ int main() {
         check(nd::dns_type_name(28) == "AAAA" && nd::dns_type_name(65) == "HTTPS" &&
                   nd::dns_type_name(65280) == "TYPE65280",
               "DNS type log names");
+        check(nd::dns_rcode_name(0) == "NOERROR" && nd::dns_rcode_name(2) == "SERVFAIL" &&
+                  nd::dns_rcode_name(3) == "NXDOMAIN" && nd::dns_rcode_name(5) == "REFUSED" &&
+                  nd::dns_rcode_name(99) == "RCODE99",
+              "DNS RCODE log names");
+        {
+            // NXDOMAIN from upstream and negative cache must not inflate route_errors or log red errors.
+            Peer nx_peer(false, Mode::nxdomain, false, 0, 1500, 2);
+            auto nx_config = nd::default_config();
+            auto nx_server = nx_peer.server();
+            nx_server.id = 1050;
+            nx_server.name = "nx-upstream";
+            nx_config.servers.push_back(nx_server);
+            nx_config.rules.front().server_id = 1050;
+            nd::Logger nx_log;
+            nd::Router nx_router(nx_config, nx_log);
+            const auto nx_query = nd::make_query("does-not-exist.example");
+            const auto first_nx = nx_router.route(nx_query, nx_server);
+            check(first_nx.error_code.empty() &&
+                      nd::parse_response(first_nx.packet, nd::parse_question(nx_query)).rcode == 3,
+                  "NXDOMAIN delivered intact without route error");
+            const auto second_nx = nx_router.route(nx_query, nx_server);
+            check(second_nx.error_code.empty() &&
+                      nd::parse_response(second_nx.packet, nd::parse_question(nx_query)).rcode == 3,
+                  "Cached NXDOMAIN delivered intact without route error");
+            const auto stats = nx_router.statistics();
+            check(stats.route_errors == 0 && stats.upstream_error_rcodes == 0 &&
+                      stats.negative_replies == 2 && nx_peer.requests == 1,
+                  "NXDOMAIN counted as negative_replies, not route_errors, and served from cache");
+            check(nx_log.snapshot(nd::Level::errors_only).empty(),
+                  "NXDOMAIN must not emit errors_only DNS_RCODE logs");
+            const auto normal_logs = nx_log.snapshot(nd::Level::normal);
+            check(normal_logs.size() == 2 &&
+                      normal_logs[0].message.find("rcode=3 rcode_name=NXDOMAIN source=upstream") !=
+                          std::string::npos &&
+                      normal_logs[0].message.find("authority_soa=1 soa_ttl=30") !=
+                          std::string::npos &&
+                      normal_logs[1].message.find("rcode=3 rcode_name=NXDOMAIN source=cache") !=
+                          std::string::npos,
+                  "NXDOMAIN route logs carry source and SOA metadata");
+            // DNS Server Test must still reject NXDOMAIN on test_target.
+            const auto test_nx = nd::test_server(nx_server, "iana.org");
+            nx_peer.verify();
+            check(!test_nx.success && test_nx.error_code == "DNS_RCODE" && test_nx.rcode == 3 &&
+                      test_nx.message.find("NXDOMAIN") != std::string::npos,
+                  "DNS Server Test still treats NXDOMAIN as health check failure");
+        }
+        {
+            // SERVFAIL (2) and REFUSED (5) on the same rule/server must not suppress each other,
+            // and SERVFAIL in a fallback group retries a healthy secondary while logging its server_id.
+            Peer sf_peer(false, Mode::servfail, false, 0, 1500, 2);
+            Peer ref_peer(false, Mode::refused, false, 0, 1500, 1);
+            Peer ok_peer(false, Mode::good, false, 0, 1500, 1);
+            nd::Logger rcode_log;
+            auto single_cfg = nd::default_config();
+            nd::Router single_router(single_cfg, rcode_log);
+            const auto q_sf = nd::make_query("sf.example");
+            const auto q_ref = nd::make_query("ref.example");
+            auto same_orig = sf_peer.server();
+            check(single_router.route(q_sf, same_orig).error_code == "DNS_RCODE",
+                  "SERVFAIL reports DNS_RCODE");
+            // Use the same server endpoint identity by switching to ref_peer on same rule:
+            // Also verify distinct RCODEs on same server key via reload on same rule/server_id:
+            auto fb_cfg = nd::default_config();
+            auto p1 = sf_peer.server();
+            p1.id = 201;
+            p1.name = "primary-sf";
+            p1.fallback_ids = {202};
+            auto p2 = ok_peer.server();
+            p2.id = 202;
+            p2.name = "secondary-ok";
+            fb_cfg.servers = {p1, p2};
+            fb_cfg.rules.front().server_id = 201;
+            nd::Logger fb_log;
+            nd::Router fb_router(fb_cfg, fb_log);
+            const auto fb_res = fb_router.route(nd::make_query("failover-sf.example"), p1);
+            check(fb_res.error_code.empty() && fb_res.server_id == 202,
+                  "SERVFAIL fails over to healthy secondary in fallback group");
+            const auto fb_events = fb_log.snapshot(nd::Level::normal);
+            check(!fb_events.empty() &&
+                      fb_events.back().message.find("server_id=202 rule_server_id=201") !=
+                          std::string::npos,
+                  "Fallback route log reports actual used server_id and primary rule_server_id");
+            check(single_router.route(q_ref, ref_peer.server()).error_code == "DNS_RCODE",
+                  "REFUSED reports DNS_RCODE");
+            const auto single_stats = single_router.statistics();
+            check(single_stats.route_errors == 2 && single_stats.upstream_error_rcodes == 2 &&
+                      rcode_log.snapshot(nd::Level::errors_only).size() == 2,
+                  "SERVFAIL and REFUSED both counted and logged independently");
+            sf_peer.verify();
+            ref_peer.verify();
+            ok_peer.verify();
+        }
         {
             Peer failing(false, Mode::servfail);
             auto failure_config = config;

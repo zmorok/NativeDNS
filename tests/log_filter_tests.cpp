@@ -135,6 +135,14 @@ private slots:
         const auto decoded = decodeLogRecords("1\t1\t1700000000000\tDNS_ROUTE\tgemini.google.com [A] - process : server=DNS, rule=AI, endpoint=192.0.2.1 port=53 interface=automatic generation=1, server_id=1011\n");
         QCOMPARE(decoded.size(), 1);
         QCOMPARE(decoded[0].upstreamId, quint32(1011));
+        const auto nxDecoded = decodeLogRecords(
+            "2\t1\t1700000000001\tDNS_ROUTE\tmissing.example [A] - process : server=DNS, rule=Default, time=0.20 ms, endpoint=192.0.2.1 port=53 interface=automatic generation=1, server_id=1011, rcode=3 rcode_name=NXDOMAIN source=cache answer_count=0 authority_soa=1 soa_ttl=30\tmissing.example\tA\tDefault\tprocess\n");
+        QCOMPARE(nxDecoded.size(), 1);
+        QVERIFY(!nxDecoded[0].error);
+        QCOMPARE(nxDecoded[0].upstreamId, quint32(1011));
+        QString err;
+        const auto errFilter = LogFilter::compile("err=\"*\"", err);
+        QVERIFY(errFilter && !errFilter->matches(nxDecoded[0]));
     }
     void initTestCase() {
         const auto fontPath = qEnvironmentVariable("NATIVEDNS_TEST_FONT");

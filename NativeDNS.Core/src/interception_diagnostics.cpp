@@ -34,6 +34,8 @@ std::string format_interception_diagnostics(const InterceptionDiagnostics& v) {
     ND_COUNTER(receive_errors);
     ND_COUNTER(worker_queue_overflows);
     ND_COUNTER(processing_errors);
+    ND_COUNTER(negative_replies);
+    ND_COUNTER(upstream_error_rcodes);
     ND_COUNTER(last_capture_timestamp);
     ND_COUNTER(active_workers);
     ND_COUNTER(queued_jobs);

@@ -174,6 +174,34 @@ std::string dns_type_name(uint16_t type) {
             return "TYPE" + std::to_string(type);
     }
 }
+std::string dns_rcode_name(uint16_t rcode) {
+    switch (rcode) {
+        case 0:
+            return "NOERROR";
+        case 1:
+            return "FORMERR";
+        case 2:
+            return "SERVFAIL";
+        case 3:
+            return "NXDOMAIN";
+        case 4:
+            return "NOTIMP";
+        case 5:
+            return "REFUSED";
+        case 6:
+            return "YXDOMAIN";
+        case 7:
+            return "YXRRSET";
+        case 8:
+            return "NXRRSET";
+        case 9:
+            return "NOTAUTH";
+        case 10:
+            return "NOTZONE";
+        default:
+            return "RCODE" + std::to_string(rcode);
+    }
+}
 Packet make_query(const std::string& hostname, uint16_t type) {
     auto host = normalize_dns_name(hostname);
     const uint16_t id = platform::secure_random_u16();
@@ -271,6 +299,7 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
     size_t at = q.end;
     const uint32_t answers = word(packet, 6), authority = word(packet, 8),
                    additional = word(packet, 10);
+    answer.answer_count = answers;
     if (answers + authority + additional > 4096)
         throw Error("DNS_MALFORMED", "Too many DNS records");
     constexpr auto no_ttl = std::numeric_limits<uint32_t>::max();
@@ -336,6 +365,10 @@ DnsAnswer parse_response(std::span<const uint8_t> packet, const Question& expect
             answer.addresses.push_back(address.value);
     const bool negative =
         answer.rcode == 3 || (answer.rcode == 0 && !requested_answer && negative_ttl != no_ttl);
+    if (negative_ttl != no_ttl) {
+        answer.has_authority_soa = true;
+        answer.soa_ttl = negative_ttl;
+    }
     const uint32_t ttl = negative ? negative_ttl : positive_ttl;
     if (!transaction_signed && expected.type != 251 && expected.type != 252 &&
         (answer.rcode == 0 || answer.rcode == 3) && ttl != no_ttl && ttl) {
