@@ -56,4 +56,21 @@ Name: "{autodesktop}\NativeDNS"; Filename: "{app}\NativeDNS.exe"; WorkingDir: "{
 Filename: "{app}\NativeDNS.exe"; Description: "Launch NativeDNS"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{app}\NativeDNS.exe"; Parameters: "--cli core shutdown --quiet"; Flags: runhidden skipifdoesntexist; RunOnceId: "ShutdownNativeDNSCore"
+Filename: "{app}\NativeDNS.exe"; Parameters: "--cli network restore --quiet"; Flags: runhidden skipifdoesntexist; RunOnceId: "RestoreNativeDNSNetwork"
 Filename: "{app}\NativeDNS.exe"; Parameters: "--cli autostart disable --quiet"; Flags: runhidden skipifdoesntexist; RunOnceId: "DisableNativeDNSAutostart"
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Launcher: String;
+  ResultCode: Integer;
+begin
+  Result := '';
+  Launcher := ExpandConstant('{app}\NativeDNS.exe');
+  if FileExists(Launcher) then
+  begin
+    Exec(Launcher, '--cli core shutdown --quiet', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Sleep(500);
+  end;
+end;

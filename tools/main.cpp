@@ -120,16 +120,24 @@ int main(int argc, char** native_argv) {
                 payload.push_back('\t');
                 payload += argv[4];
             }
-            const auto endpoint =
-                op == nd::IpcOperation::logs ? nd::core_log_pipe_name : nd::core_pipe_name;
-            auto r = nd::pipe_request(endpoint,
-                                      op,
-                                      payload,
-                                      op == nd::IpcOperation::logs                  ? 2000
-                                      : op == nd::IpcOperation::interception_test   ? 5000
-                                      : op == nd::IpcOperation::interception_status ? 5000
-                                      : op == nd::IpcOperation::reload_config       ? 10000
-                                                                                    : 3000);
+            const auto timeout =
+                op == nd::IpcOperation::logs                  ? 2000u
+                : op == nd::IpcOperation::interception_test   ? 5000u
+                : op == nd::IpcOperation::interception_status ? 5000u
+                : op == nd::IpcOperation::reload_config       ? 10000u
+                                                              : 3000u;
+            nd::IpcResponse r;
+            if (op == nd::IpcOperation::shutdown) {
+                try {
+                    r = nd::pipe_request(nd::core_shutdown_pipe_name, op, payload, timeout);
+                } catch (const nd::Error&) {
+                    r = nd::pipe_request(nd::core_pipe_name, op, payload, timeout);
+                }
+            } else {
+                const auto endpoint =
+                    op == nd::IpcOperation::logs ? nd::core_log_pipe_name : nd::core_pipe_name;
+                r = nd::pipe_request(endpoint, op, payload, timeout);
+            }
             std::cout << r.payload;
             if (r.payload.empty() || r.payload.back() != '\n')
                 std::cout << '\n';

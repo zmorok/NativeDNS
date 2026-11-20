@@ -227,6 +227,25 @@ int main() {
                   actions.config.rules[1].action == nd::Action::bypass &&
                   actions.config.rules.back().is_default,
               "Additional action import");
+        put(path,
+            "<YogaDnsProfile file_format=\"1\">"
+            "<DnsServer id=\"10\" name=\"ipv6-doh\" protocol=\"doh\" ip=\"2001:db8::1\" "
+            "doh_host_name=\"2001:db8::1\" doh_path=\"dns-query\"/>"
+            "<DnsServer id=\"11\" name=\"empty-path-doh\" protocol=\"doh\" ip=\"1.1.1.1\" "
+            "doh_host_name=\"cloudflare-dns.com\" doh_path=\"\"/>"
+            "<Rule name=\"Default\" hostnames=\"*\" action=\"process_server\" action_id=\"10\"/>"
+            "<Rule name=\"specific\" hostnames=\"*.example.com\" action=\"block\"/>"
+            "</YogaDnsProfile>");
+        auto normalized = nd::import_yoga(path);
+        check(normalized.config.servers.size() == 2 &&
+                  normalized.config.servers[0].url == "https://[2001:db8::1]/dns-query" &&
+                  normalized.config.servers[1].url == "https://cloudflare-dns.com/dns-query",
+              "YogaDNS DoH IPv6 literal and doh_path normalization");
+        check(normalized.config.rules.size() == 2 &&
+                  normalized.config.rules[0].name == "specific" &&
+                  normalized.config.rules[1].is_default,
+              "YogaDNS non-last Default rule moved to end");
+        check(!normalized.warnings.empty(), "YogaDNS normalization emits warnings");
         // Delete only individually named test-owned files; no recursive deletion.
         std::filesystem::remove(path);
         std::filesystem::remove(path.string() + ".bak");

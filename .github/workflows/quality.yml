@@ -29,3 +29,14 @@ jobs:
           for target in dns dnscrypt config ipc; do
             ./build/fuzz/tests/fuzz_${target} -runs=5000 -max_len=1048576
           done
+
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Windows x64 Core + tests
+        run: cmake -S . -B build-win -A x64 -DNATIVEDNS_BUILD_GUI=OFF -DNATIVEDNS_STRESS_TESTS=OFF
+      - name: Build Release
+        run: cmake --build build-win --config Release --parallel
+      - name: Run CTest (Release)
+        run: ctest --test-dir build-win -C Release --output-on-failure

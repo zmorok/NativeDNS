@@ -487,9 +487,21 @@ ImportResult import_yoga(const std::filesystem::path& path) {
             server.port = static_cast<uint16_t>(port);
             if (server.protocol == Protocol::doh || server.protocol == Protocol::doh3) {
                 server.hostname = attr(node, "doh_host_name");
-                server.url = "https://" + server.hostname +
-                             (port ? ":" + std::to_string(port) : "") +
-                             attr(node, "doh_path", "/dns-query");
+                std::string url_host = server.hostname;
+                if (url_host.find(':') != std::string::npos && !url_host.starts_with('['))
+                    url_host = "[" + url_host + "]";
+                std::string doh_path = attr(node, "doh_path", "/dns-query");
+                if (doh_path.empty()) {
+                    doh_path = "/dns-query";
+                    result.warnings.push_back("Empty doh_path normalized to /dns-query: " +
+                                              server.name);
+                } else if (doh_path.front() != '/') {
+                    doh_path.insert(doh_path.begin(), '/');
+                    result.warnings.push_back("Relative doh_path normalized with leading '/': " +
+                                              server.name);
+                }
+                server.url = "https://" + url_host +
+                             (port ? ":" + std::to_string(port) : "") + doh_path;
             } else if (server.protocol == Protocol::dot)
                 server.hostname = attr(node, "dot_host_name");
             server.metadata = node.attrs;
@@ -550,15 +562,24 @@ ImportResult import_yoga(const std::filesystem::path& path) {
         } else
             throw Error("YOGA_FIELD", "Unsupported Yoga element: " + node.name);
     }
-    bool has_default = false;
-    for (const auto& rule : result.config.rules)
-        if (rule.is_default)
-            has_default = true;
-    if (!has_default) {
+    size_t default_count = 0;
+    size_t default_index = result.config.rules.size();
+    for (size_t i = 0; i < result.config.rules.size(); ++i) {
+        if (result.config.rules[i].is_default) {
+            ++default_count;
+            default_index = i;
+        }
+    }
+    if (default_count == 0) {
         Rule rule = default_config().rules.front();
         rule.id = rule_id;
         result.config.rules.push_back(rule);
         result.warnings.push_back("Missing Default added as Process/original destination");
+    } else if (default_count == 1 && default_index + 1 < result.config.rules.size()) {
+        std::rotate(result.config.rules.begin() + static_cast<ptrdiff_t>(default_index),
+                    result.config.rules.begin() + static_cast<ptrdiff_t>(default_index + 1),
+                    result.config.rules.end());
+        result.warnings.push_back("Moved Default rule to the end of the rule list");
     }
     validate(result.config);
     return result;

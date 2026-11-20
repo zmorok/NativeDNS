@@ -395,6 +395,7 @@ AutostartStatus autostart_status() {
         return result;
 
     bool core_has_logon_trigger = false;
+    bool core_path_valid = false;
     if (core_enabled == VARIANT_TRUE) {
         ComPtr<ITaskDefinition> core_definition;
         check(core_task->get_Definition(core_definition.put()), "Read Core autostart definition");
@@ -403,9 +404,37 @@ AutostartStatus autostart_status() {
         LONG trigger_count = 0;
         check(core_triggers->get_Count(&trigger_count), "Count Core autostart triggers");
         core_has_logon_trigger = trigger_count == 1;
+        ComPtr<IActionCollection> core_actions;
+        check(core_definition->get_Actions(core_actions.put()), "Read Core autostart actions");
+        LONG core_action_count = 0;
+        check(core_actions->get_Count(&core_action_count), "Count Core autostart actions");
+        if (core_action_count >= 1) {
+            ComPtr<IAction> core_action;
+            if (SUCCEEDED(core_actions->get_Item(1, core_action.put()))) {
+                ComPtr<IExecAction> core_exec;
+                if (SUCCEEDED(core_action->QueryInterface(IID_PPV_ARGS(core_exec.put())))) {
+                    OutBstr core_path;
+                    if (SUCCEEDED(core_exec->get_Path(core_path.put())) && core_path.value &&
+                        *core_path.value) {
+                        const auto registered_core =
+                            std::filesystem::path(core_path.value).lexically_normal();
+                        std::error_code ec;
+                        core_path_valid = std::filesystem::is_regular_file(registered_core, ec);
+                        const auto current_core_bin = platform::core_host_executable();
+                        if (core_path_valid && !current_core_bin.empty() &&
+                            std::filesystem::is_regular_file(current_core_bin, ec)) {
+                            const auto expected_core = core_entrypoint(
+                                std::filesystem::absolute(current_core_bin).lexically_normal());
+                            if (_wcsicmp(registered_core.c_str(), expected_core.c_str()) != 0)
+                                core_path_valid = false;
+                        }
+                    }
+                }
+            }
+        }
     }
-    result.needs_repair =
-        core_enabled != VARIANT_TRUE || enabled != VARIANT_TRUE || !core_has_logon_trigger;
+    result.needs_repair = core_enabled != VARIANT_TRUE || enabled != VARIANT_TRUE ||
+                          !core_has_logon_trigger || !core_path_valid;
     if (enabled != VARIANT_TRUE)
         return result;
 
@@ -424,6 +453,20 @@ AutostartStatus autostart_status() {
         result.executable = path.value;
     if (arguments.value)
         result.arguments = narrow(arguments.value);
+    {
+        std::error_code ec;
+        const auto registered_gui = result.executable.lexically_normal();
+        if (registered_gui.empty() || !std::filesystem::is_regular_file(registered_gui, ec)) {
+            result.needs_repair = true;
+        } else {
+            const auto current_gui = platform::gui_entrypoint();
+            if (!current_gui.empty() && std::filesystem::is_regular_file(current_gui, ec)) {
+                const auto expected_gui = std::filesystem::absolute(current_gui).lexically_normal();
+                if (_wcsicmp(registered_gui.c_str(), expected_gui.c_str()) != 0)
+                    result.needs_repair = true;
+            }
+        }
+    }
     return result;
 }
 
