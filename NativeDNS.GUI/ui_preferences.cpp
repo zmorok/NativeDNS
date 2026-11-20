@@ -74,6 +74,16 @@ struct Translation {
 constexpr std::array translations{
     Translation{"Interception Diagnostics", "Диагностика перехвата"},
     Translation{"Applying DNS configuration...", "Применение конфигурации DNS..."},
+    Translation{"Restore the last valid backup? Choose No to reset to defaults. The "
+                "unreadable file will be archived without overwriting the backup.",
+                "Восстановить последнюю рабочую резервную копию? Выберите «Нет», чтобы сбросить "
+                "настройки по умолчанию. Повреждённый файл будет сохранён отдельно без перезаписи "
+                "резервной копии."},
+    Translation{"The unreadable configuration will be archived and reset to defaults.",
+                "Повреждённый файл конфигурации будет сохранён отдельно, а настройки сброшены по "
+                "умолчанию."},
+    Translation{"Archived unreadable configuration to: ",
+                "Повреждённая конфигурация перенесена в: "},
     Translation{"Running means the mechanism is started. Verified requires a successful active "
                 "UDP/IPv4 test.",
                 "Работает – механизм запущен. Для подтверждения перехвата требуется успешный "

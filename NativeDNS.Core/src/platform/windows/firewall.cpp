@@ -60,6 +60,23 @@ void check(HRESULT result, const char* operation) {
                         " failed: " + std::to_string(static_cast<uint32_t>(result)));
 }
 
+struct ComGuard {
+    bool initialized = false;
+    ComGuard() {
+        const HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (SUCCEEDED(result))
+            initialized = true;
+        else if (result != RPC_E_CHANGED_MODE)
+            check(result, "Initialize COM for firewall");
+    }
+    ~ComGuard() {
+        if (initialized)
+            CoUninitialize();
+    }
+    ComGuard(const ComGuard&) = delete;
+    ComGuard& operator=(const ComGuard&) = delete;
+};
+
 ComPtr<INetFwRules> rules() {
     ComPtr<INetFwPolicy2> policy;
     check(CoCreateInstance(
@@ -100,6 +117,7 @@ FirewallPortRule::~FirewallPortRule() {
 void FirewallPortRule::enable(uint16_t local_port) {
     if (!local_port)
         throw Error("FIREWALL", "Cannot allow TCP port zero");
+    ComGuard com;
     disable();
     auto collection = rules();
     Bstr name(rule_name);
@@ -131,6 +149,7 @@ void FirewallPortRule::enable(uint16_t local_port) {
 
 void FirewallPortRule::disable() noexcept {
     try {
+        ComGuard com;
         auto collection = rules();
         Bstr name(rule_name);
         (void)collection->Remove(name.value);

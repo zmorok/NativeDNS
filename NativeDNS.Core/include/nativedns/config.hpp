@@ -66,6 +66,10 @@ ImportResult import_yoga(const std::filesystem::path& path);
 Config load_config(const std::filesystem::path& path);
 Config parse_config(std::string text);
 void save_config(const Config& config, const std::filesystem::path& path);
+// Archives an unreadable existing file alongside path without overwriting path.bak,
+// then publishes config atomically. Returns the archived corrupt path if one was moved.
+std::filesystem::path save_config_replacing_corrupt(const Config& config,
+                                                    const std::filesystem::path& path);
 std::string serialize_config(const Config& config);
 std::string protocol_name(Protocol protocol);
 std::string action_name(Action action);

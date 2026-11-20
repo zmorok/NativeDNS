@@ -6,6 +6,7 @@
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/network_preflight.hpp>
+#include <nativedns/network_preparation.hpp>
 #include <algorithm>
 #include <filesystem>
 #include <iostream>
@@ -37,7 +38,8 @@ void usage() {
            "  nativednsctl probe udp|tcp IP [HOST [PORT]]\n"
            "  nativednsctl resolve CONFIG HOST ORIGINAL_IP [ORIGINAL_PORT] [--type A|AAAA|HTTPS]\n"
            "  nativednsctl serve CONFIG ORIGINAL_IP [LOCAL_PORT]\n"
-           "  nativednsctl autostart status|enable COREHOST CONFIG|disable\n";
+           "  nativednsctl autostart status|enable COREHOST CONFIG|disable\n"
+           "  nativednsctl network restore\n";
 }
 } // namespace
 int main(int argc, char** native_argv) {
@@ -156,6 +158,29 @@ int main(int argc, char** native_argv) {
                 return 0;
             }
             throw nd::Error("COMMAND", "Invalid autostart command");
+        }
+        if (argc == 3 && std::string(argv[1]) == "network" && std::string(argv[2]) == "restore") {
+            auto preparation = nd::platform::make_network_preparation();
+            if (!preparation) {
+                std::cout << "RESTORE_UNAVAILABLE\n";
+                return 0;
+            }
+            const auto result = preparation->restore();
+            bool had_error = false;
+            for (const auto& finding : result.findings) {
+                if (finding.level == nd::Level::errors_only)
+                    had_error = true;
+                std::cout << finding.code << ' ' << finding.message << '\n';
+            }
+            if (result.changed) {
+                try {
+                    nd::platform::flush_dns_cache();
+                } catch (const std::exception& error) {
+                    std::cerr << "DNS_CACHE_FLUSH_FAILED: " << error.what() << '\n';
+                }
+            }
+            std::cout << (result.changed ? "RESTORED\n" : "UNCHANGED\n");
+            return had_error ? 1 : 0;
         }
         if (argc >= 5 && argc <= 8 && std::string(argv[1]) == "resolve") {
             nd::Logger logger;

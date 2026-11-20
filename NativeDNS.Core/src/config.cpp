@@ -741,4 +741,37 @@ void save_config(const Config& config, const std::filesystem::path& path) {
         throw;
     }
 }
+std::filesystem::path save_config_replacing_corrupt(const Config& config,
+                                                    const std::filesystem::path& path) {
+    (void)serialize_config(config);
+    std::filesystem::path archived;
+    if (std::filesystem::exists(path)) {
+        bool valid = true;
+        try {
+            (void)load_config(path);
+        } catch (...) {
+            valid = false;
+        }
+        if (valid) {
+            save_config(config, path);
+            return {};
+        }
+        archived = path;
+        archived += ".corrupt." + std::to_string(platform::secure_random_u32());
+        std::error_code ec;
+        std::filesystem::rename(path, archived, ec);
+        if (ec)
+            throw Error("CONFIG_IO", "Cannot archive corrupt configuration: " + ec.message());
+    }
+    try {
+        save_config(config, path);
+    } catch (...) {
+        if (!archived.empty() && !std::filesystem::exists(path)) {
+            std::error_code ec;
+            std::filesystem::rename(archived, path, ec);
+        }
+        throw;
+    }
+    return archived;
+}
 } // namespace nd

@@ -153,6 +153,8 @@ std::map<std::string, std::string> state(const Snapshot& snapshot, const std::st
         for (ULONG i = 0; i < count; ++i) {
             const auto& item = properties[i];
             if (item.ServerIndex >= list.size()) throw Error("DNS_PREPARATION_UNSUPPORTED", "DNS property index is outside the server list");
+            if (item.Type != DnsServerDohProperty && item.Type != DnsServerDotProperty)
+                throw Error("DNS_PREPARATION_UNSUPPORTED", "Unsupported DNS server property type");
             const auto kind = item.Type == DnsServerDohProperty ? Kind::doh : Kind::dot;
             const auto name = key({id, list[item.ServerIndex], profile, kind});
             if (!assigned.insert(name).second) throw Error("DNS_PREPARATION_UNSUPPORTED", "Duplicate OS DNS encryption property");

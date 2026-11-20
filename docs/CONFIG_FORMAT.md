@@ -84,9 +84,16 @@ Original encryption flags, templates, hostnames and ports are persisted before
 each change in `%PROGRAMDATA%\NativeDNS.NetworkRecovery`, writable only by
 Administrators/SYSTEM. Stop/Exit restores them in reverse order. The next
 transparent start recovers a journal left after an abnormal termination before
-preparing the current network. Setting `windowsPrepareSystemDns=0` also triggers
+preparing the current network, and `nativednsctl network restore` (run elevated)
+can also restore a pending recovery journal independently without starting
+CoreHost. Setting `windowsPrepareSystemDns=0` also triggers
 restoration on reload. Actual changes flush the Windows DNS cache independently
 of `clearDnsCache`; application/browser caches require separate handling.
+
+If `NativeDNS.xml` becomes unreadable, `save_config()` preserves `NativeDNS.xml.bak`
+and refuses to overwrite the backup silently. On startup or configuration apply,
+the GUI offers recovery from `NativeDNS.xml.bak` (or reset to defaults), archiving
+the unreadable file to `NativeDNS.xml.corrupt.<id>` without overwriting `.bak`.
 
 Recovery preserves later external edits. A changed encryption property is
 reported as `DNS_PREPARATION_CONFLICT` and its original is retained in the

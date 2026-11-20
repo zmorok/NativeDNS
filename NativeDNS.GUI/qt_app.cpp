@@ -1922,8 +1922,36 @@ void NativeDnsWindow::loadConfiguration() {
             nd::save_config(config_, path);
         }
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, uiText("Configuration"), e.what());
-        config_ = nd::default_config();
+        auto backup = path;
+        backup += ".bak";
+        std::optional<nd::Config> backupConfig;
+        if (std::filesystem::exists(backup)) {
+            try {
+                backupConfig = nd::load_config(backup);
+            } catch (...) {
+            }
+        }
+        if (backupConfig) {
+            const auto answer = QMessageBox::question(
+                this,
+                uiText("Configuration"),
+                q(e.what()) + "\n\n" +
+                    uiText("Restore the last valid backup? Choose No to reset to defaults. The "
+                           "unreadable file will be archived without overwriting the backup."));
+            config_ = answer == QMessageBox::Yes ? *backupConfig : nd::default_config();
+        } else {
+            QMessageBox::critical(
+                this,
+                uiText("Configuration"),
+                q(e.what()) + "\n\n" +
+                    uiText("The unreadable configuration will be archived and reset to defaults."));
+            config_ = nd::default_config();
+        }
+        try {
+            (void)nd::save_config_replacing_corrupt(config_, path);
+        } catch (const std::exception& recoverError) {
+            QMessageBox::critical(this, uiText("Configuration"), recoverError.what());
+        }
     }
 }
 
@@ -1937,16 +1965,28 @@ bool NativeDnsWindow::saveConfiguration() {
     }
 }
 bool NativeDnsWindow::applyConfiguration() {
+    const auto path = configPath();
     std::optional<nd::Config> previous;
+    bool corruptOnDisk = false;
     try {
-        if (std::filesystem::exists(configPath()))
-            previous = nd::load_config(configPath());
-    } catch (const std::exception& error) {
-        QMessageBox::critical(this, uiText("Configuration"), error.what());
+        if (std::filesystem::exists(path))
+            previous = nd::load_config(path);
+    } catch (...) {
+        corruptOnDisk = true;
+    }
+    if (corruptOnDisk) {
+        try {
+            const auto archived = nd::save_config_replacing_corrupt(config_, path);
+            if (!archived.empty())
+                appendLocalLog(uiText("Archived unreadable configuration to: ") + qPath(archived),
+                               true);
+        } catch (const std::exception& error) {
+            QMessageBox::critical(this, uiText("Configuration"), error.what());
+            return false;
+        }
+    } else if (!saveConfiguration()) {
         return false;
     }
-    if (!saveConfiguration())
-        return false;
     if (restartCore()) {
         syncConfigurationActions();
         return true;

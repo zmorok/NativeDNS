@@ -200,6 +200,14 @@ int main() {
         fails([&] { nd::save_config(config, path); });
         check(nd::load_config(path.string() + ".bak") == config,
               "Corrupt file does not destroy backup");
+        const auto archived = nd::save_config_replacing_corrupt(changed, path);
+        check(!archived.empty() && std::filesystem::exists(archived),
+              "Corrupt recovery archives unreadable config");
+        check(nd::load_config(path) == changed,
+              "Corrupt recovery publishes replacement config");
+        check(nd::load_config(path.string() + ".bak") == config,
+              "Corrupt recovery preserves previous .bak untouched");
+        std::filesystem::remove(archived);
         put(path,
             "<!DOCTYPE x [<!ENTITY a SYSTEM "
             "'file:///C:/Windows/win.ini'>]><NativeDNS>&a;</NativeDNS>");

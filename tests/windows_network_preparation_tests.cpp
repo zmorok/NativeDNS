@@ -30,6 +30,7 @@ struct Entry {
     uint64_t flags = 0;
     std::wstring text;
     USHORT port = 0;
+    DNS_SERVER_PROPERTY_TYPE override_type = DnsServerInvalidProperty;
 };
 struct Export {
     std::wstring names, profiles, domain = L"home.example", search = L"home.example,office.example";
@@ -44,7 +45,9 @@ struct Export {
             auto* text = texts.back().empty() ? nullptr : texts.back().data();
             doh[i] = {text, entry.flags}; dot[i] = {text, entry.flags, entry.port};
             DNS_SERVER_PROPERTY property{}; property.Version = DNS_SERVER_PROPERTY_VERSION1; property.ServerIndex = entry.index;
-            property.Type = entry.dot ? DnsServerDotProperty : DnsServerDohProperty;
+            property.Type = entry.override_type != DnsServerInvalidProperty
+                                ? entry.override_type
+                                : (entry.dot ? DnsServerDotProperty : DnsServerDohProperty);
             if (entry.dot) property.Property.DotSettings = &dot[i]; else property.Property.DohSettings = &doh[i];
             (entry.profile ? profile : adapter).push_back(property);
         }
@@ -211,6 +214,18 @@ int main(int argc, char** argv) {
             const auto result = preparation.apply(config, snapshot);
             check(has(result, "DNS_PREPARATION_UNAVAILABLE") && result.findings.front().level == nd::Level::normal &&
                       !result.changed && !api->sets && !journal, "Unsupported Windows API was treated as a failed DNS operation");
+        }
+        {
+            auto api = std::make_shared<FakeApi>();
+            api->entries.push_back(
+                {false, false, 0, 1, L"future", 0, static_cast<DNS_SERVER_PROPERTY_TYPE>(99)});
+            std::optional<std::string> journal;
+            nd::NetworkPreparation preparation(backend(api, journal));
+            const auto result = preparation.apply(config, snapshot);
+            check(has(result, "DNS_PREPARATION_UNAVAILABLE") &&
+                      result.findings.front().level == nd::Level::errors_only &&
+                      !result.changed && !api->sets && !journal,
+                  "Unknown DNS_SERVER_PROPERTY_TYPE must fail explicitly instead of assuming DoT");
         }
         {
             auto api = std::make_shared<FakeApi>(); const auto original = api->fingerprint(); std::optional<std::string> journal;
