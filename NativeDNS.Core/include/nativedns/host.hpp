@@ -41,11 +41,12 @@ private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     void log_configuration();
     void configure_logging();
-    void inspect_network();
-    bool prepare_network();
+    void inspect_network(const Config& config);
+    bool prepare_network(const Config& config);
     void restore_network() noexcept;
     mutable std::mutex mutex_;
     std::mutex reload_mutex_;
+    std::mutex network_prep_mutex_;
     std::mutex ipc_lifecycle_mutex_;
     std::condition_variable shutdown_cv_;
     std::shared_ptr<std::atomic_bool> shutdown_requested_ =
@@ -59,8 +60,9 @@ private:
     uint16_t local_port_;
     std::string pipe_name_;
     std::filesystem::path config_path_;
-    bool diagnostic_logging_ = false;
+    std::atomic_bool diagnostic_logging_ = false;
     const bool startup_diagnostic_logging_;
+    std::atomic<Level> screen_level_ = Level::normal;
     std::string log_pipe_name_;
     Logger logger_;
     std::filesystem::path file_log_path_;

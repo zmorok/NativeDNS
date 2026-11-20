@@ -454,6 +454,22 @@ int main() {
               "host log stream snapshot");
         check(nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t4").status == 1,
               "reject invalid requested log level");
+        {
+            // Structured log requests synchronize CoreHost's in-memory screen level when
+            // diagnostic profile is off, without requiring a full config reload.
+            const auto prev_file = host.logger().file_status();
+            host.logger().configure_file(false, nd::Level::normal, {});
+            check(nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t3\tstructured").status == 0,
+                  "structured debug log request succeeds");
+            check(host.logger().enabled(nd::Level::debug),
+                  "structured logs level=3 enables in-memory debug capture");
+            check(nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t1\tstructured").status == 0,
+                  "structured normal log request succeeds");
+            check(!host.logger().enabled(nd::Level::debug),
+                  "structured logs level=1 lowers in-memory display capture");
+            if (prev_file.enabled)
+                host.logger().configure_file(true, prev_file.level, prev_file.path);
+        }
         const auto structured =
             nd::pipe_request(host_log_name, nd::IpcOperation::logs, "0\t0\t3\tstructured");
         check(structured.status == 0 &&

@@ -30,8 +30,9 @@ CoreHost::CoreHost(Config config,
       logger_(4096) {
     saved_config_id_ = configuration_fingerprint(config_);
     saved_logging_ = config_.logging;
-    if (diagnostic_logging_) enable_diagnostic_logging(config_);
+    if (diagnostic_logging_.load()) enable_diagnostic_logging(config_);
     validate(config_);
+    screen_level_.store(config_.logging.screen, std::memory_order_relaxed);
     logger_.set_display_level(config_.logging.screen);
     for (auto& server : config_.servers)
         server.use_system_bootstrap = mode == InterceptionMode::transparent;
@@ -76,6 +77,7 @@ CoreHost::~CoreHost() {
     stop();
 }
 void CoreHost::configure_logging() {
+    screen_level_.store(config_.logging.screen, std::memory_order_relaxed);
     logger_.set_display_level(config_.logging.screen);
     const bool enabled = config_.logging.file_enabled;
     try {
@@ -124,23 +126,24 @@ void CoreHost::log_configuration() {
                           "\" patterns=" + patterns);
     }
 }
-void CoreHost::inspect_network() {
+void CoreHost::inspect_network(const Config& config) {
     if (mode_ != InterceptionMode::transparent)
         return;
     try {
         const auto network = NetworkMonitor::shared().snapshot();
-        for (const auto& finding : inspect_network_environment(config_, *network))
+        for (const auto& finding : inspect_network_environment(config, *network))
             logger_.write(finding.level, finding.code, finding.message);
     } catch (const std::exception& error) {
         logger_.write(Level::errors_only, "DNS_PREFLIGHT_FAILED", error.what());
     }
 }
-bool CoreHost::prepare_network() {
+bool CoreHost::prepare_network(const Config& config) {
     if (mode_ != InterceptionMode::transparent) return false;
+    std::lock_guard prep_lock(network_prep_mutex_);
     try {
         if (!network_preparation_) network_preparation_ = platform::make_network_preparation();
         if (network_preparation_) {
-            const auto result = network_preparation_->apply(config_, *NetworkMonitor::shared().snapshot());
+            const auto result = network_preparation_->apply(config, *NetworkMonitor::shared().snapshot());
             for (const auto& finding : result.findings) logger_.write(finding.level, finding.code, finding.message);
             return result.changed;
         }
@@ -153,6 +156,7 @@ bool CoreHost::prepare_network() {
     return false;
 }
 void CoreHost::restore_network() noexcept {
+    std::lock_guard prep_lock(network_prep_mutex_);
     try {
         if (network_preparation_) {
             const auto result = network_preparation_->restore();
@@ -171,13 +175,15 @@ void CoreHost::start() {
     *shutdown_requested_ = false;
     restart_requested_ = false;
     stopped_ = false;
+    const Config start_config = config_;
     const char* stage = "interception";
     try {
-        inspect_network();
         logger_.write(Level::verbose, "INTERCEPTION_STARTING", "Starting DNS interception backend");
         interception_->start();
-        const bool prepared = prepare_network();
-        if (prepared || runtime_options(config_).clear_dns_cache) {
+        lock.unlock();
+        inspect_network(start_config);
+        const bool prepared = prepare_network(start_config);
+        if (prepared || runtime_options(start_config).clear_dns_cache) {
             try {
                 platform::flush_dns_cache();
                 logger_.write(Level::normal,
@@ -188,7 +194,6 @@ void CoreHost::start() {
             }
         }
         stage = "command IPC";
-        lock.unlock();
         std::lock_guard ipc_lock(ipc_lifecycle_mutex_);
         detail::fault_point("core.command_ipc");
         logger_.write(Level::verbose,
@@ -256,8 +261,8 @@ void CoreHost::stop() {
         if (shutdown_ipc_)
             shutdown_ipc_->stop();
     }
-    std::lock_guard lock(mutex_);
     restore_network();
+    std::lock_guard lock(mutex_);
     if (interception_)
         interception_->stop();
     *shutdown_requested_ = true;
@@ -323,11 +328,15 @@ void CoreHost::wait_for_shutdown() {
                 logger_.write(Level::verbose, "NETWORK_INTERFACE", std::move(details));
             }
             previous_network = network;
-            inspect_network();
-            if (interception_->status().state == State::running && prepare_network()) {
+            const Config current_config = config_;
+            lock.unlock();
+            inspect_network(current_config);
+            if (!shutdown_requested() && interception_->status().state == State::running &&
+                prepare_network(current_config)) {
                 try { platform::flush_dns_cache(); }
                 catch (const Error& error) { logger_.write(Level::errors_only, error.code, error.what()); }
             }
+            lock.lock();
         }
         const auto value = interception_->status();
         if (value.state == State::error)
@@ -387,7 +396,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
                 << "\nruntime_profile=" << (diagnostic_logging_ ? "Debug" : "Normal")
                 << "\nstartup_runtime_profile="
                 << (startup_diagnostic_logging_ ? "Debug" : "Normal")
-                << "\neffective_logging_screen=" << static_cast<int>(config_.logging.screen)
+                << "\neffective_logging_screen="
+                << static_cast<int>(screen_level_.load(std::memory_order_relaxed))
                 << '\n';
         }
         const auto backend = interception_->status();
@@ -464,6 +474,7 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         }
         for (auto& server : next.servers)
             server.use_system_bootstrap = mode_ == InterceptionMode::transparent;
+        Config applied_config;
         {
             std::lock_guard lock(mutex_);
             interception_->reload(next);
@@ -471,22 +482,23 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             saved_config_id_ = saved_id;
             saved_logging_ = saved_logging;
             config_ = std::move(next);
-            logger_.set_display_level(config_.logging.screen);
-            const bool prepared = interception_->status().state == State::running && prepare_network();
-            if (prepared || runtime_options(config_).clear_dns_cache) {
-                try {
-                    platform::flush_dns_cache();
-                    logger_.write(Level::normal,
-                                  "DNS_CACHE_CLEARED",
-                                  "System DNS cache cleared after reload");
-                } catch (const Error& error) {
-                    logger_.write(Level::errors_only, error.code, error.what());
-                }
-            }
             configure_logging();
             log_configuration();
-            inspect_network();
+            applied_config = config_;
         }
+        const bool prepared =
+            interception_->status().state == State::running && prepare_network(applied_config);
+        if (prepared || runtime_options(applied_config).clear_dns_cache) {
+            try {
+                platform::flush_dns_cache();
+                logger_.write(Level::normal,
+                              "DNS_CACHE_CLEARED",
+                              "System DNS cache cleared after reload");
+            } catch (const Error& error) {
+                logger_.write(Level::errors_only, error.code, error.what());
+            }
+        }
+        inspect_network(applied_config);
         logger_.write(Level::normal,
                       "CONFIG_RELOADED",
                       "Configuration applied without stopping DNS interception");
@@ -521,11 +533,15 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, std::move(text)};
     }
     if (operation == IpcOperation::start) {
-        std::lock_guard lock(mutex_);
-        inspect_network();
-        interception_->start();
-        const bool prepared = prepare_network();
-        if (prepared || runtime_options(config_).clear_dns_cache) {
+        Config start_config;
+        {
+            std::lock_guard lock(mutex_);
+            interception_->start();
+            start_config = config_;
+        }
+        inspect_network(start_config);
+        const bool prepared = prepare_network(start_config);
+        if (prepared || runtime_options(start_config).clear_dns_cache) {
             try {
                 platform::flush_dns_cache();
             } catch (const Error& error) {
@@ -535,8 +551,8 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         return {0, "RUNNING port=" + std::to_string(interception_->status().port)};
     }
     if (operation == IpcOperation::stop) {
-        std::lock_guard lock(mutex_);
         restore_network();
+        std::lock_guard lock(mutex_);
         interception_->stop();
         return {0, "STOPPED"};
     }
@@ -552,11 +568,9 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
         const bool structured = log_payload.ends_with("\tstructured");
         if (structured)
             log_payload.resize(log_payload.size() - 11);
-        uint64_t after = 0, wait_ms = 0, requested_level = 0;
-        {
-            std::lock_guard lock(mutex_);
-            requested_level = static_cast<uint64_t>(config_.logging.screen);
-        }
+        uint64_t after = 0, wait_ms = 0;
+        uint64_t requested_level =
+            static_cast<uint64_t>(screen_level_.load(std::memory_order_relaxed));
         const auto separator = log_payload.find('\t');
         const auto level_separator = separator == std::string::npos
                                          ? std::string::npos
@@ -585,6 +599,11 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             if (level.empty() || error != std::errc{} || end != level.data() + level.size() ||
                 requested_level > 3)
                 throw Error("IPC_PROTOCOL", "logs level must be 0..3");
+            if (structured && !diagnostic_logging_.load(std::memory_order_relaxed)) {
+                const auto synced = static_cast<Level>(requested_level);
+                screen_level_.store(synced, std::memory_order_relaxed);
+                logger_.set_display_level(synced);
+            }
         }
         std::ostringstream output;
         const auto level = static_cast<Level>(requested_level);

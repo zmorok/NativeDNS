@@ -179,12 +179,32 @@ struct TcpDnsProxy::Impl {
                 logger.write(Level::debug,
                              "TCP_PROXY_ACCEPT",
                              "destination=" + original.ip + ":" + std::to_string(intercepted_port));
+            bool first_frame = true;
             while (running) {
-                const auto read_deadline =
-                    std::chrono::steady_clock::now() + std::chrono::milliseconds(frame_timeout_ms);
                 uint8_t prefix[2]{};
-                if (!receive_exact(client, prefix, sizeof(prefix), true, read_deadline))
-                    break;
+                std::chrono::steady_clock::time_point read_deadline;
+                if (first_frame) {
+                    read_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::milliseconds(frame_timeout_ms);
+                    if (!receive_exact(client, prefix, sizeof(prefix), true, read_deadline))
+                        break;
+                    first_frame = false;
+                } else {
+                    const uint32_t idle_ms = std::min<uint32_t>(frame_timeout_ms, 1000u);
+                    const auto idle_deadline =
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(idle_ms);
+                    try {
+                        if (!receive_exact(client, prefix, 1, true, idle_deadline))
+                            break;
+                    } catch (const Error& error) {
+                        if (error.code == "TIMEOUT")
+                            break;
+                        throw;
+                    }
+                    read_deadline = std::chrono::steady_clock::now() +
+                                    std::chrono::milliseconds(frame_timeout_ms);
+                    receive_exact(client, prefix + 1, 1, false, read_deadline);
+                }
                 const size_t length = static_cast<size_t>((prefix[0] << 8) | prefix[1]);
                 if (length < 12)
                     throw Error("DNS_MALFORMED", "Client TCP DNS frame too short");
@@ -201,6 +221,13 @@ struct TcpDnsProxy::Impl {
                     std::chrono::steady_clock::now() + std::chrono::milliseconds(frame_timeout_ms);
                 send_exact(client, response_prefix, sizeof(response_prefix), write_deadline);
                 send_exact(client, response.data(), response.size(), write_deadline);
+                size_t active_clients = 0;
+                {
+                    std::lock_guard lock(clients_mutex);
+                    active_clients = clients.size();
+                }
+                if (active_clients >= 16)
+                    break;
             }
         } catch (const Error& error) {
             if (running)

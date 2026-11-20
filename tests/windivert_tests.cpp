@@ -360,6 +360,13 @@ void tcp_proxy_roundtrip() {
         check(nd::parse_response(v4_resp, nd::parse_question(query)).addresses ==
                   std::vector<std::string>{"0.0.0.0"},
               "IPv4-only proxy serves DNS over IPv4");
+        // Verify keep-alive idle timeout closes cleanly without logging errors_only.
+        char idle_eof = 0;
+        check(recv(v4_client, &idle_eof, 1, 0) == 0,
+              "Idle keep-alive TCP proxy connection closes cleanly on timeout");
+        const auto err_events = v4_log.snapshot(nd::Level::errors_only);
+        check(err_events.empty(),
+              "Idle keep-alive close must not emit errors_only log events");
         closesocket(v4_client);
         v4_proxy.stop();
     }
