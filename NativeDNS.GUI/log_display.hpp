@@ -26,6 +26,7 @@ public:
     }
     void appendRecord(const LogRecord& record);
     void removeFirstRecord();
+    void removeFirstRecords(size_t count);
     void clear();
     void retranslateUi();
     QScrollBar* verticalScrollBar() const;

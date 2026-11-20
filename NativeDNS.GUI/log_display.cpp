@@ -429,29 +429,47 @@ void LogDisplay::renderRecord(const LogRecord& record) {
     }
 }
 void LogDisplay::removeFirstRecord() {
-    if (records_.empty())
+    removeFirstRecords(1);
+}
+void LogDisplay::removeFirstRecords(size_t count) {
+    if (count == 0 || records_.empty())
         return;
+    if (count >= records_.size()) {
+        clear();
+        return;
+    }
     rendering_ = true;
-    const bool evictInspected = inspected_ && inspected_->sequence == records_.front().sequence &&
-                                inspected_->timestamp == records_.front().timestamp &&
-                                inspected_->message == records_.front().message;
-    if (mode_ == LogView::table)
-        table_->removeRow(0);
-    else if (mode_ == LogView::details)
-        delete tree_->takeTopLevelItem(0);
-    else {
+    bool evictInspected = false;
+    if (inspected_) {
+        for (size_t i = 0; i < count; ++i) {
+            if (inspected_->sequence == records_[i].sequence &&
+                inspected_->timestamp == records_[i].timestamp &&
+                inspected_->message == records_[i].message) {
+                evictInspected = true;
+                break;
+            }
+        }
+    }
+    if (mode_ == LogView::table) {
+        table_->model()->removeRows(0, static_cast<int>(count));
+    } else if (mode_ == LogView::details) {
+        for (size_t i = 0; i < count; ++i)
+            delete tree_->takeTopLevelItem(0);
+    } else {
         // Each line of a displayed record carries its source; a trailing empty block does not.
-        const auto p = present(records_.front());
-        int lines = 1;
-        if (records_.front().error && p.failure != p.summary)
-            ++lines;
+        int totalLines = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const auto p = present(records_[i]);
+            ++totalLines;
+            if (records_[i].error && p.failure != p.summary)
+                ++totalLines;
+        }
         QTextCursor cursor(text_->document());
         cursor.movePosition(QTextCursor::Start);
-        for (int i = 0; i < lines; ++i)
-            cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor);
+        cursor.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor, totalLines);
         cursor.removeSelectedText();
     }
-    records_.pop_front();
+    records_.erase(records_.begin(), records_.begin() + static_cast<ptrdiff_t>(count));
     if (mode_ == LogView::compact && !records_.empty())
         text_->document()->firstBlock().setUserData(new TextRecord(records_.front()));
     if (evictInspected) {

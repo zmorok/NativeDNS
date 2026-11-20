@@ -26,6 +26,7 @@ public:
 
     void ensureCoreStarted();
     void showAndActivate();
+    bool hasSystemTray() const;
     std::shared_ptr<const std::atomic_bool> exitConfirmedSignal() const {
         return exitConfirmed_;
     }

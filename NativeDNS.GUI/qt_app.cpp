@@ -25,6 +25,7 @@
 #include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDateTime>
+#include <QEventLoop>
 #include <QFileDialog>
 #include <QFont>
 #include <QFormLayout>
@@ -115,40 +116,60 @@ QMessageBox* coreControlFailureDialog(QWidget* parent, const QString& details) {
     return dialog;
 }
 
-bool networkAvailable() {
-    if (const auto* information = QNetworkInformation::instance()) {
-        if (information->reachability() == QNetworkInformation::Reachability::Online)
-            return true;
-        if (information->reachability() != QNetworkInformation::Reachability::Unknown)
-            return false;
-    }
-    for (const auto& interface : QNetworkInterface::allInterfaces()) {
-        if (!(interface.flags() & QNetworkInterface::IsUp) ||
-            !(interface.flags() & QNetworkInterface::IsRunning) ||
-            (interface.flags() & QNetworkInterface::IsLoopBack))
-            continue;
-        for (const auto& address : interface.addressEntries())
-            if (!address.ip().isNull() && !address.ip().isLoopback())
-                return true;
-    }
-    return false;
+struct NetworkProbeSnapshot {
+    bool available = false;
+    QString signature;
+};
+
+std::optional<QNetworkInformation::Reachability> currentReachability() {
+    if (const auto* information = QNetworkInformation::instance())
+        return information->reachability();
+    return std::nullopt;
 }
 
-QString networkSignature() {
+NetworkProbeSnapshot probeNetwork(std::optional<QNetworkInformation::Reachability> reachability) {
+    NetworkProbeSnapshot result;
+    bool hasReachabilityDecision = false;
+    if (reachability.has_value()) {
+        if (*reachability == QNetworkInformation::Reachability::Online) {
+            result.available = true;
+            hasReachabilityDecision = true;
+        } else if (*reachability != QNetworkInformation::Reachability::Unknown) {
+            result.available = false;
+            hasReachabilityDecision = true;
+        }
+    }
     QStringList parts;
-    if (const auto* information = QNetworkInformation::instance())
-        parts << QString::number(static_cast<int>(information->reachability()));
+    if (reachability.has_value())
+        parts << QString::number(static_cast<int>(*reachability));
     for (const auto& interface : QNetworkInterface::allInterfaces()) {
+        const auto flags = interface.flags();
+        const bool activeNonLoopback = (flags & QNetworkInterface::IsUp) &&
+                                       (flags & QNetworkInterface::IsRunning) &&
+                                       !(flags & QNetworkInterface::IsLoopBack);
         QStringList addresses;
-        for (const auto& entry : interface.addressEntries())
-            addresses << entry.ip().toString();
+        for (const auto& entry : interface.addressEntries()) {
+            const auto ip = entry.ip();
+            addresses << ip.toString();
+            if (!hasReachabilityDecision && activeNonLoopback && !ip.isNull() && !ip.isLoopback())
+                result.available = true;
+        }
         addresses.sort();
-        parts << QString::number(interface.index()) + ':' +
-                     QString::number(static_cast<int>(interface.flags())) + ':' +
-                     addresses.join(',');
+        parts << QString::number(interface.index()) + ':' + QString::number(static_cast<int>(flags)) +
+                     ':' + addresses.join(',');
     }
     parts.sort();
-    return parts.join(';');
+    result.signature = parts.join(';');
+    return result;
+}
+
+QThreadPool* serverTestPool(uint32_t concurrency) {
+    static QPointer<QThreadPool> pool;
+    if (!pool) {
+        pool = new QThreadPool(qApp);
+    }
+    pool->setMaxThreadCount(std::clamp<int>(static_cast<int>(concurrency), 1, 16));
+    return pool;
 }
 
 QString q(const std::string& value) {
@@ -531,6 +552,11 @@ bool editServer(QWidget* parent, nd::Server& server) {
 
 class ServerDialog final : public QDialog {
 public:
+    ~ServerDialog() override {
+        *cancelled_ = true;
+        if (auto* pool = serverTestPool(working_.test_concurrency))
+            pool->clear();
+    }
     ServerDialog(QWidget* parent, nd::Config& config, std::function<bool()> changed)
         : QDialog(parent), target_(config), original_(config), working_(config),
           changed_(std::move(changed)) {
@@ -732,25 +758,29 @@ private:
     static nd::TestResult testServer(nd::Server server) {
         if ((server.protocol == nd::Protocol::doh || server.protocol == nd::Protocol::dot) &&
             server.ip.empty() && server.bootstrap.empty()) {
-            try {
-                auto config = nd::default_config();
-                config.servers.push_back(server);
-                nd::prepare_secure_endpoints(config);
-                server = std::move(config.servers.back());
-            } catch (const nd::Error& error) {
-                nd::TestResult result;
-                result.protocol = server.protocol;
-                result.server_id = server.id;
-                result.error_code = error.code;
-                result.message = error.what();
-                return result;
-            } catch (const std::exception& error) {
-                nd::TestResult result;
-                result.protocol = server.protocol;
-                result.server_id = server.id;
-                result.error_code = "INTERNAL";
-                result.message = error.what();
-                return result;
+            if (!nd::platform::system_dns_servers().empty()) {
+                server.use_system_bootstrap = true;
+            } else {
+                try {
+                    auto config = nd::default_config();
+                    config.servers.push_back(server);
+                    nd::prepare_secure_endpoints(config);
+                    server = std::move(config.servers.back());
+                } catch (const nd::Error& error) {
+                    nd::TestResult result;
+                    result.protocol = server.protocol;
+                    result.server_id = server.id;
+                    result.error_code = error.code;
+                    result.message = error.what();
+                    return result;
+                } catch (const std::exception& error) {
+                    nd::TestResult result;
+                    result.protocol = server.protocol;
+                    result.server_id = server.id;
+                    result.error_code = "INTERNAL";
+                    result.message = error.what();
+                    return result;
+                }
             }
         }
         return nd::test_server(server);
@@ -768,6 +798,7 @@ private:
         checkRows(rows);
     }
     void checkRows(const QModelIndexList& rows) {
+        auto* pool = serverTestPool(working_.test_concurrency);
         for (const auto& index : rows) {
             const int row = index.row();
             if (row < 0 || row >= static_cast<int>(working_.servers.size()))
@@ -777,12 +808,17 @@ private:
             table_->item(row, 4)->setText("—");
             colorRow(row, palette().color(QPalette::Base), palette().color(QPalette::Text));
             QPointer<ServerDialog> self(this);
-            std::thread([self, server] {
+            auto cancelled = cancelled_;
+            pool->start([self, server, cancelled] {
+                if (cancelled->load())
+                    return;
                 auto result = testServer(server);
+                if (cancelled->load())
+                    return;
                 QMetaObject::invokeMethod(
                     qApp,
-                    [self, serverId = server.id, result] {
-                        if (!self)
+                    [self, serverId = server.id, result, cancelled] {
+                        if (!self || cancelled->load())
                             return;
                         const auto found = std::find_if(
                             self->working_.servers.begin(),
@@ -806,7 +842,7 @@ private:
                                        result.success ? QColor(20, 105, 35) : QColor(150, 0, 0));
                     },
                     Qt::QueuedConnection);
-            }).detach();
+            });
         }
     }
     nd::Config& target_;
@@ -816,6 +852,7 @@ private:
     QTableWidget* table_ = nullptr;
     QPushButton* check_ = nullptr;
     QPushButton* checkAll_ = nullptr;
+    std::shared_ptr<std::atomic_bool> cancelled_ = std::make_shared<std::atomic_bool>(false);
 };
 
 bool editRule(QWidget* parent, nd::Config& config, nd::Rule& rule) {
@@ -1390,8 +1427,9 @@ NativeDnsWindow::NativeDnsWindow(bool background, bool diagnostic_logging)
     }
     appendLocalLog(uiText("Configuration file: ") + qPath(configPath()));
     QNetworkInformation::loadDefaultBackend();
-    networkAvailable_ = networkAvailable();
-    networkSignature_ = networkSignature();
+    const auto initialNetwork = probeNetwork(currentReachability());
+    networkAvailable_ = initialNetwork.available;
+    networkSignature_ = initialNetwork.signature;
     connect(&statusTimer_, &QTimer::timeout, this, [this] { refreshStatus(); });
     connect(&logTimer_, &QTimer::timeout, this, [this] { refreshLogs(); });
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
@@ -1432,6 +1470,10 @@ std::filesystem::path NativeDnsWindow::configPath() const {
 
 void NativeDnsWindow::showAndActivate() {
     activateApplicationWindow(*this);
+}
+
+bool NativeDnsWindow::hasSystemTray() const {
+    return trayAvailable_ && tray_ && QSystemTrayIcon::isSystemTrayAvailable();
 }
 
 void NativeDnsWindow::buildUi() {
@@ -1565,6 +1607,7 @@ void NativeDnsWindow::buildUi() {
         connect(action, &QAction::triggered, this, [this, i] {
             config_.logging.screen = static_cast<nd::Level>(i);
             saveConfiguration();
+            refreshLogs();
         });
     }
     auto* views = addSubMenu(logMenu, "View");
@@ -1939,33 +1982,58 @@ std::string NativeDnsWindow::reloadRequest(const std::string& id) const {
 bool NativeDnsWindow::restartCore() {
     reloadRejected_ = false;
     configurationConfirmed_ = false;
-    try {
-        const auto expected = effectiveFingerprint();
-        const auto response =
-            nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, reloadRequest(expected), 10000);
-        if (response.status || response.payload != "RELOADED config_id=" + expected) {
-            reloadRejected_ = true;
-            throw std::runtime_error(response.status ? response.payload :
-                "CoreHost did not confirm the expected configuration");
+    const auto expected = effectiveFingerprint();
+    const auto request = reloadRequest(expected);
+    struct ReloadOutcome {
+        bool ok = false;
+        bool connectFailed = false;
+        QString error;
+    };
+    auto outcome = std::make_shared<ReloadOutcome>();
+    QEventLoop loop;
+    QProgressDialog progress(uiText("Applying DNS configuration..."), QString{}, 0, 0, this);
+    progress.setCancelButton(nullptr);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(250);
+    QThreadPool::globalInstance()->start([outcome, expected, request, &loop] {
+        try {
+            const auto response = nd::pipe_request(
+                nd::core_pipe_name, nd::IpcOperation::reload_config, request, 5000);
+            if (response.status || response.payload != "RELOADED config_id=" + expected) {
+                outcome->error = response.status
+                                     ? q(response.payload)
+                                     : uiText("CoreHost did not confirm the expected configuration");
+            } else {
+                outcome->ok = true;
+            }
+        } catch (const nd::Error& error) {
+            if (error.code == "IPC_CONNECT")
+                outcome->connectFailed = true;
+            else
+                outcome->error = q(error.what());
+        } catch (const std::exception& error) {
+            outcome->error = q(error.what());
         }
+        QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
+    });
+    loop.exec(QEventLoop::ExcludeUserInputEvents);
+    progress.close();
+    if (outcome->ok) {
         configurationConfirmed_ = true;
         restartWhenNetworkReturns_ = false;
         appendLocalLog(uiText("DNS configuration reloaded without stopping the core."));
         refreshStatus();
-    } catch (const nd::Error& error) {
-        if (error.code != "IPC_CONNECT") {
-            appendLocalLog(uiText("DNS configuration reload failed: ") + error.what(), true);
-            QMessageBox::critical(this, "NativeDNS", error.what());
-            return false;
-        }
+        return true;
+    }
+    if (outcome->connectFailed) {
         coreLaunchPending_ = false;
         startCore(true);
-    } catch (const std::exception& error) {
-        appendLocalLog(uiText("DNS configuration reload failed: ") + error.what(), true);
-        QMessageBox::critical(this, "NativeDNS", error.what());
-        return false;
+        return true;
     }
-    return true;
+    reloadRejected_ = true;
+    appendLocalLog(uiText("DNS configuration reload failed: ") + outcome->error, true);
+    QMessageBox::critical(this, "NativeDNS", outcome->error);
+    return false;
 }
 void NativeDnsWindow::requestCoreRestart() {
     if (exiting_ || restartOperationPending_.exchange(true))
@@ -2255,7 +2323,15 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                     while (!launchState->cancelled && std::chrono::steady_clock::now() < deadline) {
                         try {
                             const auto ready = readCoreStatus();
-                            if (ready.status || !ready.payload.starts_with("RUNNING")) {
+                            if (ready.status) {
+                                failure = q(ready.payload);
+                                break;
+                            }
+                            if (ready.payload.starts_with("STARTING")) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                                continue;
+                            }
+                            if (!ready.payload.starts_with("RUNNING")) {
                                 failure = q(ready.payload);
                                 break;
                             }
@@ -2530,8 +2606,10 @@ void NativeDnsWindow::exitApplication(bool force) {
 void NativeDnsWindow::refreshStatus() {
     if (statusRefreshPending_.exchange(true))
         return;
+    const auto reachability = currentReachability();
     QPointer<NativeDnsWindow> self(this);
-    QThreadPool::globalInstance()->start([self] {
+    QThreadPool::globalInstance()->start([self, reachability] {
+        const auto network = probeNetwork(reachability);
         QString status, diagnostics;
         bool failed = false, processAlive = false;
         try {
@@ -2576,6 +2654,7 @@ void NativeDnsWindow::refreshStatus() {
         QMetaObject::invokeMethod(
             qApp,
             [self,
+             network = std::move(network),
              status = std::move(status),
              diagnostics = std::move(diagnostics),
              failed,
@@ -2590,9 +2669,9 @@ void NativeDnsWindow::refreshStatus() {
                     if (!self->coreFailureTimer_.isValid())
                         self->coreFailureTimer_.start();
                 }
-                const bool available = networkAvailable();
+                const bool available = network.available;
                 const bool networkReturned = available && !self->networkAvailable_;
-                const auto signature = networkSignature();
+                const auto& signature = network.signature;
                 const bool networkChanged = signature != self->networkSignature_;
                 self->networkAvailable_ = available;
                 self->networkSignature_ = signature;
@@ -2740,6 +2819,23 @@ void NativeDnsWindow::closeEvent(QCloseEvent* event) {
         // Keep the GUI alive until CoreHost termination has been confirmed.
         event->ignore();
         return;
+    }
+
+    const bool trayNow = tray_ && QSystemTrayIcon::isSystemTrayAvailable();
+    if (trayNow != trayAvailable_) {
+        trayAvailable_ = trayNow;
+        if (trayAvailable_) {
+            tray_->show();
+            hideToTrayAction_->setEnabled(true);
+            hideToTrayAction_->setToolTip(QString());
+        } else {
+            tray_->hide();
+            hideToTray_ = false;
+            QSignalBlocker blocker(hideToTrayAction_);
+            hideToTrayAction_->setChecked(false);
+            hideToTrayAction_->setEnabled(false);
+            hideToTrayAction_->setToolTip("The desktop system tray is not available.");
+        }
     }
 
     if (hideToTray_ && trayAvailable_) {

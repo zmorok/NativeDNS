@@ -539,21 +539,41 @@ void addLogVisibilityActions(QMenu* menu, LogPanel& panel) {
 void LogPanel::appendRecords(const QList<LogRecord>& records) {
     if (records.isEmpty())
         return;
+    if (static_cast<size_t>(records.size()) >= maximumLogRecords) {
+        records_.clear();
+        const auto start = records.size() - static_cast<qsizetype>(maximumLogRecords);
+        for (qsizetype i = start; i < records.size(); ++i) {
+            auto record = records[i];
+            record.message.replace('\n', ' ').replace('\r', ' ');
+            if (!record.timestamp.isValid())
+                record.timestamp = QDateTime::currentDateTime();
+            records_.push_back(std::move(record));
+        }
+        rebuild();
+        return;
+    }
     auto* scroll = view_->verticalScrollBar();
     const int position = scroll->value();
     const bool follow = position == scroll->maximum();
     view_->setUpdatesEnabled(false);
+    const size_t total = records_.size() + static_cast<size_t>(records.size());
+    if (total > maximumLogRecords) {
+        const size_t excess = total - maximumLogRecords;
+        size_t evictVisible = 0;
+        for (size_t i = 0; i < excess; ++i) {
+            if (matches(records_[i]))
+                ++evictVisible;
+        }
+        if (evictVisible > 0) {
+            view_->removeFirstRecords(evictVisible);
+            visible_ -= static_cast<int>(evictVisible);
+        }
+        records_.erase(records_.begin(), records_.begin() + static_cast<ptrdiff_t>(excess));
+    }
     for (auto record : records) {
         record.message.replace('\n', ' ').replace('\r', ' ');
         if (!record.timestamp.isValid())
             record.timestamp = QDateTime::currentDateTime();
-        if (records_.size() == maximumLogRecords) {
-            if (matches(records_.front())) {
-                view_->removeFirstRecord();
-                --visible_;
-            }
-            records_.pop_front();
-        }
         records_.push_back(std::move(record));
         if (matches(records_.back()))
             renderRecord(records_.back());

@@ -79,7 +79,7 @@ int main(int argc, char** argv) {
                 "NativeDNS is already running in another mode. Exit it before switching between normal and diagnostic mode."));
     });
 
-    if (!background)
+    if (!background || !window.hasSystemTray())
         window.showAndActivate();
     return app.exec();
 }

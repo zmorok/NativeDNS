@@ -1714,6 +1714,40 @@ private slots:
         setUiLanguage(UiLanguage::english);
         applyUiTheme(*qobject_cast<QApplication*>(QCoreApplication::instance()), false);
     }
+    void batchEvictionPreservesTailAcrossAllViews() {
+        for (const auto view : {LogView::compact, LogView::details, LogView::table}) {
+            QTemporaryDir directory;
+            QSettings settings(directory.filePath("batch.ini"), QSettings::IniFormat);
+            LogPanel panel(nullptr, &settings);
+            QVERIFY(panel.setLogView(view));
+            QList<LogRecord> initial;
+            initial.reserve(1900);
+            for (int i = 0; i < 1900; ++i) {
+                auto r = record("msg-" + QString::number(i), (i % 10) == 0);
+                r.sequence = i + 1;
+                initial.push_back(std::move(r));
+            }
+            panel.appendRecords(initial);
+            QList<LogRecord> burst;
+            burst.reserve(500);
+            for (int i = 1900; i < 2400; ++i) {
+                auto r = record("msg-" + QString::number(i), (i % 10) == 0);
+                r.sequence = i + 1;
+                burst.push_back(std::move(r));
+            }
+            panel.appendRecords(burst);
+            QCOMPARE(panel.countLabel()->text(), uiText("Shown: %1 of %2").arg(2000).arg(2000));
+            if (view == LogView::table) {
+                auto* table = panel.findChild<QTableWidget*>("logTable");
+                QVERIFY(table);
+                QCOMPARE(table->rowCount(), 2000);
+            } else if (view == LogView::details) {
+                auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+                QVERIFY(tree);
+                QCOMPARE(tree->topLevelItemCount(), 2000);
+            }
+        }
+    }
 };
 QTEST_MAIN(LogFilterTests)
 #include "log_filter_tests.moc"

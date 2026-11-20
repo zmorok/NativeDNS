@@ -73,6 +73,7 @@ struct Translation {
 };
 constexpr std::array translations{
     Translation{"Interception Diagnostics", "Диагностика перехвата"},
+    Translation{"Applying DNS configuration...", "Применение конфигурации DNS..."},
     Translation{"Running means the mechanism is started. Verified requires a successful active "
                 "UDP/IPv4 test.",
                 "Работает – механизм запущен. Для подтверждения перехвата требуется успешный "
