@@ -387,6 +387,25 @@ Packet make_reflected_tcp_packet(const Packet& captured,
     return result;
 }
 
+bool is_transient_windivert_send_error(uint32_t error) {
+    switch (error) {
+        case ERROR_HOST_UNREACHABLE:
+        case ERROR_NETWORK_UNREACHABLE:
+        case ERROR_PORT_UNREACHABLE:
+        case ERROR_PROTOCOL_UNREACHABLE:
+        case ERROR_INVALID_PARAMETER:
+        case ERROR_NOT_FOUND:
+        case ERROR_NO_SYSTEM_RESOURCES:
+        case ERROR_INSUFFICIENT_BUFFER:
+        case ERROR_NOT_ENOUGH_MEMORY:
+        case ERROR_IO_PENDING:
+        case ERROR_RETRY:
+            return true;
+        default:
+            return false;
+    }
+}
+
 std::string windivert_filter(bool intercept_others, uint16_t target_port, uint16_t proxy_port) {
     const std::string injected = intercept_others ? "" : "!impostor and ";
     const auto target = std::to_string(target_port), proxy = std::to_string(proxy_port);
@@ -421,6 +440,7 @@ struct WinDivertInterception::Impl {
     } counters;
     std::atomic_bool receiver_active{false}, probe_active{false};
     std::atomic_uint64_t verified_send_errors{0};
+    std::atomic_uint32_t consecutive_send_errors{0};
     mutable std::mutex probe_mutex;
     InterceptionTestResult last_test;
     Packet probe_query;
@@ -520,8 +540,24 @@ struct WinDivertInterception::Impl {
                                      "Injected packet exhausted its hop limit");
                 return false;
             }
+            if (is_transient_windivert_send_error(error)) {
+                const auto streak =
+                    consecutive_send_errors.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (streak < 64) {
+                    logger.write_limited(Level::errors_only,
+                                         "send-transient|" + std::to_string(error),
+                                         "WINDIVERT_SEND_TRANSIENT",
+                                         "Transient WinDivertSend failure: " +
+                                             std::to_string(error) +
+                                             " interface_index=" +
+                                             std::to_string(address.Network.IfIdx) +
+                                             " streak=" + std::to_string(streak));
+                    return false;
+                }
+            }
             throw Error("WINDIVERT_SEND", "WinDivertSend failed: " + std::to_string(error));
         }
+        consecutive_send_errors.store(0, std::memory_order_relaxed);
         counters.packets_injected.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -920,6 +956,7 @@ void WinDivertInterception::start() {
         detail::fault_point("windivert.firewall");
         p.firewall.enable(p.tcp_proxy_port);
         p.logger.write(Level::verbose, "FIREWALL_RULE_ACTIVE", "TCP proxy firewall rule enabled");
+        p.consecutive_send_errors.store(0, std::memory_order_relaxed);
         p.state = State::running;
         const auto worker_count = std::clamp(std::thread::hardware_concurrency(), 4u, 16u);
         for (unsigned i = 0; i < worker_count; ++i)

@@ -172,6 +172,8 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
                            b_probe = b.consecutive_failures >= 2 && b.retry_after <= now;
                 if (a_probe != b_probe)
                     return a_probe;
+                if (a.latency_ms.has_value() != b.latency_ms.has_value())
+                    return !a.latency_ms.has_value();
                 if (a.latency_ms && b.latency_ms)
                     return *a.latency_ms < *b.latency_ms;
                 return false;

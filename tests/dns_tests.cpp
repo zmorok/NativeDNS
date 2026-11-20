@@ -276,6 +276,7 @@ private:
                     query.resize(static_cast<size_t>((prefix[0] << 8) | prefix[1]));
                     check(read_all(connection, query.data(), query.size()), "read query");
                 } else {
+                    check(ready(socket_), "test udp receive deadline");
                     const int n = recvfrom(socket_,
                                            reinterpret_cast<char*>(query.data()),
                                            static_cast<int>(query.size()),
@@ -619,6 +620,51 @@ int main() {
             backup.verify();
             check(degraded.requests == 2 && backup.requests == 3,
                   "unhealthy primary circuit and fallback reuse");
+        }
+        {
+            // Strict weak ordering regression: 3 healthy fallback members where first
+            // has high EWMA latency, middle is unmeasured (nullopt), and third is fast.
+            Peer slow_peer(false, Mode::slow_good, false, 0, 1500, 1);
+            Peer mid_peer(false, Mode::timeout, false, 0, 80, 1);
+            Peer fast_peer(false, Mode::good, false, 0, 1500, 2);
+            auto order_config = nd::default_config();
+            auto a1 = slow_peer.server();
+            a1.id = 41;
+            a1.name = "slow";
+            a1.fallback_ids = {42, 43};
+            auto a2 = mid_peer.server();
+            a2.id = 42;
+            a2.name = "unmeasured";
+            auto a3 = fast_peer.server();
+            a3.id = 43;
+            a3.name = "fast";
+            a3.fallback_ids = {44};
+            nd::Server a4;
+            a4.id = 44;
+            a4.name = "disabled-tail";
+            a4.enabled = false;
+            a4.ip = "127.0.0.1";
+            a4.port = 1;
+            order_config.servers = {a1, a2, a3, a4};
+            nd::Rule seed3;
+            seed3.id = 43;
+            seed3.name = "seed-fast";
+            seed3.patterns = {"seed3.example"};
+            seed3.server_id = 43;
+            order_config.rules.insert(order_config.rules.begin(), seed3);
+            order_config.rules.back().server_id = 41;
+            nd::Logger order_log;
+            nd::Router order_router(order_config, order_log);
+            check(order_router.route(nd::make_query("order-a.example"), a1).server_id == 41,
+                  "measure first fallback candidate");
+            check(order_router.route(nd::make_query("seed3.example"), a3).server_id == 43,
+                  "measure third fallback candidate");
+            const auto ranked = order_router.route(nd::make_query("order-b.example"), a1);
+            check(ranked.server_id == 43 && ranked.error_code.empty(),
+                  "strict weak ordering explores unmeasured then ranks faster measured ahead of slower");
+            slow_peer.verify();
+            mid_peer.verify();
+            fast_peer.verify();
         }
         {
             Peer upstream(false, Mode::slow_good, false, 0, 1500, 1);

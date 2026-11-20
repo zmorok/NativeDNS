@@ -104,6 +104,7 @@ Packet make_reflected_tcp_packet(const Packet& captured,
 // Returns true only when the captured UDP DNS query can be safely reinjected
 // without entering the bounded routing worker queue.
 bool should_reinject_udp_immediately(const Config& config, const Packet& captured);
+bool is_transient_windivert_send_error(uint32_t win32_error);
 std::string windivert_filter(bool intercept_others, uint16_t target, uint16_t proxy);
 #endif
 } // namespace nd

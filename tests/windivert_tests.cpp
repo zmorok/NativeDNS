@@ -404,6 +404,16 @@ int main() {
                   "Self-bypass registry separates address families and protocols");
         }
         check(!nd::detail::is_network_upstream(false, 42424, true), "IPv6 registration removed");
+        check(nd::is_transient_windivert_send_error(ERROR_HOST_UNREACHABLE) &&
+                  nd::is_transient_windivert_send_error(ERROR_NETWORK_UNREACHABLE) &&
+                  nd::is_transient_windivert_send_error(ERROR_INVALID_PARAMETER) &&
+                  nd::is_transient_windivert_send_error(ERROR_NO_SYSTEM_RESOURCES),
+              "Transient WinDivertSend errors must not tear down interception");
+        check(!nd::is_transient_windivert_send_error(ERROR_INVALID_HANDLE) &&
+                  !nd::is_transient_windivert_send_error(ERROR_OPERATION_ABORTED) &&
+                  !nd::is_transient_windivert_send_error(ERROR_WRITE_FAULT) &&
+                  !nd::is_transient_windivert_send_error(ERROR_GEN_FAILURE),
+              "Fatal WinDivertSend errors must remain fatal");
         fault_rollback("windivert.tcp_proxy");
         fault_rollback("windivert.load");
         fault_rollback("windivert.open");
