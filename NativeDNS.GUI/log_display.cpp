@@ -33,6 +33,9 @@ Presentation present(const LogRecord& record) {
     static const QRegularExpression serverPattern("server=(.*?)[, ]+rule=");
     static const QRegularExpression transportPattern(" \\(DNS over [^)]+\\)$");
     static const QRegularExpression repeatedTransportPattern(" (\\([^)]+\\))(?: \\1)+$");
+    static const QRegularExpression redundantNamedProtocolPattern(
+        "(\\b(?:UDP|TCP|DoH3|DoH|DoT|DoQ|DNSCrypt|Anonymized DNSCrypt))\\s+\\(\\1\\)$",
+        QRegularExpression::CaseInsensitiveOption);
     static const QRegularExpression durationPattern("(?:^|, )time=([0-9.]+) ms");
     static const QRegularExpression errorPattern("(?:^|, )error=(.*)$");
     Presentation p;
@@ -48,6 +51,7 @@ Presentation present(const LogRecord& record) {
     p.server = capture(record.message, serverPattern);
     p.server.remove(transportPattern);
     p.server.replace(repeatedTransportPattern, " \\1");
+    p.server.replace(redundantNamedProtocolPattern, "\\1");
     p.duration = capture(record.message, durationPattern);
     p.failure = capture(record.message, errorPattern);
     if (record.error && p.failure.isEmpty())

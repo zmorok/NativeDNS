@@ -151,11 +151,13 @@ NetworkProbeSnapshot probeNetwork(std::optional<QNetworkInformation::Reachabilit
         const bool activeNonLoopback = (flags & QNetworkInterface::IsUp) &&
                                        (flags & QNetworkInterface::IsRunning) &&
                                        !(flags & QNetworkInterface::IsLoopBack);
+        if (!activeNonLoopback)
+            continue;
         QStringList addresses;
         for (const auto& entry : interface.addressEntries()) {
             const auto ip = entry.ip();
             addresses << ip.toString();
-            if (!hasReachabilityDecision && activeNonLoopback && !ip.isNull() && !ip.isLoopback())
+            if (!hasReachabilityDecision && !ip.isNull() && !ip.isLoopback())
                 result.available = true;
         }
         addresses.sort();
@@ -182,6 +184,35 @@ QString q(const std::string& value) {
 std::string s(const QString& value) {
     const auto bytes = value.toUtf8();
     return std::string(bytes.constData(), static_cast<size_t>(bytes.size()));
+}
+struct ReloadOutcome {
+    bool ok = false;
+    bool connectFailed = false;
+    QString error;
+};
+ReloadOutcome executeConfigReload(const std::string& expected,
+                                  const std::string& request,
+                                  uint32_t timeoutMs) {
+    ReloadOutcome outcome;
+    try {
+        const auto response = nd::pipe_request(
+            nd::core_pipe_name, nd::IpcOperation::reload_config, request, timeoutMs);
+        if (response.status || response.payload != "RELOADED config_id=" + expected) {
+            outcome.error = response.status
+                                ? q(response.payload)
+                                : uiText("CoreHost did not confirm the expected configuration");
+        } else {
+            outcome.ok = true;
+        }
+    } catch (const nd::Error& error) {
+        if (error.code == "IPC_CONNECT")
+            outcome.connectFailed = true;
+        else
+            outcome.error = q(error.what());
+    } catch (const std::exception& error) {
+        outcome.error = q(error.what());
+    }
+    return outcome;
 }
 std::filesystem::path fsPath(const QString& value) {
 #ifdef _WIN32
@@ -620,9 +651,10 @@ public:
             }
         });
         connect(edit, &QPushButton::clicked, this, [this] {
-            const int row = table_->currentRow();
-            if (row < 0)
+            const auto rows = table_->selectionModel()->selectedRows();
+            if (rows.size() != 1)
                 return;
+            const int row = rows.front().row();
             auto server = working_.servers[static_cast<size_t>(row)];
             if (!editServer(this, server))
                 return;
@@ -635,10 +667,24 @@ public:
                 QMessageBox::critical(this, "NativeDNS", e.what());
             }
         });
-        connect(table_, &QTableWidget::itemSelectionChanged, this, [this, clone] {
-            clone->setEnabled(table_->selectionModel()->selectedRows().size() == 1);
-        });
-        clone->setEnabled(false);
+        const auto updateSelectionControls = [this, edit, clone, remove] {
+            const auto selected = table_->selectionModel()->selectedRows();
+            const bool single = selected.size() == 1;
+            edit->setEnabled(single);
+            clone->setEnabled(single);
+            remove->setEnabled(single);
+            check_->setEnabled(!working_.servers.empty() &&
+                               (!selected.isEmpty() || table_->currentRow() >= 0));
+        };
+        updateSelectionControls_ = updateSelectionControls;
+        connect(table_->selectionModel(),
+                &QItemSelectionModel::selectionChanged,
+                this,
+                updateSelectionControls);
+        connect(table_->selectionModel(),
+                &QItemSelectionModel::currentRowChanged,
+                this,
+                updateSelectionControls);
         connect(clone, &QPushButton::clicked, this, [this] {
             const auto rows = table_->selectionModel()->selectedRows();
             if (rows.size() != 1)
@@ -656,9 +702,10 @@ public:
             }
         });
         connect(remove, &QPushButton::clicked, this, [this] {
-            const int row = table_->currentRow();
-            if (row < 0)
+            const auto rows = table_->selectionModel()->selectedRows();
+            if (rows.size() != 1)
                 return;
+            const int row = rows.front().row();
             if (QMessageBox::question(this, "NativeDNS", uiText("Remove selected DNS server?")) !=
                 QMessageBox::Yes)
                 return;
@@ -747,8 +794,9 @@ private:
         if (selectedRow >= 0)
             table_->selectRow(selectedRow);
         const bool hasServers = !working_.servers.empty();
-        check_->setEnabled(hasServers);
         checkAll_->setEnabled(hasServers);
+        if (updateSelectionControls_)
+            updateSelectionControls_();
         table_->setUpdatesEnabled(true);
         table_->viewport()->update();
     }
@@ -840,10 +888,14 @@ private:
                             result.success ? "OK" : q(result.error_code + ": " + result.message));
                         rtt->setText(result.success ? QString::number(result.rtt_ms, 'f', 1) + " ms"
                                                     : "—");
+                        const bool dark = self->palette().color(QPalette::Base).lightness() < 128;
                         self->colorRow(row,
-                                       result.success ? QColor(220, 245, 224)
-                                                      : QColor(255, 224, 224),
-                                       result.success ? QColor(20, 105, 35) : QColor(150, 0, 0));
+                                       result.success
+                                           ? (dark ? QColor(28, 68, 38) : QColor(220, 245, 224))
+                                           : (dark ? QColor(78, 30, 34) : QColor(255, 224, 224)),
+                                       result.success
+                                           ? (dark ? QColor(130, 230, 150) : QColor(20, 105, 35))
+                                           : (dark ? QColor(255, 130, 130) : QColor(150, 0, 0)));
                     },
                     Qt::QueuedConnection);
             });
@@ -856,6 +908,7 @@ private:
     QTableWidget* table_ = nullptr;
     QPushButton* check_ = nullptr;
     QPushButton* checkAll_ = nullptr;
+    std::function<void()> updateSelectionControls_;
     std::shared_ptr<std::atomic_bool> cancelled_ = std::make_shared<std::atomic_bool>(false);
 };
 
@@ -2038,11 +2091,6 @@ bool NativeDnsWindow::restartCore() {
     configurationConfirmed_ = false;
     const auto expected = effectiveFingerprint();
     const auto request = reloadRequest(expected);
-    struct ReloadOutcome {
-        bool ok = false;
-        bool connectFailed = false;
-        QString error;
-    };
     auto outcome = std::make_shared<ReloadOutcome>();
     QEventLoop loop;
     QProgressDialog progress(uiText("Applying DNS configuration..."), QString{}, 0, 0, this);
@@ -2050,24 +2098,7 @@ bool NativeDnsWindow::restartCore() {
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(250);
     QThreadPool::globalInstance()->start([outcome, expected, request, &loop] {
-        try {
-            const auto response = nd::pipe_request(
-                nd::core_pipe_name, nd::IpcOperation::reload_config, request, 5000);
-            if (response.status || response.payload != "RELOADED config_id=" + expected) {
-                outcome->error = response.status
-                                     ? q(response.payload)
-                                     : uiText("CoreHost did not confirm the expected configuration");
-            } else {
-                outcome->ok = true;
-            }
-        } catch (const nd::Error& error) {
-            if (error.code == "IPC_CONNECT")
-                outcome->connectFailed = true;
-            else
-                outcome->error = q(error.what());
-        } catch (const std::exception& error) {
-            outcome->error = q(error.what());
-        }
+        *outcome = executeConfigReload(expected, request, 5000);
         QMetaObject::invokeMethod(&loop, &QEventLoop::quit, Qt::QueuedConnection);
     });
     loop.exec(QEventLoop::ExcludeUserInputEvents);
@@ -2097,33 +2128,19 @@ void NativeDnsWindow::requestCoreRestart() {
     QPointer<NativeDnsWindow> self(this);
     const auto captureRequest = reloadRequest(expected);
     QThreadPool::globalInstance()->start([self, expected, captureRequest] {
-        bool absent = false;
-        QString failure;
-        try {
-            const auto response =
-                nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::reload_config, captureRequest, 10000);
-            if (response.status || response.payload != "RELOADED config_id=" + expected)
-                failure = response.status ? q(response.payload) :
-                    uiText("CoreHost did not confirm the expected configuration");
-        } catch (const nd::Error& error) {
-            absent = error.code == "IPC_CONNECT";
-            if (!absent)
-                failure = q(error.what());
-        } catch (const std::exception& error) {
-            failure = q(error.what());
-        }
+        const auto outcome = executeConfigReload(expected, captureRequest, 10000);
         QMetaObject::invokeMethod(
             qApp,
-            [self, absent, failure = std::move(failure)] {
+            [self, outcome] {
                 if (!self)
                     return;
                 self->restartOperationPending_ = false;
                 if (self->exiting_)
                     return;
-                if (absent) {
+                if (outcome.connectFailed) {
                     self->startCore(true);
-                } else if (!failure.isEmpty()) {
-                    self->appendLocalLog(uiText("DNS configuration reload failed: ") + failure,
+                } else if (!outcome.ok) {
+                    self->appendLocalLog(uiText("DNS configuration reload failed: ") + outcome.error,
                                          true);
                 } else {
                     self->restartWhenNetworkReturns_ = false;

@@ -454,8 +454,11 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
 RouteResult Router::route(const Packet& request, const Server& original) const {
     return route(request, original, snapshot());
 }
-RouteResult
-Router::route(const Packet& request, const Server& original, SnapshotPtr current) const {
+RouteResult Router::route(const Packet& request,
+                          const Server& original,
+                          SnapshotPtr current,
+                          std::optional<Question> pre_parsed,
+                          std::optional<RuleDecision> pre_decision) const {
     detail::CancellationScope cancellation(cancellation_.load()->get_token());
     const auto& snapshot = *current;
     RouteResult result;
@@ -494,13 +497,15 @@ Router::route(const Packet& request, const Server& original, SnapshotPtr current
     };
     auto exchange_started = std::chrono::steady_clock::time_point{};
     try {
-        question = parse_question(request);
+        question = pre_parsed ? std::move(*pre_parsed) : parse_question(request);
         if (question.flags & 0x8000)
             throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
         valid_question = true;
         context.address = question.name;
         context.dns_type = dns_type_name(question.type);
-        const auto decision = evaluate_compiled_rule(snapshot.compiled_rules, question.name);
+        const auto decision = (pre_decision && pre_decision->rule)
+                                  ? std::move(*pre_decision)
+                                  : evaluate_compiled_rule(snapshot.compiled_rules, question.name);
         const auto& rule = *decision.rule;
         counters_.rules_evaluated.fetch_add(1, std::memory_order_relaxed);
         if (rule.action == Action::block)

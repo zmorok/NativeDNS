@@ -506,6 +506,8 @@ struct WinDivertInterception::Impl {
         Packet packet;
         WINDIVERT_ADDRESS address{};
         Router::SnapshotPtr snapshot;
+        std::optional<Question> question;
+        std::optional<RuleDecision> decision;
     };
     mutable std::mutex queue_mutex;
     std::condition_variable queue_changed;
@@ -569,7 +571,11 @@ struct WinDivertInterception::Impl {
             auto original = original_server(job.packet, view);
             if (view.ipv6 && job.packet[24] == 0xfe && (job.packet[25] & 0xc0) == 0x80)
                 original.route.scope6 = job.address.Network.IfIdx;
-            auto routed = router.route(query, original, job.snapshot);
+            auto routed = router.route(query,
+                                       original,
+                                       job.snapshot,
+                                       std::move(job.question),
+                                       std::move(job.decision));
             if (state != State::running)
                 return;
             if (routed.disposition == Disposition::forward_original) {
@@ -721,12 +727,12 @@ struct WinDivertInterception::Impl {
                         continue;
                     }
                     policy_selected = true;
-                    const auto captured_question = parse_question(Packet(
-                        packet.begin() + static_cast<ptrdiff_t>(view.payload), packet.end()));
+                    auto captured_question = parse_question(std::span<const uint8_t>(
+                        packet.data() + view.payload, packet.size() - view.payload));
                     if (captured_question.flags & 0x8000)
                         throw Error("DNS_MALFORMED", "Cannot route a reply as a query");
                     auto snapshot = router.snapshot();
-                    const auto captured_decision =
+                    auto captured_decision =
                         evaluate_compiled_rule(snapshot->compiled_rules, captured_question.name);
                     const auto& captured_rule = *captured_decision.rule;
                     if (logger.enabled(Level::debug))
@@ -770,7 +776,11 @@ struct WinDivertInterception::Impl {
                         if (jobs.size() < 4096 &&
                             queued_bytes + packet.size() <= 32 * 1024 * 1024) {
                             queued_bytes += packet.size();
-                            jobs.push_back({std::move(packet), address, std::move(snapshot)});
+                            jobs.push_back({std::move(packet),
+                                            address,
+                                            std::move(snapshot),
+                                            std::move(captured_question),
+                                            std::move(captured_decision)});
                             queued = true;
                         }
                     }

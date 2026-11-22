@@ -463,6 +463,32 @@ private slots:
             QVERIFY(tree->topLevelItem(0)->text(0).contains(
                 "Network interfaces updated: Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)"));
         }
+        panel.clear();
+        auto namedProto = record(
+            QString::fromUtf8("named.example [A] - process : server=01. Bezmezhau | основной | "
+                              "DoH (DoH) (DNS over HTTPS), rule=Default, time=10.00 ms"));
+        namedProto.address = "named.example";
+        namedProto.dnsType = "A";
+        namedProto.rule = "Default";
+        namedProto.action = "process";
+        panel.appendRecords({namedProto, success});
+        if (mode == static_cast<int>(LogView::compact)) {
+            const auto formatted = panel.findChild<QPlainTextEdit*>("logDisplay")->toPlainText();
+            QVERIFY(formatted.contains(QString::fromUtf8("01. Bezmezhau | основной | DoH  ·")));
+            QVERIFY(!formatted.contains("DoH (DoH)"));
+            QVERIFY(formatted.contains("Example DNS (DoH)"));
+        } else if (mode == static_cast<int>(LogView::table)) {
+            auto* table = panel.findChild<QTableWidget*>("logTable");
+            QCOMPARE(table->item(0, 3)->text(),
+                     QString::fromUtf8("01. Bezmezhau | основной | DoH"));
+            QCOMPARE(table->item(1, 3)->text(), "Example DNS (DoH)");
+        } else {
+            auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+            QVERIFY(tree->topLevelItem(0)->text(0).contains(
+                QString::fromUtf8("01. Bezmezhau | основной | DoH  ·")));
+            QVERIFY(!tree->topLevelItem(0)->text(0).contains("DoH (DoH)"));
+            QVERIFY(tree->topLevelItem(1)->text(0).contains("Example DNS (DoH)"));
+        }
     }
     void logViewBuffer_data() {
         logViews_data();

@@ -84,7 +84,11 @@ public:
     void cancel_pending() const;
     void resume() const;
     RouteResult route(const Packet& request, const Server& original) const;
-    RouteResult route(const Packet& request, const Server& original, SnapshotPtr snapshot) const;
+    RouteResult route(const Packet& request,
+                      const Server& original,
+                      SnapshotPtr snapshot,
+                      std::optional<Question> pre_parsed = std::nullopt,
+                      std::optional<RuleDecision> pre_decision = std::nullopt) const;
     Packet exchange(const Packet& request, const Server& server) const;
     RoutingStatistics statistics() const;
 
