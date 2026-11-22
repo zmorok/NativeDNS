@@ -1227,16 +1227,23 @@ private slots:
         auto* tree = display.findChild<QTreeWidget*>("logDetailsTree");
         auto* first = tree->topLevelItem(0);
         auto* second = tree->topLevelItem(1);
+        QVERIFY(!first->toolTip(0).isEmpty());
+        QVERIFY(first->child(0)->toolTip(0).isEmpty());
         tree->setFocus();
         tree->setCurrentItem(first);
         QTest::keyClick(tree, Qt::Key_Right);
         QVERIFY(first->isExpanded());
+        QVERIFY(first->toolTip(0).isEmpty());
+        QVERIFY(first->child(0)->toolTip(0).isEmpty());
         tree->setCurrentItem(second);
         QTest::keyClick(tree, Qt::Key_Right);
         QVERIFY(second->isExpanded());
         QVERIFY(!first->isExpanded());
+        QVERIFY(!first->toolTip(0).isEmpty());
+        QVERIFY(second->toolTip(0).isEmpty());
         QTest::keyClick(tree, Qt::Key_Left);
         QVERIFY(!second->isExpanded());
+        QVERIFY(!second->toolTip(0).isEmpty());
         first->setExpanded(true);
         tree->setCurrentItem(first->child(0));
         first->setExpanded(false);
@@ -1270,9 +1277,20 @@ private slots:
         QVERIFY(tree->topLevelItem(0)->isExpanded());
         display.clear();
         display.appendRecord(record("after clear"));
-        tree->setCurrentItem(tree->topLevelItem(0));
+        const QString longSegment = QString("segment-without-newline ").repeated(35);
+        display.appendRecord(record(longSegment));
+        auto* shortItem = tree->topLevelItem(0);
+        auto* longItem = tree->topLevelItem(1);
+        tree->setCurrentItem(shortItem);
         QTest::keyClick(tree, Qt::Key_Return);
-        QVERIFY(tree->topLevelItem(0)->isExpanded());
+        QVERIFY(shortItem->isExpanded());
+        tree->doItemsLayout();
+        const QRect shortRect = tree->visualItemRect(shortItem->child(0));
+        longItem->setExpanded(true);
+        tree->doItemsLayout();
+        const QRect longRect = tree->visualItemRect(longItem->child(0));
+        QVERIFY(longRect.height() > shortRect.height() * 2);
+        QVERIFY(longItem->child(0)->text(0).contains(longSegment));
     }
     void logDetailsRevealBottom_data() {
         QTest::addColumn<int>("key");

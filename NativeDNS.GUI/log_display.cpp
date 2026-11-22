@@ -1,21 +1,31 @@
 #include "log_display.hpp"
 #include "ui_preferences.hpp"
-#include <QHeaderView>
 #include <QAbstractTextDocumentLayout>
+#include <QApplication>
 #include <QEvent>
+#include <QHeaderView>
+#include <QHelpEvent>
 #include <QKeyEvent>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QRegularExpression>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTextBlock>
 #include <QTextCursor>
+#include <QTextLayout>
+#include <QTextOption>
+#include <QTimer>
 #include <QToolButton>
+#include <QToolTip>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 #include <algorithm>
+#include <cmath>
 
 namespace {
 struct TextRecord final : QTextBlockUserData {
@@ -108,6 +118,98 @@ QString detailsText(const LogRecord& record, const Presentation& p) {
     lines << QString{} << uiText("Original record") + ":" << record.message;
     return lines.join('\n');
 }
+
+int layoutWrappedDetails(const QString& text,
+                         const QFont& font,
+                         int width,
+                         QPainter* painter = nullptr,
+                         const QPointF& origin = {}) {
+    QTextOption textOption;
+    textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    qreal y = 0.0;
+    const qreal lineWidth = std::max(1, width);
+    const auto paragraphs = text.split('\n');
+    for (const auto& paragraph : paragraphs) {
+        QTextLayout layout(paragraph, font);
+        layout.setTextOption(textOption);
+        layout.beginLayout();
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid())
+                break;
+            line.setLineWidth(lineWidth);
+            line.setPosition(QPointF(0.0, y));
+            y += line.height();
+        }
+        layout.endLayout();
+        if (painter)
+            layout.draw(painter, origin);
+    }
+    return static_cast<int>(std::ceil(y));
+}
+
+class LogDetailsDelegate final : public QStyledItemDelegate {
+public:
+    explicit LogDetailsDelegate(QTreeWidget* tree) : QStyledItemDelegate(tree), tree_(tree) {
+    }
+
+    void paint(QPainter* painter,
+               const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        if (!index.parent().isValid()) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        const QString text = opt.text;
+        opt.text.clear();
+        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
+
+        const int hMargin =
+            style->pixelMetric(QStyle::PM_FocusFrameHMargin, &opt, opt.widget) + 1;
+        constexpr int vMargin = 4;
+        const QRect textRect = opt.rect.adjusted(hMargin, vMargin, -hMargin, -vMargin);
+        if (textRect.width() <= 0 || textRect.height() <= 0)
+            return;
+
+        painter->save();
+        painter->setClipRect(opt.rect);
+        QColor textColor = opt.palette.color(QPalette::Text);
+        if (opt.state & QStyle::State_Selected) {
+            textColor = opt.palette.color(QPalette::HighlightedText);
+        } else if (const auto fg = index.data(Qt::ForegroundRole); fg.canConvert<QBrush>()) {
+            textColor = qvariant_cast<QBrush>(fg).color();
+        }
+        painter->setPen(textColor);
+        painter->setFont(opt.font);
+        layoutWrappedDetails(text, opt.font, textRect.width(), painter, textRect.topLeft());
+        painter->restore();
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option,
+                   const QModelIndex& index) const override {
+        if (!index.parent().isValid())
+            return QStyledItemDelegate::sizeHint(option, index);
+        QStyleOptionViewItem opt = option;
+        initStyleOption(&opt, index);
+        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+        const int hMargin =
+            style->pixelMetric(QStyle::PM_FocusFrameHMargin, &opt, opt.widget) + 1;
+        constexpr int vMargin = 4;
+        const int viewportWidth =
+            tree_->viewport()->width() > 0 ? tree_->viewport()->width() : tree_->width();
+        const int indent = (tree_->rootIsDecorated() ? 2 : 1) * tree_->indentation();
+        const int itemWidth = std::max(80, viewportWidth - indent);
+        const int textWidth = std::max(40, itemWidth - 2 * hMargin);
+        const int textHeight = layoutWrappedDetails(opt.text, opt.font, textWidth);
+        return QSize(itemWidth, textHeight + 2 * vMargin);
+    }
+
+private:
+    QTreeWidget* tree_;
+};
 } // namespace
 
 QString logViewKey(LogView view) {
@@ -170,7 +272,14 @@ LogDisplay::LogDisplay(QWidget* parent)
     tree_->setUniformRowHeights(false);
     tree_->setWordWrap(true);
     tree_->header()->setSectionResizeMode(QHeaderView::Stretch);
+    tree_->setItemDelegate(new LogDetailsDelegate(tree_));
+    auto* detailsResizeTimer = new QTimer(tree_);
+    detailsResizeTimer->setObjectName("logDetailsResizeTimer");
+    detailsResizeTimer->setSingleShot(true);
+    detailsResizeTimer->setInterval(0);
+    connect(detailsResizeTimer, &QTimer::timeout, tree_, &QTreeWidget::doItemsLayout);
     tree_->installEventFilter(this);
+    tree_->viewport()->installEventFilter(this);
     connect(tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) {
         // Apply the same single-record behavior to keyboard and mouse expansion.
         for (int row = 0; row < tree_->topLevelItemCount(); ++row) {
@@ -178,6 +287,8 @@ LogDisplay::LogDisplay(QWidget* parent)
             if (other != item && other->isExpanded())
                 other->setExpanded(false);
         }
+        item->setToolTip(0, QString{});
+        QToolTip::hideText();
         tree_->doItemsLayout();
         tree_->scrollToItem(item, QAbstractItemView::EnsureVisible);
         if (item->childCount() > 0) {
@@ -190,6 +301,8 @@ LogDisplay::LogDisplay(QWidget* parent)
         }
     });
     connect(tree_, &QTreeWidget::itemCollapsed, this, [this](QTreeWidgetItem* item) {
+        if (item->childCount() > 0)
+            item->setToolTip(0, item->child(0)->text(0));
         if (auto* current = tree_->currentItem(); current && current->parent() == item) {
             tree_->setCurrentItem(item);
             tree_->doItemsLayout();
@@ -249,6 +362,23 @@ LogDisplay::LogDisplay(QWidget* parent)
     retranslateUi();
 }
 bool LogDisplay::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == tree_->viewport()) {
+        if (event->type() == QEvent::ToolTip) {
+            const auto* help = static_cast<QHelpEvent*>(event);
+            if (auto* item = tree_->itemAt(help->pos());
+                item && (item->parent() || item->isExpanded())) {
+                QToolTip::hideText();
+                event->ignore();
+                return true;
+            }
+        } else if (event->type() == QEvent::Resize) {
+            const auto* resize = static_cast<QResizeEvent*>(event);
+            if (resize->oldSize().width() != resize->size().width()) {
+                if (auto* timer = tree_->findChild<QTimer*>("logDetailsResizeTimer"))
+                    timer->start();
+            }
+        }
+    }
     if (watched == tree_ && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
@@ -423,7 +553,6 @@ void LogDisplay::renderRecord(const LogRecord& record) {
         item->setToolTip(0, details);
         auto* child = new QTreeWidgetItem(item, {details});
         child->setForeground(0, color);
-        child->setToolTip(0, details);
     } else {
         QStringList lines;
         lines << '[' + time + "] " + p.summary;
