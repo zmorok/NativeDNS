@@ -1,5 +1,6 @@
 #include "update_checker.hpp"
 #include "ui_preferences.hpp"
+#include "window_activation.hpp"
 
 #include <QDesktopServices>
 #include <QAction>
@@ -150,6 +151,7 @@ UpdateDialog::UpdateDialog(const QString& currentVersion,
     : QDialog(parent), currentVersion_(currentVersion),
       network_(network ? network : new QNetworkAccessManager(this)), deadline_(new QTimer(this)) {
     setWindowTitle(uiText("Check for updates"));
+    setWindowFlag(Qt::WindowStaysOnTopHint, true);
     setMinimumSize(520, 320);
     resize(760, 520);
     auto* layout = new QVBoxLayout(this);
@@ -256,6 +258,7 @@ void UpdateDialog::showForManualCheck() {
     show();
     raise();
     activateWindow();
+    activateApplicationWindow(*this);
 }
 void UpdateDialog::startRequest() {
     if (reply_)

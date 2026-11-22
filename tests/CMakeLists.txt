@@ -242,7 +242,7 @@ if(NATIVEDNS_BUILD_GUI)
   add_executable(update_checker_tests update_checker_tests.cpp
     ../NativeDNS.GUI/update_checker.cpp ../NativeDNS.GUI/ui_preferences.cpp)
   set_target_properties(update_checker_tests PROPERTIES AUTOMOC ON)
-  target_link_libraries(update_checker_tests PRIVATE Qt6::Widgets Qt6::Network Qt6::Test)
+  target_link_libraries(update_checker_tests PRIVATE NativeDNS.WindowActivation Qt6::Widgets Qt6::Network Qt6::Test)
   add_test(NAME release_update_check COMMAND update_checker_tests)
   if(WIN32)
     set_property(TEST release_update_check PROPERTY ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:${qt_test_bin}")

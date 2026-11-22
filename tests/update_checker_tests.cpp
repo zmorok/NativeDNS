@@ -175,6 +175,7 @@ private slots:
         QVERIFY(!dialog.isVisible());
         network.last->complete(manifest(release));
         const bool newer = status == "A new NativeDNS version is available.";
+        QVERIFY(dialog.windowFlags().testFlag(Qt::WindowStaysOnTopHint));
         QCOMPARE(dialog.isVisible(), newer);
         QCOMPARE(dialog.findChild<QLabel*>("updateStatus")->text(), status);
         QCOMPARE(QSettings().value("updates/lastManifest").toByteArray(), manifest(release));
