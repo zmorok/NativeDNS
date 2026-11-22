@@ -126,13 +126,16 @@ void CoreHost::log_configuration() {
                           "\" patterns=" + patterns);
     }
 }
-void CoreHost::inspect_network(const Config& config) {
+void CoreHost::inspect_network(const Config& config, bool verbose_info) {
     if (mode_ != InterceptionMode::transparent)
         return;
     try {
         const auto network = NetworkMonitor::shared().snapshot();
-        for (const auto& finding : inspect_network_environment(config, *network))
-            logger_.write(finding.level, finding.code, finding.message);
+        for (const auto& finding : inspect_network_environment(config, *network)) {
+            const auto level =
+                verbose_info && finding.level != Level::errors_only ? Level::verbose : finding.level;
+            logger_.write(level, finding.code, finding.message);
+        }
     } catch (const std::exception& error) {
         logger_.write(Level::errors_only, "DNS_PREFLIGHT_FAILED", error.what());
     }
@@ -311,11 +314,13 @@ void CoreHost::wait_for_shutdown() {
         lock.lock();
         const auto network = NetworkMonitor::shared().snapshot();
         if (network->generation != previous_network->generation) {
+            const auto summary = describe_network_change(*previous_network, *network);
             logger_.write(Level::normal,
                           "NETWORK_CHANGED",
                           "generation=" + std::to_string(network->generation) +
                               " previous=" + std::to_string(previous_network->generation) +
                               " interfaces=" + std::to_string(network->interfaces.size()) +
+                              (summary.empty() ? "" : " changed=\"" + summary + "\"") +
                               (network->error.empty() ? "" : " error=" + network->error));
             for (const auto& info : network->interfaces) {
                 std::string details = "id=" + info.id + " name=" + info.name +
@@ -330,7 +335,7 @@ void CoreHost::wait_for_shutdown() {
             previous_network = network;
             const Config current_config = config_;
             lock.unlock();
-            inspect_network(current_config);
+            inspect_network(current_config, true);
             if (!shutdown_requested() && interception_->status().state == State::running &&
                 prepare_network(current_config)) {
                 try { platform::flush_dns_cache(); }

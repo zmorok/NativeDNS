@@ -37,6 +37,7 @@ const InterfaceInfo* find_interface(const NetworkSnapshot& snapshot,
                                     const std::string& id,
                                     const std::string& match = "id");
 std::string network_route_key(const NetworkRoute& route);
+std::string describe_network_change(const NetworkSnapshot& previous, const NetworkSnapshot& current);
 Server with_network_context(Server server);
 std::vector<std::string> select_bootstrap_dns_servers(const std::vector<InterfaceInfo>& interfaces);
 class NetworkMonitor final {

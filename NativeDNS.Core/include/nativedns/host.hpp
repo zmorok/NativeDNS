@@ -41,7 +41,7 @@ private:
     IpcResponse handle(IpcOperation operation, const std::string& payload);
     void log_configuration();
     void configure_logging();
-    void inspect_network(const Config& config);
+    void inspect_network(const Config& config, bool verbose_info = false);
     bool prepare_network(const Config& config);
     void restore_network() noexcept;
     mutable std::mutex mutex_;

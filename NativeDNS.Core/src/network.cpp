@@ -5,6 +5,7 @@
 #include <nativedns/platform.hpp>
 #include <nativedns/config.hpp>
 #include <charconv>
+#include <map>
 #include <tuple>
 
 namespace nd {
@@ -61,6 +62,74 @@ std::string network_route_key(const NetworkRoute& route) {
     return route.interface_id + '|' + std::to_string(route.index4) + '|' +
            std::to_string(route.index6) + '|' + std::to_string(route.scope6) + '|' +
            std::to_string(route.generation);
+}
+std::string describe_network_change(const NetworkSnapshot& previous, const NetworkSnapshot& current) {
+    auto sanitize_name = [](std::string value) {
+        for (char& ch : value) {
+            if (ch == '"')
+                ch = '\'';
+            else if (static_cast<unsigned char>(ch) < 32)
+                ch = ' ';
+        }
+        return value;
+    };
+    auto format_up = [&](const InterfaceInfo& info) {
+        auto label = sanitize_name(info.name.empty() ? info.id : info.name);
+        label += " (up";
+        if (!info.addresses.empty())
+            label += ", " + sanitize_name(info.addresses.front());
+        if (!info.dns_servers.empty())
+            label += ", dns=" + sanitize_name(info.dns_servers.front());
+        if (info.captive_portal)
+            label += ", captive_portal";
+        label += ')';
+        return label;
+    };
+    std::map<std::string, const InterfaceInfo*> prev_by_id, curr_by_id;
+    for (const auto& info : previous.interfaces)
+        prev_by_id.emplace(info.id, &info);
+    for (const auto& info : current.interfaces)
+        curr_by_id.emplace(info.id, &info);
+    std::vector<std::string> changes;
+    for (const auto& [id, curr] : curr_by_id) {
+        const auto found = prev_by_id.find(id);
+        if (found == prev_by_id.end()) {
+            if (curr->up)
+                changes.push_back(format_up(*curr));
+            continue;
+        }
+        const auto* prev = found->second;
+        if (prev->up != curr->up) {
+            changes.push_back(curr->up ? format_up(*curr)
+                                       : sanitize_name(curr->name.empty() ? curr->id : curr->name) +
+                                             " (down)");
+        } else if (curr->up &&
+                   (prev->addresses != curr->addresses || prev->dns_servers != curr->dns_servers ||
+                    prev->gateways != curr->gateways ||
+                    prev->captive_portal != curr->captive_portal)) {
+            changes.push_back(format_up(*curr));
+        }
+    }
+    for (const auto& [id, prev] : prev_by_id) {
+        if (curr_by_id.find(id) == curr_by_id.end() && prev->up) {
+            changes.push_back(sanitize_name(prev->name.empty() ? prev->id : prev->name) +
+                              " (removed)");
+        }
+    }
+    if (changes.empty())
+        return previous.interfaces == current.interfaces && previous.error == current.error
+                   ? "resume"
+                   : "none";
+    std::string summary;
+    const size_t limit = std::min<size_t>(changes.size(), 4);
+    for (size_t i = 0; i < limit; ++i) {
+        if (i > 0)
+            summary += ", ";
+        summary += changes[i];
+    }
+    if (changes.size() > 4)
+        summary += ", +" + std::to_string(changes.size() - 4) + " more";
+    return summary;
 }
 Server with_network_context(Server server) {
     if (!server.route.generation)

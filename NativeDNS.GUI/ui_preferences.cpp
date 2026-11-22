@@ -134,6 +134,7 @@ constexpr std::array translations{
     Translation{"Cache", "Кэш"},
     Translation{"Original record", "Исходная запись"},
     Translation{"Network interfaces updated", "Обновлены сетевые интерфейсы"},
+    Translation{"Changed interfaces", "Изменившиеся интерфейсы"},
     Translation{"CoreHost is running", "CoreHost работает"},
     Translation{"Selected record details", "Подробности выбранной записи"},
     Translation{"Select a record to read its complete original text.",

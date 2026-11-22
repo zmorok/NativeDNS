@@ -438,6 +438,31 @@ private slots:
         panel.clear();
         QCOMPARE(display->recordCount(), 0);
         QVERIFY(inspector->toPlainText().isEmpty());
+        LogRecord richNetwork;
+        richNetwork.timestamp = success.timestamp;
+        richNetwork.code = "NETWORK_CHANGED";
+        richNetwork.message =
+            "generation=9 previous=8 interfaces=4 changed=\"Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)\"";
+        QVERIFY(panel.setLogView(static_cast<LogView>(mode)));
+        input->clear();
+        QVERIFY(panel.applyFilter());
+        panel.appendRecords({richNetwork});
+        QCOMPARE(display->recordCount(), 1);
+        QVERIFY(inspector->toPlainText().contains(uiText("Changed interfaces") + ": Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)"));
+        if (mode == static_cast<int>(LogView::compact)) {
+            QVERIFY(panel.findChild<QPlainTextEdit*>("logDisplay")
+                        ->toPlainText()
+                        .contains("Network interfaces updated: Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)"));
+        } else if (mode == static_cast<int>(LogView::table)) {
+            auto* table = panel.findChild<QTableWidget*>("logTable");
+            QCOMPARE(table->item(0, 1)->text(),
+                     "Network interfaces updated: Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)");
+            QCOMPARE(table->item(0, 3)->text(), "Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)");
+        } else {
+            auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+            QVERIFY(tree->topLevelItem(0)->text(0).contains(
+                "Network interfaces updated: Wi-Fi (up, 192.0.2.10, dns=192.0.2.1)"));
+        }
     }
     void logViewBuffer_data() {
         logViews_data();

@@ -73,7 +73,7 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         result =
             GetAdaptersAddresses(AF_UNSPEC,
                                  GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
-                                     GAA_FLAG_INCLUDE_ALL_INTERFACES | GAA_FLAG_INCLUDE_GATEWAYS,
+                                     GAA_FLAG_INCLUDE_GATEWAYS,
                                  nullptr,
                                  adapters,
                                  &size);
@@ -88,6 +88,11 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
                              ? captive_portal_adapters()
                              : std::vector<std::string>{};
     for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+        if (adapter->IfType == IF_TYPE_TUNNEL &&
+            (adapter->TunnelType == TUNNEL_TYPE_TEREDO ||
+             adapter->TunnelType == TUNNEL_TYPE_6TO4 ||
+             adapter->TunnelType == TUNNEL_TYPE_ISATAP))
+            continue;
         InterfaceInfo info;
         info.id = adapter->AdapterName ? adapter->AdapterName : "";
         info.captive_portal = std::any_of(captive.begin(), captive.end(), [&](const auto& id) {
@@ -104,13 +109,25 @@ std::vector<InterfaceInfo> enumerate_interfaces() {
         info.mtu = adapter->Mtu;
         info.up = adapter->OperStatus == IfOperStatusUp;
         info.loopback = adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK;
-        for (auto* item = adapter->FirstUnicastAddress; item; item = item->Next)
+        for (auto* item = adapter->FirstUnicastAddress; item; item = item->Next) {
+            if (item->DadState == IpDadStateInvalid || item->DadState == IpDadStateTentative ||
+                item->DadState == IpDadStateDuplicate)
+                continue;
             append(info.addresses, numeric_address(item->Address.lpSockaddr, info.index6));
+        }
         for (auto* item = adapter->FirstDnsServerAddress; item; item = item->Next)
             append(info.dns_servers, numeric_address(item->Address.lpSockaddr, info.index6));
         for (auto* item = adapter->FirstGatewayAddress; item; item = item->Next)
             append(info.gateways, numeric_address(item->Address.lpSockaddr, info.index6));
         std::sort(info.addresses.begin(), info.addresses.end());
+        if (!info.up) {
+            info.captive_portal = false;
+            info.metric4 = 0;
+            info.metric6 = 0;
+            info.mtu = 0;
+            info.addresses.clear();
+            info.gateways.clear();
+        }
         interfaces.push_back(std::move(info));
     }
     return interfaces;

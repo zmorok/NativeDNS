@@ -116,7 +116,8 @@ struct Snapshot {
             value = {}; value.Version = DNS_INTERFACE_SETTINGS_VERSION3;
             status = api->get(id, reinterpret_cast<DNS_INTERFACE_SETTINGS*>(&value));
         }
-        if (status == ERROR_INVALID_PARAMETER || status == ERROR_NOT_SUPPORTED)
+        if (status == ERROR_INVALID_PARAMETER || status == ERROR_NOT_SUPPORTED ||
+            status == ERROR_FILE_NOT_FOUND)
             throw Error("DNS_PREPARATION_UNAVAILABLE", "This Windows interface does not expose DNS encryption settings");
         if (status != NO_ERROR) api_error("Cannot inspect interface DNS", status);
         acquired = true;

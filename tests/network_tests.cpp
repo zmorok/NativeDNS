@@ -160,6 +160,34 @@ int main() {
         rules.rules.front().metadata["interface_name"] = "vpn";
         check(nd::evaluate_rule(rules, "example.com", network).route.interface_id == "{vpn}",
               "Imported interface name resolves");
+        {
+            nd::NetworkSnapshot a, b;
+            a.generation = 1;
+            b.generation = 2;
+            nd::InterfaceInfo wifi;
+            wifi.id = "{wifi}";
+            wifi.name = "Wi-Fi \"Home\"";
+            wifi.up = true;
+            wifi.addresses = {"192.0.2.10"};
+            wifi.dns_servers = {"192.0.2.1"};
+            b.interfaces.push_back(wifi);
+            check(nd::describe_network_change(a, b) ==
+                      "Wi-Fi 'Home' (up, 192.0.2.10, dns=192.0.2.1)",
+                  "Added active interface description");
+            check(nd::describe_network_change(b, b) == "resume",
+                  "Identical snapshots report resume invalidation");
+            auto c = b;
+            c.interfaces.front().up = false;
+            c.interfaces.front().addresses.clear();
+            check(nd::describe_network_change(b, c) == "Wi-Fi 'Home' (down)",
+                  "Disconnected interface reports down");
+            auto d = c;
+            d.interfaces.front().mtu = 1400;
+            check(nd::describe_network_change(c, d) == "none",
+                  "Down-only metadata churn reports none");
+            check(nd::describe_network_change(b, a) == "Wi-Fi 'Home' (removed)",
+                  "Removed active interface reports removed");
+        }
         std::cout << "Network snapshot tests passed\n";
         return 0;
     } catch (const std::exception& error) {

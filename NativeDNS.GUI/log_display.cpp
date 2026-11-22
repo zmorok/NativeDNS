@@ -57,7 +57,14 @@ Presentation present(const LogRecord& record) {
     if (timeout >= 0)
         p.briefFailure = p.failure.mid(timeout);
     if (record.code == "NETWORK_CHANGED") {
-        p.summary = uiText("Network interfaces updated");
+        static const QRegularExpression changedPattern("changed=\"([^\"]+)\"");
+        const auto changed = capture(record.message, changedPattern);
+        if (!changed.isEmpty() && changed != "none") {
+            p.summary = uiText("Network interfaces updated") + ": " + changed;
+            p.server = changed;
+        } else {
+            p.summary = uiText("Network interfaces updated");
+        }
     } else if (record.code == "CORE_STARTED") {
         p.summary = uiText("CoreHost is running");
     } else if (p.server.isEmpty()) {
@@ -86,7 +93,8 @@ QString detailsText(const LogRecord& record, const Presentation& p) {
     if (!p.action.isEmpty())
         lines << uiText("Action") + ": " + p.action;
     if (!p.server.isEmpty())
-        lines << uiText("DNS server") + ": " + p.server;
+        lines << uiText(record.code == "NETWORK_CHANGED" ? "Changed interfaces" : "DNS server") +
+                     ": " + p.server;
     if (!record.rule.isEmpty())
         lines << uiText("Rule") + ": " + record.rule;
     if (!p.duration.isEmpty())
