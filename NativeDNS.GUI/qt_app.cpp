@@ -105,6 +105,7 @@ QMessageBox* coreControlFailureDialog(QWidget* parent, const QString& details) {
                                    parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setTextFormat(Qt::PlainText);
+    dialog->setWindowFlag(Qt::WindowStaysOnTopHint, true);
     dialog->setInformativeText(
         uiText("Core control is unavailable. Terminate NativeDNS and CoreHost, or close this "
                "window to keep waiting for recovery.") +
@@ -118,6 +119,16 @@ QMessageBox* coreControlFailureDialog(QWidget* parent, const QString& details) {
     dialog->setEscapeButton(close);
     dialog->setWindowModality(Qt::NonModal);
     return dialog;
+}
+
+void showCriticalAlert(QWidget* parent, const QString& title, const QString& text) {
+    QMessageBox dialog(QMessageBox::Critical, title, text, QMessageBox::Ok, parent);
+    dialog.setTextFormat(Qt::PlainText);
+    dialog.setWindowFlag(Qt::WindowStaysOnTopHint, true);
+    dialog.show();
+    activateApplicationWindow(dialog);
+    QApplication::alert(&dialog);
+    dialog.exec();
 }
 
 struct NetworkProbeSnapshot {
@@ -1947,7 +1958,7 @@ void NativeDnsWindow::buildUi() {
             autostart->setProperty("uiTextKey", "Autostart");
             autostart->setToolTip(QString());
         } catch (const std::exception& e) {
-            QMessageBox::critical(this, "Autostart", e.what());
+            showCriticalAlert(this, "Autostart", e.what());
             QSignalBlocker blocker(autostart);
             autostart->setChecked(!enabled);
         }
@@ -2007,7 +2018,7 @@ void NativeDnsWindow::loadConfiguration() {
                            "unreadable file will be archived without overwriting the backup."));
             config_ = answer == QMessageBox::Yes ? *backupConfig : nd::default_config();
         } else {
-            QMessageBox::critical(
+            showCriticalAlert(
                 this,
                 uiText("Configuration"),
                 q(e.what()) + "\n\n" +
@@ -2017,7 +2028,7 @@ void NativeDnsWindow::loadConfiguration() {
         try {
             (void)nd::save_config_replacing_corrupt(config_, path);
         } catch (const std::exception& recoverError) {
-            QMessageBox::critical(this, uiText("Configuration"), recoverError.what());
+            showCriticalAlert(this, uiText("Configuration"), recoverError.what());
         }
     }
 }
@@ -2027,7 +2038,7 @@ bool NativeDnsWindow::saveConfiguration() {
         nd::save_config(config_, configPath());
         return true;
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, uiText("Configuration"), e.what());
+        showCriticalAlert(this, uiText("Configuration"), e.what());
         return false;
     }
 }
@@ -2048,7 +2059,7 @@ bool NativeDnsWindow::applyConfiguration() {
                 appendLocalLog(uiText("Archived unreadable configuration to: ") + qPath(archived),
                                true);
         } catch (const std::exception& error) {
-            QMessageBox::critical(this, uiText("Configuration"), error.what());
+            showCriticalAlert(this, uiText("Configuration"), error.what());
             return false;
         }
     } else if (!saveConfiguration()) {
@@ -2067,7 +2078,7 @@ bool NativeDnsWindow::applyConfiguration() {
             nd::save_config(*previous, configPath());
             config_ = *previous;
         } catch (const std::exception& error) {
-            QMessageBox::critical(this, uiText("Configuration"), error.what());
+            showCriticalAlert(this, uiText("Configuration"), error.what());
         }
     }
     syncConfigurationActions();
@@ -2117,7 +2128,7 @@ bool NativeDnsWindow::restartCore() {
     }
     reloadRejected_ = true;
     appendLocalLog(uiText("DNS configuration reload failed: ") + outcome->error, true);
-    QMessageBox::critical(this, "NativeDNS", outcome->error);
+    showCriticalAlert(this, "NativeDNS", outcome->error);
     return false;
 }
 void NativeDnsWindow::requestCoreRestart() {
@@ -2262,7 +2273,7 @@ void NativeDnsWindow::importConfiguration() {
             QMessageBox::information(this, "NativeDNS", uiText(configurationConfirmed_
                 ? "Configuration imported." : "Configuration saved; CoreHost confirmation is pending."));
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, uiText("Import"), e.what());
+        showCriticalAlert(this, uiText("Import"), e.what());
     }
 }
 void NativeDnsWindow::exportConfiguration() {
@@ -2273,7 +2284,7 @@ void NativeDnsWindow::exportConfiguration() {
     try {
         nd::save_config(config_, fsPath(file));
     } catch (const std::exception& e) {
-        QMessageBox::critical(this, uiText("Export"), e.what());
+        showCriticalAlert(this, uiText("Export"), e.what());
     }
 }
 
@@ -2443,7 +2454,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                         self->setStatusText(uiText("Core: stopped"), true);
                         self->appendLocalLog(uiText("Core startup failed: ") + failure, true);
                         if (reportFailure)
-                            QMessageBox::critical(self, "NativeDNS", failure);
+                            showCriticalAlert(self, "NativeDNS", failure);
                         return;
                     }
                     if (scheduledDebug)
@@ -2547,7 +2558,7 @@ bool NativeDnsWindow::shutdownCoreForExit() {
 }
 
 void NativeDnsWindow::showCoreControlFailure(const QString& details) {
-    if (exiting_ || coreControlErrorLogged_)
+    if (exiting_ || coreControlErrorLogged_ || coreControlDialog_)
         return;
     coreControlErrorLogged_ = true;
     appendLocalLog(uiText("Connection to CoreHost was lost.") + " " + details, true);
@@ -2562,9 +2573,12 @@ void NativeDnsWindow::showCoreControlFailure(const QString& details) {
         if (button->objectName() == "terminateApplication")
             exitApplication(true);
     });
+    connect(dialog, &QObject::destroyed, this, [this] {
+        if (coreHealthyTimer_.isValid() && coreHealthyTimer_.elapsed() >= 30000)
+            coreControlErrorLogged_ = false;
+    });
     dialog->show();
-    dialog->raise();
-    dialog->activateWindow();
+    activateApplicationWindow(*dialog);
     QApplication::alert(dialog);
 }
 
@@ -2658,10 +2672,10 @@ void NativeDnsWindow::exitApplication(bool force) {
                     self->logTimer_.start();
                     self->showAndActivate();
                     self->appendLocalLog(failure, true);
-                    QMessageBox::critical(self,
-                                          "NativeDNS",
-                                          uiText("CoreHost could not be terminated.") + "\n\n" +
-                                              failure);
+                    showCriticalAlert(self,
+                                      "NativeDNS",
+                                      uiText("CoreHost could not be terminated.") + "\n\n" +
+                                          failure);
                     return;
                 }
                 self->coreShutdownAttempted_ = true;
@@ -2763,10 +2777,7 @@ void NativeDnsWindow::refreshStatus() {
                     self->lastCoreStatus_ = status;
                     self->lastCoreContact_ =
                         QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
-                    if (!status.startsWith("ERROR")) {
-                        if (self->coreControlDialog_)
-                            self->coreControlDialog_->close();
-                    } else {
+                    if (status.startsWith("ERROR")) {
                         self->showCoreControlFailure(status);
                     }
                     if (status.startsWith("RUNNING")) {
@@ -2774,7 +2785,8 @@ void NativeDnsWindow::refreshStatus() {
                             self->coreHealthyTimer_.start();
                         if (self->coreHealthyTimer_.elapsed() >= 30000) {
                             self->automaticRestarts_ = 0;
-                            self->coreControlErrorLogged_ = false;
+                            if (!self->coreControlDialog_)
+                                self->coreControlErrorLogged_ = false;
                         }
                     } else {
                         self->coreHealthyTimer_.invalidate();
