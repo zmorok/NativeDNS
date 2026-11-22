@@ -95,6 +95,15 @@ constexpr std::array translations{
                 "перехвата пакет может покинуть компьютер."},
     Translation{"Interception unverified", "Перехват не проверен"},
     Translation{"Interception degraded", "Проблема перехвата"},
+    Translation{
+        "Interception degraded: transparent DNS capture or packet delivery reported errors.\nWhat to do: open Diagnostics -> Interception Diagnostics and click \"Run safe interception test\", check for conflicting VPN/firewall software, or click Restart.",
+        "Проблема перехвата: при прозрачном перехвате или отправке DNS-пакетов возникли ошибки.\nЧто делать: откройте «Диагностика → Диагностика перехвата» и нажмите «Проверить перехват», проверьте наличие конфликтующего VPN/фаервола или нажмите «Перезапустить»."},
+    Translation{
+        "Offline: no active external network connection was detected.\nWhat to do: check your network adapter, Wi-Fi/Ethernet, or VPN connection. CoreHost remains running and will resume DNS resolution automatically when connectivity returns.",
+        "Нет сети: активное внешнее сетевое подключение не обнаружено.\nЧто делать: проверьте сетевой адаптер, Wi-Fi/Ethernet или VPN-подключение. CoreHost продолжает работать и автоматически возобновит разрешение DNS после восстановления связи."},
+    Translation{
+        "Core error: DNS interception backend reported an error.\nWhat to do: open Diagnostics -> Interception Diagnostics for details or click Restart.",
+        "Ошибка ядра: модуль перехвата DNS сообщил об ошибке.\nЧто делать: откройте «Диагностика → Диагностика перехвата» для просмотра подробностей или нажмите «Перезапустить»."},
     Translation{"Scheduled CoreHost launch failed: ",
                 "Ошибка запуска CoreHost через планировщик: "},
     Translation{"CoreHost startup or IPC connection timed out.",
@@ -439,6 +448,8 @@ void applyUiTheme(QApplication& application, bool dark) {
                "background-color: #3f4f5f; color: #ffffff; }"
                "QToolBar#mainToolBar QToolButton { min-height: 64px; min-width: 86px; "
                "padding: 2px 7px; }"
+               "QToolTip { background-color: #373739; color: #e8e8e8; border: 1px solid #5d5d60; "
+               "padding: 4px; }"
              : "QMenuBar, QMenu, QToolBar, QToolButton, QStatusBar { color: #202020; }"
                "QMenuBar, QToolBar, QStatusBar { background-color: #f5f5f5; }"
                "QMenu { background-color: #ffffff; }"
@@ -454,5 +465,7 @@ void applyUiTheme(QApplication& application, bool dark) {
                "QTableView::item:hover, QListView::item:hover, QTreeView::item:hover { "
                "background-color: #e5f1fb; color: #202020; }"
                "QToolBar#mainToolBar QToolButton { min-height: 64px; min-width: 86px; "
-               "padding: 2px 7px; }");
+               "padding: 2px 7px; }"
+               "QToolTip { background-color: #ffffff; color: #202020; border: 1px solid #a6adb7; "
+               "padding: 4px; }");
 }

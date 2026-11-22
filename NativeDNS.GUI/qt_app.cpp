@@ -21,15 +21,18 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDateTime>
+#include <QEvent>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFont>
 #include <QFormLayout>
 #include <QHeaderView>
+#include <QHelpEvent>
 #include <QIcon>
 #include <QInputDialog>
 #include <QProcess>
@@ -69,6 +72,7 @@
 #include <QThread>
 #include <QThreadPool>
 #include <QTextDocument>
+#include <QToolTip>
 #include <QUrl>
 #include <thread>
 #include <algorithm>
@@ -1503,6 +1507,7 @@ void NativeDnsWindow::buildUi() {
     log_ = new LogPanel(this, nullptr, diagnosticLogging_);
     setCentralWidget(log_);
     coreStatus_ = new QLabel(uiText("Core: unknown"), this);
+    coreStatus_->installEventFilter(this);
     statusBar()->addPermanentWidget(log_->countLabel(), 1);
     statusBar()->addPermanentWidget(coreStatus_);
 
@@ -1793,12 +1798,18 @@ void NativeDnsWindow::buildUi() {
         QSettings().setValue("ui/darkTheme", false);
         applyUiTheme(*qApp, false);
         setActionIcons(false);
+        if (!coreStatus_->styleSheet().isEmpty())
+            coreStatus_->setStyleSheet("color: #be0000;");
+        refreshStatus();
     });
     connect(dark, &QAction::triggered, this, [this, setActionIcons] {
         darkTheme_ = true;
         QSettings().setValue("ui/darkTheme", true);
         applyUiTheme(*qApp, true);
         setActionIcons(true);
+        if (!coreStatus_->styleSheet().isEmpty())
+            coreStatus_->setStyleSheet("color: #ff6969;");
+        refreshStatus();
     });
 
     connect(newCfg, &QAction::triggered, this, [this] {
@@ -2753,15 +2764,24 @@ void NativeDnsWindow::refreshStatus() {
                     }
                     self->coreLaunchPending_ = false;
                     self->restartWhenNetworkReturns_ = false;
+                    const bool degraded = status.contains("verification=DEGRADED");
+                    const bool isError = status.startsWith("ERROR");
+                    QStringList tips;
+                    if (degraded) {
+                        tips << uiText("Interception degraded: transparent DNS capture or packet delivery reported errors.\nWhat to do: open Diagnostics -> Interception Diagnostics and click \"Run safe interception test\", check for conflicting VPN/firewall software, or click Restart.");
+                    }
+                    if (!available) {
+                        tips << uiText("Offline: no active external network connection was detected.\nWhat to do: check your network adapter, Wi-Fi/Ethernet, or VPN connection. CoreHost remains running and will resume DNS resolution automatically when connectivity returns.");
+                    }
+                    if (isError) {
+                        tips << uiText("Core error: DNS interception backend reported an error.\nWhat to do: open Diagnostics -> Interception Diagnostics for details or click Restart.");
+                    }
                     self->setStatusText(friendlyCoreStatus(status) +
-                                            (status.contains("verification=UNVERIFIED")
-                                                 ? " | " + uiText("Interception unverified")
-                                             : status.contains("verification=DEGRADED")
-                                                 ? " | " + uiText("Interception degraded")
-                                                 : QString{}) +
+                                            (degraded ? " | " + uiText("Interception degraded")
+                                                      : QString{}) +
                                             (available ? QString{} : " | " + uiText("Offline")),
-                                        status.startsWith("ERROR") ||
-                                            status.contains("verification=DEGRADED") || !available);
+                                        isError || degraded || !available,
+                                        tips.join("\n\n"));
                 } else if (processAlive && !self->coreLaunchPending_) {
                     self->coreHealthyTimer_.invalidate();
                     self->setStatusText(uiText("Core: control unavailable"), true);
@@ -2841,12 +2861,30 @@ void NativeDnsWindow::appendLogLines(const QString& payload) {
         logSequence_ = std::max(logSequence_, static_cast<uint64_t>(record.sequence));
     log_->appendRecords(records);
 }
-void NativeDnsWindow::setStatusText(const QString& text, bool error) {
+bool NativeDnsWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == coreStatus_ && !coreStatus_->toolTip().isEmpty()) {
+        if (event->type() == QEvent::Enter) {
+            QToolTip::showText(QCursor::pos(), coreStatus_->toolTip(), coreStatus_);
+        } else if (event->type() == QEvent::Leave) {
+            QToolTip::hideText();
+        } else if (event->type() == QEvent::ToolTip) {
+            auto* help = static_cast<QHelpEvent*>(event);
+            QToolTip::showText(help->globalPos(), coreStatus_->toolTip(), coreStatus_);
+            return true;
+        }
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+void NativeDnsWindow::setStatusText(const QString& text, bool error, const QString& tooltip) {
     coreStatus_->setText(text);
+    coreStatus_->setToolTip(tooltip);
+    const QColor errorColor = darkTheme_ ? QColor(255, 105, 105) : QColor(190, 0, 0);
     auto colors = coreStatus_->palette();
     colors.setColor(QPalette::WindowText,
-                    error ? QColor(190, 0, 0) : palette().color(QPalette::Text));
+                    error ? errorColor : palette().color(QPalette::Text));
     coreStatus_->setPalette(colors);
+    coreStatus_->setStyleSheet(error ? QString("color: %1;").arg(errorColor.name())
+                                     : QString{});
 }
 void NativeDnsWindow::appendLocalLog(const QString& message, bool error) {
     LogRecord record;

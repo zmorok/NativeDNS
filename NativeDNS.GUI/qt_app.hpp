@@ -16,6 +16,7 @@
 class LogPanel;
 class QAction;
 class QCloseEvent;
+class QEvent;
 class UpdateDialog;
 class QMessageBox;
 
@@ -32,6 +33,7 @@ public:
     }
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
 
 private:
@@ -57,7 +59,7 @@ private:
     void showCoreControlFailure(const QString& details);
     void refreshStatus();
     void refreshLogs();
-    void setStatusText(const QString& text, bool error = false);
+    void setStatusText(const QString& text, bool error = false, const QString& tooltip = {});
     void appendLocalLog(const QString& message, bool error = false);
     void appendLogLines(const QString& payload);
     std::filesystem::path configPath() const;
