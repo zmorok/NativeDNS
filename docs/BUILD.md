@@ -217,7 +217,7 @@ failures for configured upstream servers. Bypass, Block, original-resolver route
 and packet/lifecycle traces remain in the full file log. Display filtering does
 not affect capture or routing.
 
-Use **File > Collect diagnostic report...** and enter the affected domain to
+Use **Diagnostics > Collect diagnostic report...** and enter the affected domain to
 collect a report and the latest available logs. Collection also works without
 the GUI or CoreHost running:
 

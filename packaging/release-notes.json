@@ -203,5 +203,115 @@
     "category": "other",
     "en": "Moved certificate, hostname and pin validation to local TLS fixtures. Nightly checks retain live DoH, DoT and DNSCrypt coverage without depending on badssl.com.",
     "ru": "Проверки сертификатов, имён серверов и pin перенесены на локальные TLS-серверы. Ночные проверки сохраняют тестирование внешних DoH, DoT и DNSCrypt без зависимости от badssl.com."
+  },
+  "22484cad84757fb1d03b5136433557c8c0a035df": {
+    "category": "interception_corehost",
+    "en": "Added WinDivert interception verification probes, atomic routing counters, and DNS/WFP competitor inspection. Separated routing configuration identity from runtime logging profiles and added IPC profile/flush operations with a user-directory log fallback.",
+    "ru": "Добавлены проверка перехвата WinDivert, атомарные счётчики маршрутизации и диагностика конкурирующих DNS/WFP-перехватчиков. Разделены идентификатор конфигурации маршрутизации и профиль логирования, добавлены IPC-операции профиля и сброса буфера с резервным каталогом логов."
+  },
+  "bc64fe517f6b629eda4cffbcdde53dbe65cf200c": {
+    "category": "interception_corehost",
+    "en": "Unified scheduled-task and elevation startup for Normal and Debug modes with task validation and hot logging-profile updates without restarting interception. Added the Interception Diagnostics dialog with Russian localization.",
+    "ru": "Объединён запуск CoreHost через планировщик задач и повышение прав для обычного и диагностического режимов с проверкой задачи и сменой профиля логирования без перезапуска перехвата. Добавлено окно диагностики перехвата с русской локализацией."
+  },
+  "8561e3cf6f75fa276cbe8cd3ef4352c4119978e6": {
+    "category": "other",
+    "en": "Improved diagnostic report collection with CoreHost health, bounded log snapshots, credential redaction, and runtime elevation details. Added a console bootstrap for nativednsctl so PowerShell receives output and exit codes.",
+    "ru": "Улучшен сбор диагностических отчётов: добавлены состояние CoreHost, ограниченные снимки журналов, скрытие учётных данных и сведения о правах процесса. Добавлена консольная точка входа nativednsctl для корректного вывода и кодов возврата в PowerShell."
+  },
+  "1447f095b2d9612dc555f72388c13d93255c87e6": {
+    "category": "other",
+    "en": "Removed the scheduled nightly live DNS GitHub Actions workflow.",
+    "ru": "Удалён ночной GitHub Actions workflow для live-тестов DNS."
+  },
+  "3245d7bfaede52b5ca260dee82c470cd1be54d53": {
+    "category": "other",
+    "en": "Removed the scheduled nightly live DNS GitHub Actions workflow.",
+    "ru": "Удалён ночной GitHub Actions workflow для live-тестов DNS."
+  },
+  "b68fbf340e02e8e2bea0f3620e22b46ea7c04524": {
+    "category": "interception_corehost",
+    "en": "Fixed strict weak ordering in fallback resolver sorting and made WinDivert packet injection resilient to transient send errors.",
+    "ru": "Исправлен компаратор сортировки резервных резолверов и повышена устойчивость отправки пакетов WinDivert к временным ошибкам."
+  },
+  "403e9e47230ab3eca5bd702e03fdfb4035c9e774": {
+    "category": "interception_corehost",
+    "en": "Separated NXDOMAIN responses from routing errors and added detailed RCODE, source, and answer/SOA metadata to DNS route logs.",
+    "ru": "Ответы NXDOMAIN отделены от ошибок маршрутизации; в журнал DNS-маршрутов добавлены сведения об RCODE, источнике ответа и записях SOA."
+  },
+  "b2d76873b5e9aa417e5cee4d7c26bd1e67c7dbe9": {
+    "category": "interception_corehost",
+    "en": "Allowed TcpDnsProxy to start in IPv4-only environments and hardened Windows UDP/TCP local proxy and routing error handling.",
+    "ru": "Разрешён запуск TcpDnsProxy в системах только с IPv4 и усилена обработка ошибок в локальном UDP/TCP-прокси и маршрутизации Windows."
+  },
+  "7bb23cdd77135b01514f95f7595f47a57fe98d92": {
+    "category": "interception_corehost",
+    "en": "Added HTTP/2 multiplexing, automatic stale-connection retries, and RFC 8484 Content-Type parsing for DoH and DoT transports.",
+    "ru": "Добавлены мультиплексирование HTTP/2, повторные попытки при устаревших соединениях и разбор заголовка Content-Type по RFC 8484 для DoH и DoT."
+  },
+  "8eb702613daa8f585dfdf74b4708a2372dc49302": {
+    "category": "interception_corehost",
+    "en": "Optimized the DNS hot path with O(1) cache expiration, precompiled rule matching, single-pass packet parsing, faster DNSCrypt cryptography, and buffered file logging.",
+    "ru": "Оптимизирован основной путь обработки DNS: истечение кеша за O(1), предкомпилированные правила, однократный разбор пакета, ускоренная криптография DNSCrypt и буферизованная запись лога в файл."
+  },
+  "31258a9d2101fc3fe319f524139f8afcdca70d34": {
+    "category": "interception_corehost",
+    "en": "Hardened CoreHost concurrency locking and improved TcpDnsProxy idle keep-alive session handling.",
+    "ru": "Усилена синхронизация блокировок CoreHost и улучшена обработка простаивающих keep-alive соединений в TcpDnsProxy."
+  },
+  "361af703e004ab7f91bd8fcd7d6a10351eae8e83": {
+    "category": "other",
+    "en": "Improved Qt GUI responsiveness and lifecycle handling with asynchronous configuration reloads, screen log-level synchronization, safe concurrent DNS server tests, and batched log eviction.",
+    "ru": "Улучшены отзывчивость и жизненный цикл Qt GUI: добавлены асинхронная перезагрузка конфигурации, синхронизация уровня экранного лога, безопасные параллельные проверки DNS-серверов и пакетная очистка буфера журнала."
+  },
+  "e4dddd00e491f113a368b897b27a99ee2bc8cadc": {
+    "category": "other",
+    "en": "Added corrupt-configuration backup and recovery prompts in the GUI, a standalone Windows DNS restore CLI command, and hardened Windows COM property handling.",
+    "ru": "Добавлено восстановление повреждённой конфигурации из резервной копии в GUI, отдельная CLI-команда восстановления DNS Windows и усилена обработка типов свойств Windows COM."
+  },
+  "821eb1502c8ada769d50cbea9706f84b3040672e": {
+    "category": "other",
+    "en": "Hardened YogaDNS XML import validation, added graceful CoreHost shutdown and DNS/autostart cleanup during Inno Setup installation and uninstallation, and improved Windows autostart path checks.",
+    "ru": "Усилена валидация импорта YogaDNS XML, добавлены корректная остановка CoreHost и очистка DNS/автозапуска при установке и удалении через Inno Setup, а также улучшена проверка путей автозапуска Windows."
+  },
+  "40233d17d71e07b31294016d1e7fdc86bb28e32a": {
+    "category": "interception_corehost",
+    "en": "Stabilized Windows network interface monitoring by filtering transient/virtual adapter churn and adding debounce. NETWORK_CHANGED log entries now list the specific interfaces that changed.",
+    "ru": "Стабилизирован мониторинг сетевых интерфейсов Windows за счёт фильтрации фоновых событий виртуальных адаптеров и задержки (debounce). События NETWORK_CHANGED теперь показывают, какие именно интерфейсы изменились."
+  },
+  "364dbb646570653bb6cbdceac1429e6a5406c4e0": {
+    "category": "other",
+    "en": "Moved diagnostic commands and file-logging controls into a dedicated Diagnostics menu, moved Hide to tray into View (removing Window), and added a mutually exclusive None option to Show only commands and Show only errors.",
+    "ru": "Команды диагностики и управления диагностическим файлом вынесены в отдельное меню «Диагностика», пункт «Сворачивать в трей» перенесён в «Вид» (меню «Окно» убрано), а в фильтры команд и ошибок добавлен взаимоисключающий пункт «Нет»."
+  },
+  "6114b9f0d8a60f9ff20db0037d702c15e63b1024": {
+    "category": "other",
+    "en": "Removed the noisy Interception unverified suffix from the status bar and added hover tooltips explaining Interception degraded, Offline, and Core error states with recovery steps.",
+    "ru": "Из строки состояния убрана подпись «Перехват не проверен», а для состояний «Перехват нарушен», «Нет сети» и ошибок ядра добавлены всплывающие подсказки при наведении с пояснениями и рекомендациями."
+  },
+  "f202d63e63486e10ced6f7ee11f06ec84a81787a": {
+    "category": "interception_corehost",
+    "en": "Optimized WinDivert UDP routing by avoiding redundant packet copies and parsing. Cleaned up duplicate protocol labels in logs and refined server editing and configuration reload handling.",
+    "ru": "Оптимизирован путь UDP-маршрутизации WinDivert с устранением лишнего копирования и повторного разбора пакетов. Убрано дублирование названий протоколов в журнале, доработаны диалог серверов и логика перезагрузки конфигурации."
+  },
+  "399cf67ac4753b519a6d7e9fd329b84d85e0e412": {
+    "category": "other",
+    "en": "Update notification dialogs now stay on top of all windows when a newer release is detected.",
+    "ru": "Окно уведомления об обновлении теперь отображается поверх всех окон при обнаружении новой версии."
+  },
+  "0371aada4b26d909c8e9b7a98380a5fa485aa469": {
+    "category": "other",
+    "en": "Error dialogs now appear on top of all windows, and the CoreHost connection-loss alert stays visible until manually dismissed even if the connection recovers.",
+    "ru": "Окна с ошибками теперь открываются поверх всех окон, а предупреждение о потере связи с CoreHost остаётся на экране до закрытия пользователем, даже если связь восстановилась."
+  },
+  "1e68d02f27f134d5a507b196694f547cb8438d50": {
+    "category": "interception_corehost",
+    "en": "CoreHost now automatically repairs outdated Windows autostart registrations on elevated transparent startup. When manual re-application is still needed, the File > Autostart item shows a warning icon and re-applies in one click.",
+    "ru": "CoreHost теперь автоматически обновляет устаревшую регистрацию автозапуска Windows при запуске с правами администратора. Если требуется ручное применение, пункт Файл > Автозапуск отображает предупреждающую иконку и обновляет автозапуск в один клик."
+  },
+  "43cab5602685195d6e6b3ab6c7797d82522914e8": {
+    "category": "other",
+    "en": "Removed the duplicate hover tooltip on expanded log records in Line with details view and added full multi-line text wrapping so long details are no longer truncated.",
+    "ru": "Убрана дублирующая всплывающая подсказка при наведении на раскрытую запись в режиме «Строка с подробностями» и добавлен полный многострочный перенос текста подробностей без обрезки длинных строк."
   }
 }

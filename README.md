@@ -14,16 +14,16 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 Windows packages start through `NativeDNS.exe` (normal) or `NativeDNS.Debug.exe`
 (full diagnostic logging). They share one running instance. Exit before switching
 modes. Internal executables and DLLs are under `app/`; logs and diagnostic ZIPs
-are under `logs/`. Use **File > Collect diagnostic report...** or
+are under `logs/`. Use **Diagnostics > Collect diagnostic report...** or
 `NativeDNS.Debug.exe --collect --host example.com` to collect an issue report.
 See [build and diagnostics](docs/BUILD.md) for details.
 
 ## Download
 
-The Windows release packages for [v0.4.7](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.7):
+The Windows release packages for [v0.4.8](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.8):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.7/NativeDNS-0.4.7-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.7/NativeDNS-0.4.7-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.8/NativeDNS-0.4.8-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.8/NativeDNS-0.4.8-windows-x64-portable.zip)
 
 These release packages require Windows 10 or Windows 11 x64.
 
@@ -73,16 +73,12 @@ record. `Log > Details` controls verbosity independently.
 be selected. All (the default) clears these selections and includes events without a routing action.
 The selection is remembered and combined with the text filter. New records follow the bottom
 immediately when the log is already scrolled to the end; scrolling up pauses this following.
-`Log > Show only commands...` selects Only (technical events such as initialization, reload and
-network changes) or With (technical events alongside the selected DNS actions, the default).
+`Log > Show only commands...` selects None (hides technical events while keeping DNS records subject to the action filter), Only (technical events such as initialization, reload and network changes), or With (technical events alongside the selected DNS actions, the default).
 Only temporarily disables action selection without losing it; With restores its effect.
-Only and With are mutually exclusive. Clicking the active item clears its check mark and hides
-technical events while keeping DNS records subject to the action filter.
-The mode is remembered, including the state with neither item selected. The text filter and
+None, Only and With are mutually exclusive and remembered between launches. The text filter and
 verbosity level continue to apply in every mode.
-`Log > Show only errors...` selects Only (errors only) or With (errors alongside other records,
-the default). Clicking the active item clears its check mark and hides errors. The two items
-are mutually exclusive, and all three states are remembered. Errors remain subject to the
+`Log > Show only errors...` selects None (hides errors), Only (errors only), or With (errors alongside other records,
+the default). The three options are mutually exclusive and remembered between launches. Errors remain subject to the
 action, command and text filters in every mode; With does not add errors excluded by those filters.
 `Help > Check for updates` displays the latest release version and scrollable release notes with commit links.
 Release notes support categories, including packet interception and CoreHost changes separately
