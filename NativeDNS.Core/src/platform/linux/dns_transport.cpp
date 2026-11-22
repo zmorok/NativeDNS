@@ -178,13 +178,17 @@ Packet exchange_network(const Packet& request,
         socket_error("UDP send");
     if (sent != static_cast<ssize_t>(request.size()))
         throw Error("SOCKET", "Incomplete UDP send");
-    Packet response(65535);
-    ready(socket, false, deadline);
-    const ssize_t received = recv(socket, response.data(), response.size(), 0);
-    if (received < 0)
-        socket_error("UDP receive");
-    response.resize(static_cast<size_t>(received));
-    return response;
+    thread_local Packet scratch(65535);
+    for (;;) {
+        ready(socket, false, deadline);
+        const ssize_t received = recv(socket, scratch.data(), scratch.size(), 0);
+        if (received < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+                continue;
+            socket_error("UDP receive");
+        }
+        return Packet(scratch.begin(), scratch.begin() + received);
+    }
 }
 } // namespace detail
 namespace {
@@ -272,6 +276,7 @@ private:
         if (selected->connection && Clock::now() - selected->last_used > std::chrono::seconds(30))
             selected->connection.reset();
         for (unsigned attempt = 0; attempt < 2; ++attempt) {
+            const bool reused = selected->connection != nullptr;
             try {
                 if (!selected->connection)
                     selected->connection =
@@ -281,8 +286,10 @@ private:
                 return response;
             } catch (const Error& error) {
                 selected->connection.reset();
-                if (attempt ||
-                    !(error.code == "TIMEOUT" || error.code == "SOCKET" || error.code == "DNS_EOF"))
+                const bool retryable =
+                    error.code == "SOCKET" || error.code == "DNS_EOF" ||
+                    (reused && error.code == "TIMEOUT");
+                if (attempt || !retryable || Clock::now() >= deadline)
                     throw;
             }
         }
@@ -325,7 +332,9 @@ test_server(const Server& server, const std::string& hostname, uint16_t type, Lo
         result.authenticated_data = answer.authenticated_data;
         result.addresses = answer.addresses;
         if (answer.rcode)
-            throw Error("DNS_RCODE", "DNS failure response: RCODE " + std::to_string(answer.rcode));
+            throw Error("DNS_RCODE",
+                        "DNS failure response: RCODE " + std::to_string(answer.rcode) + " (" +
+                            dns_rcode_name(answer.rcode) + ")");
         if (answer.addresses.empty())
             throw Error("DNS_NO_ADDRESS", "DNS response has no matching address answer");
         result.success = true;
