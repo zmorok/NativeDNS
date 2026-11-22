@@ -135,6 +135,22 @@ int main(int argc, char** native_argv) {
             }
         }
 
+        bool autostart_repaired = false;
+#ifdef _WIN32
+        if (transparent) {
+            try {
+                const auto status = nd::autostart_status();
+                if (status.enabled && status.needs_repair) {
+                    nd::enable_autostart(nd::platform::executable_path(),
+                                         config_path,
+                                         nd::platform::gui_entrypoint());
+                    autostart_repaired = true;
+                }
+            } catch (...) {
+            }
+        }
+#endif
+
         for (;;) {
             auto config = nd::load_config(config_path);
             // Outlive CoreHost and its file/transport destructors as well as stop().
@@ -147,6 +163,12 @@ int main(int argc, char** native_argv) {
                                           : nd::InterceptionMode::local_proxy,
                               config_path,
                               diagnostic_logging);
+            if (autostart_repaired) {
+                host.logger().write(nd::Level::normal,
+                                    "AUTOSTART_REPAIRED",
+                                    "Updated autostart registration to the current application path");
+                autostart_repaired = false;
+            }
             // Windows enforces the deadline independently of backend/IPC locks.
             shutdown_deadline = nd::platform::watch_shutdown_deadline(
                 [signal = host.shutdown_signal()] { return signal->load(); });

@@ -2,8 +2,13 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QMenu>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPalette>
+#include <QProxyStyle>
 #include <QStyleFactory>
+#include <QStyleOptionMenuItem>
 #include <array>
 
 namespace {
@@ -304,7 +309,10 @@ constexpr std::array translations{
     Translation{"Export Configuration", "Экспорт конфигурации"},
     Translation{"Autostart", "Автозапуск"},
     Translation{"Exit", "Выход"},
-    Translation{"Autostart (repair required)", "Автозапуск (требуется исправление)"},
+    Translation{"Autostart (reselect to apply)", "Автозапуск (выберите повторно для применения)"},
+    Translation{
+        "Autostart registration is outdated. Click Autostart to apply the current application path.",
+        "Регистрация автозапуска устарела. Нажмите «Автозапуск», чтобы применить текущий путь приложения."},
     Translation{"&Configuration", "&Конфигурация"},
     Translation{"&Advanced", "&Дополнительно"},
     Translation{"Additional modules will appear here", "Здесь появятся дополнительные модули"},
@@ -411,6 +419,69 @@ constexpr std::array translations{
     Translation{"UDP", "UDP"},
     Translation{"TCP", "TCP"},
     Translation{"Anonymized DNSCrypt", "Анонимизированный DNSCrypt"}};
+class NativeDnsStyle final : public QProxyStyle {
+public:
+    NativeDnsStyle() : QProxyStyle(QStyleFactory::create("Fusion")) {
+    }
+
+    QSize sizeFromContents(ContentsType type,
+                           const QStyleOption* option,
+                           const QSize& size,
+                           const QWidget* widget) const override {
+        auto result = QProxyStyle::sizeFromContents(type, option, size, widget);
+        if (type == CT_MenuItem && hasMenuWarning(option, widget))
+            result.rwidth() += 24;
+        return result;
+    }
+
+    void drawControl(ControlElement element,
+                     const QStyleOption* option,
+                     QPainter* painter,
+                     const QWidget* widget) const override {
+        QProxyStyle::drawControl(element, option, painter, widget);
+        if (element != CE_MenuItem || !hasMenuWarning(option, widget))
+            return;
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const QRectF r(option->rect.right() - 22.0, option->rect.center().y() - 7.5, 15.0, 15.0);
+        QPainterPath triangle;
+        triangle.moveTo(r.center().x(), r.top() + 1.0);
+        triangle.lineTo(r.right() - 1.0, r.bottom() - 1.0);
+        triangle.lineTo(r.left() + 1.0, r.bottom() - 1.0);
+        triangle.closeSubpath();
+        painter->setPen(QPen(QColor(140, 95, 0), 1.1, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setBrush(QColor(245, 184, 0));
+        painter->drawPath(triangle);
+
+        const QColor markColor(32, 24, 0);
+        painter->setPen(QPen(markColor, 1.6, Qt::SolidLine, Qt::RoundCap));
+        painter->drawLine(QPointF(r.center().x(), r.top() + 5.2),
+                          QPointF(r.center().x(), r.top() + 9.6));
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(markColor);
+        painter->drawEllipse(QPointF(r.center().x(), r.top() + 12.1), 0.9, 0.9);
+        painter->restore();
+    }
+
+private:
+    static bool hasMenuWarning(const QStyleOption* option, const QWidget* widget) {
+        const auto* menu = qobject_cast<const QMenu*>(widget);
+        const auto* menuItem = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
+        if (!menu || !menuItem || menuItem->menuItemType != QStyleOptionMenuItem::Normal)
+            return false;
+        const QAction* action = menu->actionAt(option->rect.center());
+        if (!action) {
+            for (const auto* candidate : menu->actions()) {
+                if (!candidate->isSeparator() && candidate->text() == menuItem->text) {
+                    action = candidate;
+                    break;
+                }
+            }
+        }
+        return action && action->property("warningIcon").toBool();
+    }
+};
 } // namespace
 
 UiLanguage uiLanguage() {
@@ -430,7 +501,7 @@ QString uiText(const char* english) {
 }
 
 void applyUiTheme(QApplication& application, bool dark) {
-    application.setStyle(QStyleFactory::create("Fusion"));
+    application.setStyle(new NativeDnsStyle());
     application.setPalette(dark ? darkPalette() : lightPalette());
     application.setStyleSheet(
         dark ? "QMenuBar, QToolBar, QStatusBar { background-color: #252526; color: #e8e8e8; }"

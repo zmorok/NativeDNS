@@ -59,6 +59,7 @@ private:
     void showCoreControlFailure(const QString& details);
     void refreshStatus();
     void refreshLogs();
+    void refreshAutostartAction();
     void setStatusText(const QString& text, bool error = false, const QString& tooltip = {});
     void appendLocalLog(const QString& message, bool error = false);
     void appendLogLines(const QString& payload);
@@ -70,6 +71,7 @@ private:
     QLabel* coreStatus_ = nullptr;
     QSystemTrayIcon* tray_ = nullptr;
     QAction* hideToTrayAction_ = nullptr;
+    QAction* autostartAction_ = nullptr;
     QAction* prepareSystemDnsAction_ = nullptr;
     QPointer<UpdateDialog> updateDialog_;
     QPointer<QMessageBox> coreControlDialog_;
@@ -79,6 +81,7 @@ private:
     QString networkSignature_;
     uint64_t logSequence_ = 0;
     bool exiting_ = false;
+    bool autostartNeedsRepair_ = false;
     bool hideToTray_ = true;
     bool darkTheme_ = false;
     bool trayAvailable_ = false;

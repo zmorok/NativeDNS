@@ -1582,6 +1582,8 @@ void NativeDnsWindow::buildUi() {
     file->addSeparator();
     auto* autostart = addAction(file, "Autostart");
     autostart->setCheckable(true);
+    autostartAction_ = autostart;
+    connect(file, &QMenu::aboutToShow, this, [this] { refreshAutostartAction(); });
     file->addSeparator();
     auto* exit = addAction(file, "Exit");
 
@@ -1924,6 +1926,7 @@ void NativeDnsWindow::buildUi() {
     });
 
     connect(autostart, &QAction::toggled, this, [this, autostart](bool enabled) {
+        const bool applyEnabled = autostartNeedsRepair_ ? true : enabled;
         try {
 #ifdef _WIN32
             // Registering a highest-privilege Scheduled Task requires elevation.
@@ -1935,7 +1938,7 @@ void NativeDnsWindow::buildUi() {
                 throw std::runtime_error("NativeDNS.CoreHost.exe is missing");
 
             QStringList args;
-            if (enabled)
+            if (applyEnabled)
                 args << "--register-autostart" << qPath(configPath()) << "--gui-executable"
                      << qPath(nd::platform::gui_entrypoint());
             else
@@ -1952,33 +1955,42 @@ void NativeDnsWindow::buildUi() {
         // Linux autostart is a user-level desktop entry. Transparent CoreHost
         // elevation still happens separately through pkexec when Core starts.
         const auto executable=fsPath(QCoreApplication::applicationFilePath());
-        if(enabled)nd::enable_autostart(executable,configPath());else nd::disable_autostart();
+        if(applyEnabled)nd::enable_autostart(executable,configPath());else nd::disable_autostart();
 #endif
-            autostart->setText(uiText("Autostart"));
-            autostart->setProperty("uiTextKey", "Autostart");
-            autostart->setToolTip(QString());
+            refreshAutostartAction();
         } catch (const std::exception& e) {
             showCriticalAlert(this, "Autostart", e.what());
-            QSignalBlocker blocker(autostart);
-            autostart->setChecked(!enabled);
+            refreshAutostartAction();
         }
     });
+    refreshAutostartAction();
+}
+
+void NativeDnsWindow::refreshAutostartAction() {
+    if (!autostartAction_)
+        return;
     try {
-        QSignalBlocker blocker(autostart);
+        QSignalBlocker blocker(autostartAction_);
         const auto status = nd::autostart_status();
-        autostart->setChecked(status.enabled);
-        if (status.needs_repair) {
-            autostart->setText(uiText("Autostart (repair required)"));
-            autostart->setProperty("uiTextKey", "Autostart (repair required)");
-            autostart->setToolTip("Autostart registration is outdated. Turn Autostart off and on "
-                                  "again to repair it.");
-        }
+        autostartNeedsRepair_ = status.enabled && status.needs_repair;
+        autostartAction_->setChecked(status.enabled);
+        const char* key =
+            autostartNeedsRepair_ ? "Autostart (reselect to apply)" : "Autostart";
+        autostartAction_->setText(uiText(key));
+        autostartAction_->setProperty("uiTextKey", key);
+        autostartAction_->setProperty("warningIcon", autostartNeedsRepair_);
+        autostartAction_->setToolTip(
+            autostartNeedsRepair_
+                ? uiText("Autostart registration is outdated. Click Autostart to apply the "
+                         "current application path.")
+                : QString{});
     } catch (...) {
     }
 }
 
 void NativeDnsWindow::retranslateUi() {
     syncConfigurationActions();
+    refreshAutostartAction();
     log_->retranslateUi();
     const auto actions = findChildren<QAction*>();
     for (auto* action : actions) {
@@ -2462,6 +2474,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                             uiText("Debug logging enabled after scheduled startup; early "
                                    "initialization used the task's logging profile."));
                     self->coreLaunchPending_ = !running;
+                    self->refreshAutostartAction();
                     if (running)
                         self->refreshStatus();
                     else {
