@@ -250,7 +250,7 @@ The optional advanced-module/plugin concept is not currently a public stable plu
 
 ## Interception verification and diagnostics
 
-The GUI's File menu contains Interception Diagnostics. It reads mechanism health,
+The GUI's Diagnostics menu contains Interception Diagnostics. It reads mechanism health,
 packet/routing counters, the last active test, logging state, document/runtime IDs
 and potential competing components without flooding the main window. The status
 bar distinguishes a running but unverified interceptor. Read-only inspection does

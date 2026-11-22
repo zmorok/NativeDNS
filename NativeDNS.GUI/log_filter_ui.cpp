@@ -642,7 +642,13 @@ void addLogActionFilterActions(QMenu* menu, LogPanel& panel) {
 }
 void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu) {
     auto* group = new QActionGroup(menu);
-    group->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    group->setExclusive(true);
+    auto* none = menu->addAction(uiText("None"));
+    none->setProperty("uiTextKey", "None");
+    none->setData(static_cast<int>(LogCommandsView::without_commands));
+    none->setCheckable(true);
+    group->addAction(none);
+    menu->addSeparator();
     for (const auto* key : {"Only", "With"}) {
         auto* action = menu->addAction(uiText(key));
         action->setProperty("uiTextKey", QString::fromUtf8(key));
@@ -662,15 +668,20 @@ void addLogCommandFilterActions(QMenu* menu, LogPanel& panel, QMenu* actionMenu)
     QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
     for (auto* action : group->actions())
         QObject::connect(
-            action, &QAction::triggered, &panel, [&panel, action, refresh](bool checked) {
-                panel.setCommandsView(checked ? static_cast<LogCommandsView>(action->data().toInt())
-                                              : LogCommandsView::without_commands);
+            action, &QAction::triggered, &panel, [&panel, action, refresh] {
+                panel.setCommandsView(static_cast<LogCommandsView>(action->data().toInt()));
                 refresh();
             });
 }
 void addLogErrorFilterActions(QMenu* menu, LogPanel& panel) {
     auto* group = new QActionGroup(menu);
-    group->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    group->setExclusive(true);
+    auto* none = menu->addAction(uiText("None"));
+    none->setProperty("uiTextKey", "None");
+    none->setData(static_cast<int>(LogErrorsView::without_errors));
+    none->setCheckable(true);
+    group->addAction(none);
+    menu->addSeparator();
     for (const auto* key : {"Only", "With"}) {
         auto* action = menu->addAction(uiText(key));
         action->setProperty("uiTextKey", QString::fromUtf8(key));
@@ -688,9 +699,8 @@ void addLogErrorFilterActions(QMenu* menu, LogPanel& panel) {
     QObject::connect(menu, &QMenu::aboutToShow, &panel, refresh);
     for (auto* action : group->actions())
         QObject::connect(
-            action, &QAction::triggered, &panel, [&panel, action, refresh](bool checked) {
-                panel.setErrorsView(checked ? static_cast<LogErrorsView>(action->data().toInt())
-                                            : LogErrorsView::without_errors);
+            action, &QAction::triggered, &panel, [&panel, action, refresh] {
+                panel.setErrorsView(static_cast<LogErrorsView>(action->data().toInt()));
                 refresh();
             });
 }

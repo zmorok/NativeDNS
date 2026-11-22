@@ -300,6 +300,7 @@ constexpr std::array translations{
     Translation{"&Advanced", "&Дополнительно"},
     Translation{"Additional modules will appear here", "Здесь появятся дополнительные модули"},
     Translation{"&Log", "&Журнал"},
+    Translation{"&Diagnostics", "&Диагностика"},
     Translation{"Clear Display", "Очистить экран"},
     Translation{"Restart", "Перезапустить"},
     Translation{"Screen", "Экран"},

@@ -1507,49 +1507,9 @@ void NativeDnsWindow::buildUi() {
     statusBar()->addPermanentWidget(coreStatus_);
 
     auto* file = addMenu("&File");
-    auto* interceptionDiagnostics = addAction(file, "Interception Diagnostics");
-    connect(interceptionDiagnostics,
-            &QAction::triggered,
-            this,
-            &NativeDnsWindow::openInterceptionDiagnostics);
     auto* newCfg = addAction(file, "New Configuration");
     auto* import = addAction(file, "Import Configuration");
     auto* exportCfg = addAction(file, "Export Configuration");
-#ifdef _WIN32
-    auto* collectDiagnostics = addAction(file, "Collect diagnostic report...");
-    collectDiagnostics->setObjectName("collectDiagnosticsAction");
-    connect(collectDiagnostics, &QAction::triggered, this, [this, collectDiagnostics] {
-        bool accepted = false;
-        const auto host = QInputDialog::getText(this, uiText("Collect diagnostic report..."),
-            uiText("Domain to test:"), QLineEdit::Normal, q(config_.test_target), &accepted).trimmed();
-        if (!accepted || host.isEmpty()) return;
-        try { (void)nd::normalize_host(s(host)); }
-        catch (const std::exception& error) { QMessageBox::warning(this, "NativeDNS", q(error.what())); return; }
-        auto* process = new QProcess(this);
-        auto* progress = new QProgressDialog(uiText("Collecting diagnostic report..."), QString{}, 0, 0, this);
-        progress->setCancelButton(nullptr); progress->setWindowModality(Qt::WindowModal);
-        progress->setMinimumDuration(0); collectDiagnostics->setEnabled(false);
-        auto finish = [this, process, progress, collectDiagnostics](bool success) {
-            progress->close(); progress->deleteLater(); collectDiagnostics->setEnabled(true);
-            process->deleteLater();
-            if (success) {
-                QString directory = qPath(nd::platform::application_root_directory() / "logs");
-                for (const auto& row :
-                     QString::fromUtf8(process->readAllStandardOutput()).split('\n'))
-                    if (row.startsWith("Archive="))
-                        directory = QFileInfo(row.mid(8).trimmed()).absolutePath();
-                QDesktopServices::openUrl(QUrl::fromLocalFile(directory));
-            } else
-                QMessageBox::warning(
-                    this,
-                    "NativeDNS",
-                    uiText("Diagnostic collection failed. Check the logs folder."));
-        };
-        connect(process, &QProcess::finished, this, [finish](int code, QProcess::ExitStatus status) { finish(code == 0 && status == QProcess::NormalExit); });
-        connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) { if (error == QProcess::FailedToStart) finish(false); });
-        process->start(qPath(nd::platform::gui_entrypoint()), {"--collect", "--quiet", "--host", host, "--config", qPath(configPath())});
-    });
-#endif
     file->addSeparator();
     auto* autostart = addAction(file, "Autostart");
     autostart->setCheckable(true);
@@ -1622,8 +1582,51 @@ void NativeDnsWindow::buildUi() {
     auto* errors = addSubMenu(logMenu, "Show only errors...");
     errors->setObjectName("logErrorsFilterMenu");
     addLogErrorFilterActions(errors, *log_);
-    logMenu->addSeparator();
-    auto* fileEnabled = addAction(logMenu, "Write diagnostic file");
+
+    auto* diagnosticsMenu = addMenu("&Diagnostics");
+    diagnosticsMenu->setObjectName("diagnosticsMenu");
+    auto* interceptionDiagnostics = addAction(diagnosticsMenu, "Interception Diagnostics");
+    connect(interceptionDiagnostics,
+            &QAction::triggered,
+            this,
+            &NativeDnsWindow::openInterceptionDiagnostics);
+#ifdef _WIN32
+    auto* collectDiagnostics = addAction(diagnosticsMenu, "Collect diagnostic report...");
+    collectDiagnostics->setObjectName("collectDiagnosticsAction");
+    connect(collectDiagnostics, &QAction::triggered, this, [this, collectDiagnostics] {
+        bool accepted = false;
+        const auto host = QInputDialog::getText(this, uiText("Collect diagnostic report..."),
+            uiText("Domain to test:"), QLineEdit::Normal, q(config_.test_target), &accepted).trimmed();
+        if (!accepted || host.isEmpty()) return;
+        try { (void)nd::normalize_host(s(host)); }
+        catch (const std::exception& error) { QMessageBox::warning(this, "NativeDNS", q(error.what())); return; }
+        auto* process = new QProcess(this);
+        auto* progress = new QProgressDialog(uiText("Collecting diagnostic report..."), QString{}, 0, 0, this);
+        progress->setCancelButton(nullptr); progress->setWindowModality(Qt::WindowModal);
+        progress->setMinimumDuration(0); collectDiagnostics->setEnabled(false);
+        auto finish = [this, process, progress, collectDiagnostics](bool success) {
+            progress->close(); progress->deleteLater(); collectDiagnostics->setEnabled(true);
+            process->deleteLater();
+            if (success) {
+                QString directory = qPath(nd::platform::application_root_directory() / "logs");
+                for (const auto& row :
+                     QString::fromUtf8(process->readAllStandardOutput()).split('\n'))
+                    if (row.startsWith("Archive="))
+                        directory = QFileInfo(row.mid(8).trimmed()).absolutePath();
+                QDesktopServices::openUrl(QUrl::fromLocalFile(directory));
+            } else
+                QMessageBox::warning(
+                    this,
+                    "NativeDNS",
+                    uiText("Diagnostic collection failed. Check the logs folder."));
+        };
+        connect(process, &QProcess::finished, this, [finish](int code, QProcess::ExitStatus status) { finish(code == 0 && status == QProcess::NormalExit); });
+        connect(process, &QProcess::errorOccurred, this, [finish](QProcess::ProcessError error) { if (error == QProcess::FailedToStart) finish(false); });
+        process->start(qPath(nd::platform::gui_entrypoint()), {"--collect", "--quiet", "--host", host, "--config", qPath(configPath())});
+    });
+#endif
+    diagnosticsMenu->addSeparator();
+    auto* fileEnabled = addAction(diagnosticsMenu, "Write diagnostic file");
     fileEnabled->setCheckable(true);
     fileEnabled->setChecked(diagnosticLogging_ || config_.logging.file_enabled);
     fileEnabled->setEnabled(!diagnosticLogging_);
@@ -1631,7 +1634,7 @@ void NativeDnsWindow::buildUi() {
         config_.logging.file_enabled = enabled;
         applyFileLogging();
     });
-    auto* fileLevel = addSubMenu(logMenu, "File level");
+    auto* fileLevel = addSubMenu(diagnosticsMenu, "File level");
     auto* fileGroup = new QActionGroup(this);
     fileGroup->setExclusive(true);
     const int configuredFileLevel = diagnosticLogging_ ? 3 : std::clamp(static_cast<int>(config_.logging.file), 0, 3);
@@ -1648,8 +1651,8 @@ void NativeDnsWindow::buildUi() {
             applyFileLogging();
         });
     }
-    auto* clearFile = addAction(logMenu, "Clear Diagnostic File");
-    auto* openLogFolder = addAction(logMenu, "Open Log Folder");
+    auto* clearFile = addAction(diagnosticsMenu, "Clear Diagnostic File");
+    auto* openLogFolder = addAction(diagnosticsMenu, "Open Log Folder");
     connect(clearFile, &QAction::triggered, this, [this] {
         try {
             const auto response =
@@ -1669,13 +1672,9 @@ void NativeDnsWindow::buildUi() {
         }
     });
 
-    auto* window = addMenu("&Window");
-    hideToTrayAction_ = addAction(window, "Hide to tray");
-    hideToTrayAction_->setCheckable(true);
     QSettings uiSettings;
     hideToTray_ = uiSettings.value("ui/hideToTray", true).toBool();
     darkTheme_ = uiSettings.value("ui/darkTheme", false).toBool();
-    hideToTrayAction_->setChecked(hideToTray_);
 
     auto* language = addSubMenu(viewMenu, "Language");
     auto* english = addAction(language, "English");
@@ -1699,6 +1698,10 @@ void NativeDnsWindow::buildUi() {
     themeGroup->setExclusive(true);
     themeGroup->addAction(light);
     themeGroup->addAction(dark);
+    viewMenu->addSeparator();
+    hideToTrayAction_ = addAction(viewMenu, "Hide to tray");
+    hideToTrayAction_->setCheckable(true);
+    hideToTrayAction_->setChecked(hideToTray_);
 
     auto* help = addMenu("&Help");
     auto* checkUpdates = addAction(help, "Check for updates");
