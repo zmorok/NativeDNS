@@ -2,7 +2,8 @@
 param(
     [string]$ReleaseRef = 'HEAD',
     [string]$PreviousRef,
-    [string]$OutputPath = 'out/release/update.json'
+    [string]$OutputPath = 'out/release/update.json',
+    [string]$AssetsDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,6 +90,33 @@ foreach ($id in $usedCategories) {
 }
 $categories = @($categories | Where-Object { $usedCategories.Contains($_.id) })
 if ($categories.Count) { $manifest['categories'] = $categories }
+if ($AssetsDirectory) {
+    $assetsRoot = [System.IO.Path]::GetFullPath($AssetsDirectory, $repoRoot)
+    if (-not (Test-Path -LiteralPath $assetsRoot -PathType Container)) {
+        throw "Assets directory does not exist: $assetsRoot"
+    }
+    $assetCandidates = [ordered]@{
+        'windows-x64-executable' = "NativeDNS-$releaseVersion-windows-x64-setup.exe"
+        'windows-x64-portable'   = "NativeDNS-$releaseVersion-windows-x64-portable.zip"
+        'linux-x64-appimage'     = "NativeDNS-$releaseVersion-linux-x64.AppImage"
+        'linux-x64-portable'     = "NativeDNS-$releaseVersion-linux-x64-portable.tar.gz"
+    }
+    $assets = [ordered]@{}
+    foreach ($key in $assetCandidates.Keys) {
+        $fileName = $assetCandidates[$key]
+        $filePath = Join-Path $assetsRoot $fileName
+        if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) { continue }
+        $info = Get-Item -LiteralPath $filePath
+        $sha = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $assets[$key] = [ordered]@{
+            filename = $fileName
+            url      = "https://github.com/zmorok/NativeDNS/releases/download/v$releaseVersion/$fileName"
+            size     = [int64]$info.Length
+            sha256   = $sha
+        }
+    }
+    if ($assets.Count) { $manifest['assets'] = $assets }
+}
 $json = ConvertTo-Json -InputObject $manifest -Depth 6
 $encoding = [System.Text.UTF8Encoding]::new($false)
 if ($encoding.GetByteCount($json) -gt 524288) { throw 'Update manifest exceeds 512 KiB.' }

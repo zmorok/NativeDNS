@@ -1,6 +1,7 @@
 #include "../NativeDNS.GUI/update_checker.hpp"
 #include "../NativeDNS.GUI/ui_preferences.hpp"
 #include <QAction>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -9,6 +10,7 @@
 #include <QMenu>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
@@ -484,6 +486,115 @@ private slots:
                                            (dark ? "/updates-dark.png" : "/updates-light.png")));
             }
         }
+    }
+    void assetValidationAndDownload() {
+        const QByteArray payload("NativeDNS-test-package-bytes-0123456789");
+        const QString sha =
+            QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256)
+                                    .toHex()
+                                    .toLower());
+        const QString ver = "0.4.9";
+        const QString portableFile = "NativeDNS-0.4.9-windows-x64-portable.zip";
+        const QString setupFile = "NativeDNS-0.4.9-windows-x64-setup.exe";
+        const QString base =
+            "https://github.com/zmorok/NativeDNS/releases/download/v" + ver + "/";
+        auto root = QJsonDocument::fromJson(manifest(ver)).object();
+        root["assets"] = QJsonObject{
+            {"windows-x64-portable",
+             QJsonObject{{"filename", portableFile},
+                         {"url", base + portableFile},
+                         {"size", payload.size()},
+                         {"sha256", sha}}},
+            {"windows-x64-executable",
+             QJsonObject{{"filename", setupFile},
+                         {"url", base + setupFile},
+                         {"size", payload.size()},
+                         {"sha256", sha}}}};
+        const QByteArray validJson = QJsonDocument(root).toJson();
+        QString error;
+        const auto parsed = parseReleaseManifest(validJson, error);
+        QVERIFY(parsed.has_value());
+        QCOMPARE(parsed->assets.size(), 2);
+        QCOMPARE(parsed->assets.value("windows-x64-portable").filename, portableFile);
+        QCOMPARE(parsed->assets.value("windows-x64-executable").filename, setupFile);
+
+        // Reject untrusted download host, path traversal, and invalid sha256.
+        {
+            auto bad = root;
+            auto assets = bad["assets"].toObject();
+            auto p = assets["windows-x64-portable"].toObject();
+            p["url"] = "https://evil.example/v0.4.9/" + portableFile;
+            assets["windows-x64-portable"] = p;
+            bad["assets"] = assets;
+            QVERIFY(!parseReleaseManifest(QJsonDocument(bad).toJson(), error).has_value());
+        }
+        {
+            auto bad = root;
+            auto assets = bad["assets"].toObject();
+            auto p = assets["windows-x64-portable"].toObject();
+            p["filename"] = "../escape.zip";
+            p["url"] = base + "../escape.zip";
+            assets["windows-x64-portable"] = p;
+            bad["assets"] = assets;
+            QVERIFY(!parseReleaseManifest(QJsonDocument(bad).toJson(), error).has_value());
+        }
+        {
+            auto bad = root;
+            auto assets = bad["assets"].toObject();
+            auto p = assets["windows-x64-portable"].toObject();
+            p["sha256"] = "not-a-sha";
+            assets["windows-x64-portable"] = p;
+            bad["assets"] = assets;
+            QVERIFY(!parseReleaseManifest(QJsonDocument(bad).toJson(), error).has_value());
+        }
+
+        // Test successful download + SHA-256 verification + install handler invocation.
+        QTemporaryDir dlDir;
+        QVERIFY(dlDir.isValid());
+        StubNetwork network;
+        UpdateDialog dialog("0.4.8", nullptr, &network);
+        dialog.setDistributionKind(nd::platform::DistributionKind::portable);
+        dialog.setDownloadDirectory(dlDir.path());
+        QString handedAssetFile;
+        QString handedPath;
+        dialog.setInstallHandler(
+            [&](const ReleaseAsset& asset, const QString& path, QString&) {
+                handedAssetFile = asset.filename;
+                handedPath = path;
+                return true;
+            });
+        dialog.check();
+        network.last->complete(validJson);
+        auto* installBtn = dialog.findChild<QPushButton*>("installUpdate");
+        QVERIFY(installBtn && !installBtn->isHidden() && installBtn->isEnabled());
+        installBtn->click();
+        QCOMPARE(network.requests, 2);
+        QCOMPARE(network.request.url(), QUrl(base + portableFile));
+        QVERIFY(dialog.findChild<QLabel*>("downloadFileLabel")->text().contains(portableFile));
+        network.last->complete(payload);
+        QCOMPARE(handedAssetFile, portableFile);
+        QVERIFY(QFile::exists(handedPath));
+        QCOMPARE(dialog.findChild<QProgressBar*>("downloadProgress")->value(), 100);
+
+        // Test SHA-256 mismatch rejects payload and cleans up .part file.
+        handedPath.clear();
+        dialog.setDistributionKind(nd::platform::DistributionKind::executable);
+        installBtn->click();
+        QCOMPARE(network.request.url(), QUrl(base + setupFile));
+        QByteArray corrupted = payload;
+        corrupted[0] = 'X';
+        network.last->complete(corrupted);
+        QVERIFY(handedPath.isEmpty());
+        QVERIFY(dialog.findChild<QLabel*>("updateStatus")->text().contains("SHA-256"));
+        QVERIFY(!QFile::exists(dlDir.path() + "/v0.4.9/" + setupFile + ".part"));
+
+        // Test cancellation aborts download and removes .part file.
+        installBtn->click();
+        auto* activeReply = network.last.data();
+        dialog.findChild<QPushButton*>("cancelDownload")->click();
+        QVERIFY(activeReply->aborted);
+        QVERIFY(!QFile::exists(dlDir.path() + "/v0.4.9/" + setupFile + ".part"));
+        QVERIFY(dialog.findChild<QLabel*>("updateStatus")->text().contains("canceled"));
     }
 
 private:
