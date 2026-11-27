@@ -696,9 +696,8 @@ void UpdateDialog::updateDownloadProgress() {
 
     const qint64 elapsedMs = std::max<qint64>(1, downloadTimer_.elapsed());
     const double bytesPerSec = (static_cast<double>(downloadedBytes_) * 1000.0) / elapsedMs;
-    QString stats = QString("%1%  •  %2 / %3")
-                        .arg(percent)
-                        .arg(formatByteSize(downloadedBytes_), formatByteSize(total));
+    QString stats =
+        QString("%1 / %2").arg(formatByteSize(downloadedBytes_), formatByteSize(total));
     if (downloadedBytes_ > 0) {
         stats += "  •  " + formatTransferSpeed(bytesPerSec);
         if (bytesPerSec > 1.0 && total > downloadedBytes_) {

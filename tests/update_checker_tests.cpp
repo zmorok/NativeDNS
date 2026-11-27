@@ -75,8 +75,12 @@ public:
             emit finished();
         }
     }
+    void pushChunk(const QByteArray& chunk) {
+        payload_.append(chunk);
+        emit readyRead();
+    }
     void complete(const QByteArray& data, int status = 200, NetworkError error = NoError) {
-        payload_ = data;
+        payload_.append(data);
         setAttribute(QNetworkRequest::HttpStatusCodeAttribute, status);
         if (error != NoError)
             setError(error, "Connection failed");
@@ -571,7 +575,11 @@ private slots:
         QCOMPARE(network.requests, 2);
         QCOMPARE(network.request.url(), QUrl(base + portableFile));
         QVERIFY(dialog.findChild<QLabel*>("downloadFileLabel")->text().contains(portableFile));
-        network.last->complete(payload);
+        network.last->pushChunk(payload.left(10));
+        const QString midStats = dialog.findChild<QLabel*>("downloadStats")->text();
+        QVERIFY(midStats.contains("10 B /"));
+        QVERIFY(!midStats.contains('%'));
+        network.last->complete(payload.mid(10));
         QCOMPARE(handedAssetFile, portableFile);
         QVERIFY(QFile::exists(handedPath));
         QCOMPARE(dialog.findChild<QProgressBar*>("downloadProgress")->value(), 100);
