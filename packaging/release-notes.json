@@ -313,5 +313,80 @@
     "category": "other",
     "en": "Removed the duplicate hover tooltip on expanded log records in Line with details view and added full multi-line text wrapping so long details are no longer truncated.",
     "ru": "Убрана дублирующая всплывающая подсказка при наведении на раскрытую запись в режиме «Строка с подробностями» и добавлен полный многострочный перенос текста подробностей без обрезки длинных строк."
+  },
+  "55273232aac9b7ba9035c278140c3cca15f2f6f2": {
+    "category": "interception_corehost",
+    "en": "Synchronized Linux DNS transport RCODE error naming and UDP/TCP retry handling with Windows.",
+    "ru": "Синхронизированы именование ошибок RCODE и обработка повторных попыток UDP/TCP в DNS-транспорте Linux с реализацией для Windows."
+  },
+  "49d745f8982bd17bad6fd5d2f4a1bbbd64b7b19e": {
+    "category": "interception_corehost",
+    "en": "Replaced heuristic sleep detection with true OS suspend/resume detection (boottime vs active clock and Windows power notifications) and isolated CoreHost thread priorities to avoid false resets under heavy CPU load.",
+    "ru": "Эвристическое определение сна заменено на настоящее отслеживание сна/пробуждения ОС (сравнение системных часов и уведомления питания Windows), а приоритеты потоков CoreHost изолированы для исключения ложных сбросов под высокой нагрузкой на CPU."
+  },
+  "63687895ce8d2326fd079d12ea2e972212753332": {
+    "category": "interception_corehost",
+    "en": "Prevented unnecessary network context resets on cosmetic adapter metadata changes, debounced CoreHost maintenance, and hardened DoH and query coalescing under heavy load.",
+    "ru": "Исключены лишние сбросы сетевого контекста при косметических изменениях метаданных адаптеров, добавлена задержка обслуживания CoreHost и усилена стабильность DoH и объединения одинаковых запросов под нагрузкой."
+  },
+  "be8babc9f4b5c3ba1f4cc0b5723061f1b2705bec": {
+    "category": "interception_corehost",
+    "en": "Added measured suspend duration to NETWORK_CHANGED log entries and expanded suspend and routing-diff test coverage.",
+    "ru": "В записи NETWORK_CHANGED добавлено измеренное время сна системы и расширены тесты определения сна и сравнения маршрутов."
+  },
+  "6d77ad7f40ba5425b38abe72b99722a56233cca9": {
+    "category": "other",
+    "en": "Update notification dialogs are now brought to the foreground without being pinned always-on-top.",
+    "ru": "Окно уведомления об обновлении теперь выводится на передний план без закрепления поверх всех окон."
+  },
+  "bf36fc4ce809a45c0886ae34756d330cc545adb9": {
+    "category": "other",
+    "en": "Added Portable vs Executable distribution detection and displayed the installation type in the About dialog.",
+    "ru": "Добавлено определение типа сборки (Portable / Executable) с отображением в окне «О программе»."
+  },
+  "c1990290e8f37c70bb046879d27e124c59302400": {
+    "category": "other",
+    "en": "Unified Windows executables into a single NativeDNS.exe entry point with internal modules organized under bin/.",
+    "ru": "Точка входа Windows объединена в единый файл NativeDNS.exe с размещением внутренних модулей в папке bin/."
+  },
+  "2b1d4bf55d4daf4f1b456e3cea98162f4da67512": {
+    "category": "other",
+    "en": "Extended update.json with release asset metadata and added an in-app update download progress UI with SHA-256 verification.",
+    "ru": "Манифест update.json дополнен метаданными файлов релиза, а в окно обновлений добавлена встроенная загрузка с индикатором прогресса и проверкой SHA-256."
+  },
+  "ac60772091bf4391e710fc4a8e687ac132f9947f": {
+    "category": "other",
+    "en": "Added a standalone static Win32 Updater.exe and integrated automatic in-app updates for both Portable and Executable Windows distributions.",
+    "ru": "Добавлен автономный статический Updater.exe и реализовано автоматическое обновление из приложения для версий Portable и Executable на Windows."
+  },
+  "3b97a1abd226c948342c7b3398e3b7bd0a26e8f4": {
+    "category": "other",
+    "en": "Removed duplicate percentage text from the update download status label.",
+    "ru": "Убрано дублирование процентов в строке состояния загрузки обновления."
+  },
+  "3957ee985fe9fb97023202117a0a40f3773a30ff": {
+    "category": "interception_corehost",
+    "en": "Added Server Pools (Redundancy with periodic RTT monitoring and automatic failover, and Load Balancing with random server selection and failover), pool status IPC, and strict single-server routing for individual server rules.",
+    "ru": "Добавлены пулы серверов (Redundancy с фоновым мониторингом RTT и отказоустойчивостью, Load Balancing со случайным выбором и failover), IPC-статус пулов и строгая привязка одиночных DNS-серверов в правилах без автоматического переключения."
+  },
+  "d2f8d3fbbf2f3d4d1cc8b4846c603da86d032395": {
+    "category": "other",
+    "en": "Added the Server Pools dialog with drag-and-drop and live RTT indicators, a scrollable auto-widening Rules dropdown (P| / S| prefixes), and in-place validation with red borders across editor dialogs.",
+    "ru": "Добавлено окно Server Pools с перетаскиванием серверов и живой индикацией RTT, прокручиваемый выпадающий список серверов в Rules с префиксами P| / S| и авторасширением ширины, а также валидация с красной рамкой без закрытия окон редактирования."
+  },
+  "143d7bae252fa7f77a3eb317f19f4e45807d1e63": {
+    "category": "other",
+    "en": "Displayed P| <pool> -> <server> in log summaries and table rows, and fixed text contrast when hovering selected expanded log details.",
+    "ru": "В строке и таблице журнала теперь отображается используемый пул в формате P| <пул> -> <сервер>, а также исправлен контраст текста при наведении на выделенные раскрытые подробности."
+  },
+  "ede6b6609f12088df4dfa535ee5ae24eff2a0383": {
+    "category": "other",
+    "en": "Fixed a startup status polling race that could briefly flash Core: stopped while CoreHost was starting.",
+    "ru": "Исправлена гонка опроса статуса при старте, из-за которой в строке состояния могло кратковременно проскакивать Core: stopped."
+  },
+  "c4678c5055a9edb8673c444647e0da814d5c1c95": {
+    "category": "interception_corehost",
+    "en": "Fixed Linux Clang compilation for SuspendResumeSubscription, guarded a Windows-only distribution test, and hardened pool monitor notifications.",
+    "ru": "Исправлена сборка под Linux Clang для SuspendResumeSubscription, проверка Windows-установщика ограничена платформой Windows и усилена синхронизация уведомлений монитора пулов."
   }
 }

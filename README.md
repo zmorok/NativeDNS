@@ -11,19 +11,21 @@ NativeDNS.GUI    Qt 6 Widgets desktop application
 
 `NativeDNS.Core` does not depend on Qt.
 
-Windows packages start through `NativeDNS.exe` (normal) or `NativeDNS.Debug.exe`
-(full diagnostic logging). They share one running instance. Exit before switching
-modes. Internal executables and DLLs are under `app/`; logs and diagnostic ZIPs
-are under `logs/`. Use **Diagnostics > Collect diagnostic report...** or
-`NativeDNS.Debug.exe --collect --host example.com` to collect an issue report.
+Windows packages start through a single `NativeDNS.exe` entry point (normal GUI,
+`--diagnostics` for full diagnostic logging, `--cli` for CLI tools, `--collect`
+for diagnostic reports). Normal and diagnostic modes share one running instance;
+exit before switching modes. Internal runtime modules and DLLs are under `bin/`,
+`Updater.exe` handles in-app updates, and logs and diagnostic ZIPs are under
+`logs/`. Use **Diagnostics > Collect diagnostic report...** or
+`NativeDNS.exe --collect --host example.com` to collect an issue report.
 See [build and diagnostics](docs/BUILD.md) for details.
 
 ## Download
 
-The Windows release packages for [v0.4.8](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.8):
+The Windows release packages for [v0.4.9](https://github.com/zmorok/NativeDNS/releases/tag/v0.4.9):
 
-- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.8/NativeDNS-0.4.8-windows-x64-setup.exe)
-- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.8/NativeDNS-0.4.8-windows-x64-portable.zip)
+- [Windows x64 installer](https://github.com/zmorok/NativeDNS/releases/download/v0.4.9/NativeDNS-0.4.9-windows-x64-setup.exe)
+- [Windows x64 portable ZIP](https://github.com/zmorok/NativeDNS/releases/download/v0.4.9/NativeDNS-0.4.9-windows-x64-portable.zip)
 
 These release packages require Windows 10 or Windows 11 x64.
 
@@ -42,9 +44,11 @@ Current Core functionality includes:
 - DNSCrypt;
 - Anonymized DNSCrypt;
 - real DNS server tests with RTT/error reporting;
+- server pools (`Redundancy` with background RTT monitoring and failover, and `Load Balancing` with random selection and failover);
 - live and file logging;
-- background CoreHost (`NativeDNS.CoreHost.exe` on Windows, `NativeDNSCoreHost` on Linux);
-- IPC between GUI/tools and CoreHost.
+- background CoreHost (`NativeDNS.exe --core-host` / `bin/NativeDNS.CoreHost.dll` on Windows, `NativeDNSCoreHost` on Linux);
+- IPC between GUI/tools and CoreHost;
+- in-app update download, SHA-256 verification, and installation on Windows (`Updater.exe`) for both Portable and Executable builds.
 
 Platform integration:
 
