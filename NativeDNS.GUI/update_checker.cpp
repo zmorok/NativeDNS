@@ -151,7 +151,6 @@ UpdateDialog::UpdateDialog(const QString& currentVersion,
     : QDialog(parent), currentVersion_(currentVersion),
       network_(network ? network : new QNetworkAccessManager(this)), deadline_(new QTimer(this)) {
     setWindowTitle(uiText("Check for updates"));
-    setWindowFlag(Qt::WindowStaysOnTopHint, true);
     setMinimumSize(520, 320);
     resize(760, 520);
     auto* layout = new QVBoxLayout(this);
@@ -255,9 +254,6 @@ void UpdateDialog::cancelStartupCheck() {
 }
 void UpdateDialog::showForManualCheck() {
     quiet_ = false;
-    show();
-    raise();
-    activateWindow();
     activateApplicationWindow(*this);
 }
 void UpdateDialog::startRequest() {
