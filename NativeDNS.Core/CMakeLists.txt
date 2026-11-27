@@ -101,4 +101,11 @@ if(WIN32)
   endif()
   nativedns_copy_windivert_runtime(NativeDNS.CoreHost)
   nativedns_copy_sodium_runtime(NativeDNS.CoreHost)
+
+  add_library(NativeDNS.CoreHost.Module SHARED host/main.cpp)
+  target_compile_definitions(NativeDNS.CoreHost.Module PRIVATE
+    NATIVEDNS_COREHOST_MODULE
+    NATIVEDNS_DIAGNOSTIC_DEFAULT=$<BOOL:${NATIVEDNS_DIAGNOSTIC_BUILD}>)
+  target_link_libraries(NativeDNS.CoreHost.Module PRIVATE NativeDNS.Core.Internal)
+  set_target_properties(NativeDNS.CoreHost.Module PROPERTIES OUTPUT_NAME NativeDNS.CoreHost)
 endif()

@@ -49,13 +49,13 @@ cmake --install $build --config $Configuration --prefix $stage
 if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 
 & (Join-Path $PSScriptRoot 'deploy-windows-runtime.ps1') -PackageDirectory $stage -Configuration $Configuration
-[IO.File]::WriteAllText((Join-Path $stage 'app/distribution'),"portable`n",[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText((Join-Path $stage 'bin/distribution'),"portable`n",[Text.UTF8Encoding]::new($false))
 $required = @(
-    'NativeDNS.exe','NativeDNS.Debug.exe','app/bin/NativeDNS.CoreHost.exe','app/bin/NativeDNS.Diagnostics.exe',
-    'app/bin/nativednsctl.exe','app/bin/NativeDNS.Cli.exe','app/bin/qt.conf','app/drivers/windivert/WinDivert.dll',
-    'docs/README.md','licenses/THIRD_PARTY_NOTICES.md','licenses/WinDivert.txt',
-    'licenses/curl.txt','licenses/libsodium.txt','licenses/nghttp2.txt','docs/BUILD.md',
-    'docs/CONFIG_FORMAT.md','docs/DEPENDENCIES.md'
+    'NativeDNS.exe','bin/NativeDNS.GUI.dll','bin/NativeDNS.CoreHost.dll','bin/NativeDNS.Cli.dll',
+    'bin/NativeDNS.Diagnostics.dll','bin/qt.conf','bin/distribution','bin/drivers/WinDivert.dll',
+    'bin/drivers/WinDivert64.sys','docs/README.md','docs/licenses/THIRD_PARTY_NOTICES.md',
+    'docs/licenses/WinDivert.txt','docs/licenses/curl.txt','docs/licenses/libsodium.txt',
+    'docs/licenses/nghttp2.txt','docs/BUILD.md','docs/CONFIG_FORMAT.md','docs/DEPENDENCIES.md'
 )
 foreach ($relative in $required) {
     $candidate = Join-Path $stage $relative

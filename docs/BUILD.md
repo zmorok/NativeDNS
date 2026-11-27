@@ -111,9 +111,9 @@ Debug   /MDd
 Release /MD
 ```
 
-The two root bootstrap executables use `/MT` or `/MTd` and link only Windows system libraries. All Qt/Core modules and their dependencies use the dynamic CRT shown above.
+The root `NativeDNS.exe` (and `Updater.exe`) use `/MT` or `/MTd` and link only Windows system libraries. All Qt/Core modules (`bin/NativeDNS.GUI.dll`, `bin/NativeDNS.CoreHost.dll`, `bin/NativeDNS.Cli.dll`, `bin/NativeDNS.Diagnostics.dll`) and their dependencies use the dynamic CRT shown above.
 
-`packaging/deploy-windows-runtime.ps1` deploys Qt plugins at the package root and copies Qt/compiler runtime DLLs to `app/lib`. The package audit checks that imported Qt, libsodium and MSVC runtime DLLs are bundled and that the root launchers have no external runtime imports.
+`packaging/deploy-windows-runtime.ps1` deploys Qt plugins to `bin/plugins` and copies Qt, libsodium, WinDivert and MSVC runtime files to `bin` / `bin/drivers`. The package audit checks that imported Qt, libsodium and MSVC runtime DLLs are bundled in `bin` and that the root executables have no external runtime imports.
 
 ## Linux
 

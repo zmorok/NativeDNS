@@ -261,18 +261,41 @@ std::filesystem::path application_root_directory() {
         return binary.parent_path().parent_path();
     return binary;
 }
-std::filesystem::path application_binary_directory() { return executable_path().parent_path(); }
+std::filesystem::path application_binary_directory() {
+    const auto binary = executable_path().parent_path();
+    std::error_code ec;
+    if (std::filesystem::is_directory(binary / L"bin", ec))
+        return binary / L"bin";
+    return binary;
+}
 std::filesystem::path gui_entrypoint() { return application_root_directory() / L"NativeDNS.exe"; }
-std::filesystem::path core_host_executable() { return application_binary_directory() / L"NativeDNS.CoreHost.exe"; }
+std::filesystem::path core_host_executable() {
+    const auto root = application_root_directory();
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(root / L"NativeDNS.exe", ec) &&
+        std::filesystem::is_regular_file(root / L"bin" / L"NativeDNS.CoreHost.dll", ec))
+        return root / L"NativeDNS.exe";
+    return application_binary_directory() / L"NativeDNS.CoreHost.exe";
+}
 std::filesystem::path windivert_directory() {
-    const auto binary = application_binary_directory();
-    return binary.filename() == L"bin" && binary.parent_path().filename() == L"app"
-        ? binary.parent_path() / L"drivers" / L"windivert" : binary;
+    const auto root = application_root_directory();
+    std::error_code ec;
+    if (std::filesystem::is_directory(root / L"bin" / L"drivers", ec))
+        return root / L"bin" / L"drivers";
+    if (std::filesystem::is_directory(root / L"app" / L"drivers" / L"windivert", ec))
+        return root / L"app" / L"drivers" / L"windivert";
+    return executable_path().parent_path();
 }
 void initialize_application_paths() {
-    const auto binary = application_binary_directory();
-    if (binary.filename() != L"bin" || binary.parent_path().filename() != L"app") return;
-    const auto library = binary.parent_path() / L"lib";
+    const auto root = application_root_directory();
+    std::error_code ec;
+    std::filesystem::path library;
+    if (std::filesystem::is_directory(root / L"bin", ec))
+        library = root / L"bin";
+    else if (std::filesystem::is_directory(root / L"app" / L"lib", ec))
+        library = root / L"app" / L"lib";
+    else
+        return;
     if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS) ||
         !AddDllDirectory(library.c_str()) || !SetDllDirectoryW(library.c_str()))
         throw Error("PATH", "Cannot configure application DLL search paths");

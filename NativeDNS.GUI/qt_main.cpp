@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QStringList>
 #include <QMessageBox>
+#include <filesystem>
 #include <iostream>
 #include <exception>
 
@@ -37,9 +38,16 @@ namespace {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int run_gui_main(int argc, char** argv) {
     std::set_terminate(&gui_terminate);
     nd::platform::initialize_application_paths();
+    {
+        std::error_code ec;
+        const auto plugins_dir = nd::platform::application_root_directory() / "bin" / "plugins";
+        if (std::filesystem::is_directory(plugins_dir, ec))
+            QCoreApplication::setLibraryPaths(
+                {QString::fromUtf8(nd::platform::path_to_utf8(plugins_dir))});
+    }
     // Outlive the window, QApplication and Qt's shutdown callbacks.
     std::jthread exitDeadline;
     QApplication app(argc, argv);
@@ -83,3 +91,13 @@ int main(int argc, char** argv) {
         window.showAndActivate();
     return app.exec();
 }
+
+#ifdef NATIVEDNS_GUI_MODULE
+extern "C" __declspec(dllexport) int nativedns_run_gui(int argc, char** argv) {
+    return run_gui_main(argc, argv);
+}
+#else
+int main(int argc, char** argv) {
+    return run_gui_main(argc, argv);
+}
+#endif

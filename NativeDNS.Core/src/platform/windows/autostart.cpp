@@ -133,11 +133,21 @@ std::wstring quote_argument(const std::wstring& value) {
     result.push_back(L'\"');
     return result;
 }
+bool is_unified_entrypoint(const std::filesystem::path& executable) {
+    std::error_code ec;
+    return _wcsicmp(executable.filename().c_str(), L"NativeDNS.exe") == 0 &&
+           std::filesystem::is_regular_file(
+               executable.parent_path() / L"bin" / L"NativeDNS.CoreHost.dll", ec);
+}
 std::filesystem::path core_entrypoint(const std::filesystem::path& executable) {
+    std::error_code ec;
+    if (is_unified_entrypoint(executable))
+        return executable;
     const auto binary = executable.parent_path();
     const auto root = binary.parent_path().parent_path();
     if (binary.filename() == L"bin" && binary.parent_path().filename() == L"app" &&
-        std::filesystem::is_regular_file(root / L"NativeDNS.exe")) return root / L"NativeDNS.exe";
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe", ec))
+        return root / L"NativeDNS.exe";
     return executable;
 }
 
@@ -269,11 +279,11 @@ void enable_autostart(const std::filesystem::path& executable,
     const auto absolute_executable = std::filesystem::absolute(executable).lexically_normal();
     const auto absolute_config = std::filesystem::absolute(config).lexically_normal();
     const auto entry = core_entrypoint(absolute_executable);
-    const bool structured = entry != absolute_executable;
+    const bool structured = entry != absolute_executable || is_unified_entrypoint(entry);
     const std::wstring arguments = (structured ? L"--core-host " : L"") +
         std::wstring(L"--config ") + quote_argument(absolute_config.wstring()) + L" --transparent";
     Bstr executable_text(entry.wstring()), arguments_text(arguments),
-        working_directory(absolute_executable.parent_path().wstring());
+        working_directory(entry.parent_path().wstring());
     check(execute->put_Path(executable_text.value), "Set task executable");
     check(execute->put_Arguments(arguments_text.value), "Set task arguments");
     check(execute->put_WorkingDirectory(working_directory.value), "Set task working directory");
@@ -508,11 +518,12 @@ bool start_autostart_core(const std::filesystem::path& executable,
     const auto absolute_executable = std::filesystem::absolute(executable).lexically_normal();
     const auto absolute_config = std::filesystem::absolute(config).lexically_normal();
     const auto entry = core_entrypoint(absolute_executable);
-    const std::wstring expected_arguments = (entry != absolute_executable ? L"--core-host " : L"") +
+    const bool structured = entry != absolute_executable || is_unified_entrypoint(entry);
+    const std::wstring expected_arguments = (structured ? L"--core-host " : L"") +
         std::wstring(L"--config ") + quote_argument(absolute_config.wstring()) + L" --transparent";
     if (!path.value || !arguments.value || _wcsicmp(path.value, entry.c_str()) != 0 ||
         expected_arguments != arguments.value || !working_directory.value ||
-        _wcsicmp(working_directory.value, absolute_executable.parent_path().c_str()) != 0)
+        _wcsicmp(working_directory.value, entry.parent_path().c_str()) != 0)
         return false;
 
     auto empty = empty_variant();

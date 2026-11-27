@@ -52,12 +52,21 @@ bool launchNativeDnsCore(const QString& executable,
     QString program = executable;
     QStringList effectiveArguments = arguments;
     const auto root = nd::platform::application_root_directory();
-    if (QFileInfo(executable).fileName() == "NativeDNS.CoreHost.exe" &&
-        std::filesystem::is_regular_file(root / L"NativeDNS.exe") &&
-        std::filesystem::is_directory(root / L"app" / L"lib")) {
+    const auto fileName = QFileInfo(executable).fileName();
+    std::error_code ec;
+    const bool unified =
+        fileName.compare("NativeDNS.exe", Qt::CaseInsensitive) == 0 &&
+        std::filesystem::is_regular_file(root / L"bin" / L"NativeDNS.CoreHost.dll", ec);
+    const bool legacyStructured =
+        fileName.compare("NativeDNS.CoreHost.exe", Qt::CaseInsensitive) == 0 &&
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe", ec) &&
+        std::filesystem::is_directory(root / L"app" / L"lib", ec);
+    if (unified || legacyStructured) {
         program = QString::fromStdWString((root / L"NativeDNS.exe").wstring());
-        effectiveArguments.prepend("--core-host");
-        effectiveArguments.append("--quiet");
+        if (effectiveArguments.isEmpty() || effectiveArguments.first() != "--core-host")
+            effectiveArguments.prepend("--core-host");
+        if (!effectiveArguments.contains("--quiet"))
+            effectiveArguments.append("--quiet");
     }
     const auto params = joinArguments(effectiveArguments);
     const auto file = program.toStdWString();
@@ -88,12 +97,21 @@ bool runNativeDnsHelper(const QString& executable,
     QString program = executable;
     QStringList effectiveArguments = arguments;
     const auto root = nd::platform::application_root_directory();
-    if (QFileInfo(executable).fileName() == "NativeDNS.CoreHost.exe" &&
-        std::filesystem::is_regular_file(root / L"NativeDNS.exe") &&
-        std::filesystem::is_directory(root / L"app" / L"lib")) {
+    const auto fileName = QFileInfo(executable).fileName();
+    std::error_code ec;
+    const bool unified =
+        fileName.compare("NativeDNS.exe", Qt::CaseInsensitive) == 0 &&
+        std::filesystem::is_regular_file(root / L"bin" / L"NativeDNS.CoreHost.dll", ec);
+    const bool legacyStructured =
+        fileName.compare("NativeDNS.CoreHost.exe", Qt::CaseInsensitive) == 0 &&
+        std::filesystem::is_regular_file(root / L"NativeDNS.exe", ec) &&
+        std::filesystem::is_directory(root / L"app" / L"lib", ec);
+    if (unified || legacyStructured) {
         program = QString::fromStdWString((root / L"NativeDNS.exe").wstring());
-        effectiveArguments.prepend("--core-host");
-        effectiveArguments.append("--quiet");
+        if (effectiveArguments.isEmpty() || effectiveArguments.first() != "--core-host")
+            effectiveArguments.prepend("--core-host");
+        if (!effectiveArguments.contains("--quiet"))
+            effectiveArguments.append("--quiet");
     }
     const auto params = joinArguments(effectiveArguments);
     const auto file = program.toStdWString();

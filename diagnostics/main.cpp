@@ -9,6 +9,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QHostAddress>
 #include <QProcess>
 #include <QRegularExpression>
@@ -94,19 +95,32 @@ QString httpsProbe(const QString& host, const QString& address) {
     return text;
 }
 } // namespace
-int main(int argc, char** argv) {
+int run_diagnostics(int argc, char** argv) {
     try {
         nd::platform::initialize_application_paths();
+        {
+            std::error_code ec;
+            const auto plugins_dir = nd::platform::application_root_directory() / "bin" / "plugins";
+            if (std::filesystem::is_directory(plugins_dir, ec))
+                QCoreApplication::setLibraryPaths(
+                    {QString::fromUtf8(nd::platform::path_to_utf8(plugins_dir))});
+        }
         QCoreApplication app(argc, argv);
-        const auto args = app.arguments();
-        if (args.size() == 3 && args[1] == "--os-resolve") {
-            for (const auto& address : nd::platform::resolve_host(args[2].toStdString()))
+        QStringList args;
+        for (int i = 1; i < app.arguments().size(); ++i) {
+            const auto& arg = app.arguments()[i];
+            if (arg == "--collect" || arg == "--quiet")
+                continue;
+            args << arg;
+        }
+        if (args.size() == 2 && args[0] == "--os-resolve") {
+            for (const auto& address : nd::platform::resolve_host(args[1].toStdString()))
                 std::cout << "OS address=" << address << '\n';
             return 0;
         }
         QString host, config = qPath(nd::platform::user_config_directory() / "NativeDNS.xml");
         bool offline = false;
-        for (int i = 1; i < args.size(); ++i) {
+        for (int i = 0; i < args.size(); ++i) {
             if (args[i] == "--offline")
                 offline = true;
             else if (args[i] == "--host" && i + 1 < args.size())
@@ -114,7 +128,7 @@ int main(int argc, char** argv) {
             else if (args[i] == "--config" && i + 1 < args.size())
                 config = args[++i];
             else
-                throw std::runtime_error("Usage: NativeDNS.Debug.exe --collect [--host DOMAIN] "
+                throw std::runtime_error("Usage: NativeDNS.exe --collect [--host DOMAIN] "
                                          "[--config FILE] [--offline] [--quiet]");
         }
         if (host.isEmpty()) {
@@ -200,8 +214,12 @@ int main(int argc, char** argv) {
             line(text);
         if (!offline) {
             line("=== Windows resolver (OS cache and encrypted DNS may apply) ===");
-            const auto os =
-                run(QCoreApplication::applicationFilePath(), {"--os-resolve", host}, 10000);
+            const auto selfPath = QCoreApplication::applicationFilePath();
+            const QStringList resolveArgs =
+                QFileInfo(selfPath).fileName().compare("NativeDNS.exe", Qt::CaseInsensitive) == 0
+                    ? QStringList{"--collect", "--quiet", "--os-resolve", host}
+                    : QStringList{"--os-resolve", host};
+            const auto os = run(selfPath, resolveArgs, 10000);
             line("exit_code=" + QString::number(os.code) + '\n' + os.output.trimmed());
             auto original = QStringLiteral("1.1.1.1");
             const auto resolvers = nd::platform::system_dns_servers();
@@ -311,3 +329,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 }
+
+#ifdef NATIVEDNS_DIAGNOSTICS_MODULE
+extern "C" __declspec(dllexport) int nativedns_run_diagnostics(int argc, char** argv) {
+    return run_diagnostics(argc, argv);
+}
+#else
+int main(int argc, char** argv) {
+    return run_diagnostics(argc, argv);
+}
+#endif

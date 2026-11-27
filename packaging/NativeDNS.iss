@@ -36,7 +36,7 @@ PrivilegesRequired=admin
 WizardStyle=modern
 UninstallDisplayIcon={app}\NativeDNS.exe
 CloseApplications=yes
-CloseApplicationsFilter=NativeDNS.exe,NativeDNS.Debug.exe,NativeDNS.GUI.exe,NativeDNS.CoreHost.exe,NativeDNSCoreHost.exe
+CloseApplicationsFilter=NativeDNS.exe,Updater.exe,NativeDNS.Debug.exe,NativeDNS.GUI.exe,NativeDNS.CoreHost.exe,NativeDNSCoreHost.exe
 SetupLogging=yes
 
 [Tasks]
@@ -50,6 +50,7 @@ Name: "{app}\logs"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\NativeDNS"; Filename: "{app}\NativeDNS.exe"; WorkingDir: "{app}"
+Name: "{group}\NativeDNS (Debug)"; Filename: "{app}\NativeDNS.exe"; Parameters: "--diagnostics"; WorkingDir: "{app}"
 Name: "{autodesktop}\NativeDNS"; Filename: "{app}\NativeDNS.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
@@ -79,6 +80,6 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    SaveStringToFile(ExpandConstant('{app}\app\distribution'), 'executable' + #10, False);
+    SaveStringToFile(ExpandConstant('{app}\bin\distribution'), 'executable' + #10, False);
   end;
 end;

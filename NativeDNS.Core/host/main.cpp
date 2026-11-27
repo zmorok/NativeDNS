@@ -36,10 +36,12 @@ void usage() {
 }
 } // namespace
 
-int main(int argc, char** native_argv) {
+int run_core_host(int argc, char** native_argv, bool use_utf8_argv) {
     try {
         nd::platform::initialize_application_paths();
-        const auto argv = nd::platform::command_line_arguments(argc, native_argv);
+        const auto argv = use_utf8_argv
+                              ? std::vector<std::string>(native_argv, native_argv + argc)
+                              : nd::platform::command_line_arguments(argc, native_argv);
         argc = static_cast<int>(argv.size());
         if (std::find(argv.begin(), argv.end(), "--layout-check") != argv.end()) {
             std::cout << "root=" << nd::platform::path_to_utf8(nd::platform::application_root_directory())
@@ -107,7 +109,12 @@ int main(int argc, char** native_argv) {
             if (register_autostart || unregister_autostart || !config_path.empty() || transparent ||
                 port || !autostart_gui.empty())
                 throw nd::Error("PROCESS_IDENTITY", "Conflicting force-shutdown operations");
-            nd::platform::force_stop_process(nd::platform::executable_path(), force_target);
+            const auto self = nd::platform::executable_path();
+            const bool unified =
+                self.filename() == "NativeDNS.exe" &&
+                std::filesystem::is_regular_file(
+                    self.parent_path() / "bin" / "NativeDNS.CoreHost.dll");
+            nd::platform::force_stop_process(self, force_target, unified ? "--core-host" : "");
             return 0;
         }
 
@@ -199,3 +206,13 @@ int main(int argc, char** native_argv) {
         return 11;
     }
 }
+
+#ifdef NATIVEDNS_COREHOST_MODULE
+extern "C" __declspec(dllexport) int nativedns_run_core_host(int argc, char** argv) {
+    return run_core_host(argc, argv, true);
+}
+#else
+int main(int argc, char** argv) {
+    return run_core_host(argc, argv, false);
+}
+#endif

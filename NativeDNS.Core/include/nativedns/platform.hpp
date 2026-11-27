@@ -45,8 +45,11 @@ struct ProcessIdentity {
     uint64_t started = 0;
 };
 // Match the full executable path. The birth token prevents PID-reuse mistakes.
-std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable);
-void force_stop_process(const std::filesystem::path& executable, ProcessIdentity identity);
+std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable,
+                                                const std::string& required_argument = {});
+void force_stop_process(const std::filesystem::path& executable,
+                        ProcessIdentity identity,
+                        const std::string& required_argument = {});
 std::filesystem::path executable_path();
 // Root of the staged application, independent of its internal binary directory.
 std::filesystem::path application_root_directory();

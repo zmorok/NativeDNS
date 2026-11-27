@@ -39,8 +39,8 @@ foreach ($binary in $binaries) {
     if ($bad) { throw "Forbidden managed/WebView dependency in $relative`: $($bad -join ', ')" }
     foreach ($dependency in $dependencies) {
         if ($dependency -match '^(QT6|LIBSODIUM|MSVCP\d|VCRUNTIME\d|CONCRT\d|VCCORLIB\d|UCRTBASED\.DLL)') {
-            if (-not (Test-Path -LiteralPath (Join-Path $package ("app/lib/" + $dependency)))) { throw "Missing bundled dependency $dependency for $relative" }
-            if ($relative -in @('NativeDNS.exe','NativeDNS.Debug.exe')) { throw "Root launcher has an external runtime dependency: $dependency" }
+            if (-not (Test-Path -LiteralPath (Join-Path $package ("bin/" + $dependency)))) { throw "Missing bundled dependency $dependency for $relative" }
+            if ($relative -in @('NativeDNS.exe','Updater.exe')) { throw "Root executable has an external runtime dependency: $dependency" }
         }
     }
     $headers = (& $dumpbin /HEADERS $binary.FullName 2>&1) -join "`n"
@@ -51,6 +51,6 @@ foreach ($binary in $binaries) {
     $lines += "  PE: x64; subsystem=$subsystem; CLR descriptor=absent"
     $lines += ''
 }
-$lines += 'RESULT: PASS - all images are x64 with no CLR descriptor and no .NET/WebView2 imports; Qt, sodium and MSVC imports are bundled in app/lib; root launchers use a static CRT.'
+$lines += 'RESULT: PASS - all images are x64 with no CLR descriptor and no .NET/WebView2 imports; Qt, sodium and MSVC imports are bundled in bin; root executables use a static CRT.'
 [IO.File]::WriteAllLines($ReportPath,$lines,[Text.UTF8Encoding]::new($false))
 Write-Output $ReportPath

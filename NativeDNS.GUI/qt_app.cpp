@@ -2626,12 +2626,16 @@ void NativeDnsWindow::exitApplication(bool force) {
                 if (launchState->pending)
                     throw std::runtime_error(
                         "CoreHost launch is still pending; shutdown cannot yet be confirmed.");
-                auto targets = nd::platform::matching_processes(fsPath(executable));
+                const std::string roleArg =
+                    QFileInfo(executable).fileName().compare("NativeDNS.exe", Qt::CaseInsensitive) == 0
+                        ? "--core-host"
+                        : "";
+                auto targets = nd::platform::matching_processes(fsPath(executable), roleArg);
                 if (launchState->issued && targets.empty()) {
                     wait.restart();
                     while (targets.empty() && wait.elapsed() < 5000) {
                         QThread::msleep(50);
-                        targets = nd::platform::matching_processes(fsPath(executable));
+                        targets = nd::platform::matching_processes(fsPath(executable), roleArg);
                     }
                     if (targets.empty())
                         throw std::runtime_error("Launched CoreHost has not appeared; shutdown "
@@ -2639,7 +2643,7 @@ void NativeDnsWindow::exitApplication(bool force) {
                 }
                 for (const auto target : targets) {
                     try {
-                        nd::platform::force_stop_process(fsPath(executable), target);
+                        nd::platform::force_stop_process(fsPath(executable), target, roleArg);
                     } catch (const nd::Error& stopError) {
                         if (stopError.code != "PROCESS_PERMISSION")
                             throw;
@@ -2666,7 +2670,7 @@ void NativeDnsWindow::exitApplication(bool force) {
                 nd::platform::ProcessInstanceLock probe(nd::core_instance_name,
                                                         nd::platform::InstanceScope::machine);
                 if (!probe.acquired() ||
-                    !nd::platform::matching_processes(fsPath(executable)).empty())
+                    !nd::platform::matching_processes(fsPath(executable), roleArg).empty())
                     throw std::runtime_error(
                         "CoreHost is still running; process-instance lock is held.");
             }
@@ -2745,9 +2749,14 @@ void NativeDnsWindow::refreshStatus() {
                     "\n" + q(nd::core_shutdown_pipe_name) + ": " + q(shutdownError.what());
             }
             try {
-                diagnostics += "\n" + coreHostExecutable();
+                const auto corePath = coreHostExecutable();
+                const std::string roleArg =
+                    QFileInfo(corePath).fileName().compare("NativeDNS.exe", Qt::CaseInsensitive) == 0
+                        ? "--core-host"
+                        : "";
+                diagnostics += "\n" + corePath;
                 for (const auto process :
-                     nd::platform::matching_processes(fsPath(coreHostExecutable())))
+                     nd::platform::matching_processes(fsPath(corePath), roleArg))
                     diagnostics +=
                         QString("\nPID=%1; birth=%2").arg(process.pid).arg(process.started);
             } catch (const std::exception& processError) {

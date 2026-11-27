@@ -25,9 +25,26 @@ bool matches(uint32_t pid, const std::filesystem::path& executable) {
         std::filesystem::read_symlink("/proc/" + std::to_string(pid) + "/exe", error);
     return !error && image == std::filesystem::weakly_canonical(executable);
 }
+bool matches_argument(uint32_t pid, const std::string& required_argument) {
+    if (required_argument.empty())
+        return true;
+    std::ifstream input("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
+    std::string token;
+    bool first = true;
+    while (std::getline(input, token, '\0')) {
+        if (first) {
+            first = false;
+            continue;
+        }
+        if (token == required_argument)
+            return true;
+    }
+    return false;
+}
 } // namespace
 
-std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable) {
+std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& executable,
+                                                const std::string& required_argument) {
     std::vector<ProcessIdentity> result;
     for (const auto& entry : std::filesystem::directory_iterator("/proc")) {
         const auto name = entry.path().filename().string();
@@ -35,13 +52,14 @@ std::vector<ProcessIdentity> matching_processes(const std::filesystem::path& exe
             continue;
         const auto pid = static_cast<uint32_t>(std::stoul(name));
         const auto started = birth(pid);
-        if (pid != process_id() && started && matches(pid, executable))
+        if (pid != process_id() && started && matches(pid, executable) &&
+            matches_argument(pid, required_argument))
             result.push_back({pid, started});
     }
     return result;
 }
 
-void force_stop_process(const std::filesystem::path&, ProcessIdentity) {
+void force_stop_process(const std::filesystem::path&, ProcessIdentity, const std::string&) {
     // SIGKILL would leave nftables redirection pointing at a dead DNS proxy.
     // Keep the GUI alive until a separately validated cleanup path is available.
     throw Error("PROCESS_FORCE_UNSUPPORTED",

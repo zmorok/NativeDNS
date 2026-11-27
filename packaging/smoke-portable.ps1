@@ -26,6 +26,6 @@ function Test-Entry([string]$Executable, [string]$Arguments, [string]$Expected) 
     } finally { $process.Dispose() }
 }
 Test-Entry 'NativeDNS.exe' '--layout-check --quiet' 'diagnostics=0'
-Test-Entry 'NativeDNS.Debug.exe' '--layout-check --quiet' 'diagnostics=1'
-Test-Entry 'NativeDNS.exe' '--core-host --layout-check --quiet' 'driver=.*app[/\\]drivers[/\\]windivert'
+Test-Entry 'NativeDNS.exe' '--diagnostics --layout-check --quiet' 'diagnostics=1'
+Test-Entry 'NativeDNS.exe' '--core-host --layout-check --quiet' 'driver=.*bin[/\\]drivers'
 Write-Output 'Portable GUI normal/Debug and CoreHost module loading: PASS'

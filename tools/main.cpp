@@ -42,10 +42,12 @@ void usage() {
            "  nativednsctl network restore\n";
 }
 } // namespace
-int main(int argc, char** native_argv) {
+int run_cli(int argc, char** native_argv, bool use_utf8_argv) {
     try {
         nd::platform::initialize_application_paths();
-        const auto argv = nd::platform::command_line_arguments(argc, native_argv);
+        const auto argv = use_utf8_argv
+                              ? std::vector<std::string>(native_argv, native_argv + argc)
+                              : nd::platform::command_line_arguments(argc, native_argv);
         argc = static_cast<int>(argv.size());
         if ((argc == 3 || argc == 4) && argv[1] == "diagnose") {
             const auto path = nd::platform::path_from_utf8(argv[2]);
@@ -330,3 +332,13 @@ int main(int argc, char** native_argv) {
         return 1;
     }
 }
+
+#ifdef NATIVEDNS_CLI_MODULE
+extern "C" __declspec(dllexport) int nativedns_run_cli(int argc, char** argv) {
+    return run_cli(argc, argv, true);
+}
+#else
+int main(int argc, char** argv) {
+    return run_cli(argc, argv, false);
+}
+#endif

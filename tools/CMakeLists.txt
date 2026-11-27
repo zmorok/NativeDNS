@@ -7,4 +7,8 @@ endif()
 
 if(WIN32 AND NATIVEDNS_BUILD_GUI)
   set_target_properties(nativednsctl PROPERTIES OUTPUT_NAME NativeDNS.Cli)
+  add_library(NativeDNS.Cli.Module SHARED main.cpp)
+  target_compile_definitions(NativeDNS.Cli.Module PRIVATE NATIVEDNS_CLI_MODULE)
+  target_link_libraries(NativeDNS.Cli.Module PRIVATE NativeDNS.Core.Internal)
+  set_target_properties(NativeDNS.Cli.Module PROPERTIES OUTPUT_NAME NativeDNS.Cli)
 endif()
