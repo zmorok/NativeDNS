@@ -280,6 +280,9 @@ void CoreHost::stop() {
 void CoreHost::wait_for_shutdown() {
     std::unique_lock lock(mutex_);
     auto previous_network = NetworkMonitor::shared().snapshot();
+    constexpr auto maintenance_cooldown = std::chrono::seconds(2);
+    auto last_network_maintenance = std::chrono::steady_clock::time_point{};
+    bool pending_network_maintenance = false;
     for (;;) {
         if (shutdown_cv_.wait_for(
                 lock, std::chrono::milliseconds(500), [&] { return shutdown_requested(); }))
@@ -333,15 +336,24 @@ void CoreHost::wait_for_shutdown() {
                 logger_.write(Level::verbose, "NETWORK_INTERFACE", std::move(details));
             }
             previous_network = network;
-            const Config current_config = config_;
-            lock.unlock();
-            inspect_network(current_config, true);
-            if (!shutdown_requested() && interception_->status().state == State::running &&
-                prepare_network(current_config)) {
-                try { platform::flush_dns_cache(); }
-                catch (const Error& error) { logger_.write(Level::errors_only, error.code, error.what()); }
+            pending_network_maintenance = true;
+        }
+        if (pending_network_maintenance) {
+            const auto now = std::chrono::steady_clock::now();
+            if (last_network_maintenance == std::chrono::steady_clock::time_point{} ||
+                now - last_network_maintenance >= maintenance_cooldown) {
+                pending_network_maintenance = false;
+                last_network_maintenance = now;
+                const Config current_config = config_;
+                lock.unlock();
+                inspect_network(current_config, true);
+                if (!shutdown_requested() && interception_->status().state == State::running &&
+                    prepare_network(current_config)) {
+                    try { platform::flush_dns_cache(); }
+                    catch (const Error& error) { logger_.write(Level::errors_only, error.code, error.what()); }
+                }
+                lock.lock();
             }
-            lock.lock();
         }
         const auto value = interception_->status();
         if (value.state == State::error)

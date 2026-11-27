@@ -19,10 +19,12 @@ each resolver before AAAA, so an unresponsive first resolver leaves time for fal
 Bootstrap diagnostics retain the hostname, numeric resolver, query type and root
 failure during the retry cooldown. TLS diagnostics preserve interface binding
 errors and distinguish certificate verification, SPKI pin mismatch and an offline
-Windows certificate revocation check. Revocation checking remains enabled;
-`TLS_REVOCATION_OFFLINE` does not imply that the certificate is expired or that
-the DNS upstream is unavailable. Connection failures and request timeouts have distinct
-`CONNECT` and `TIMEOUT` codes.
+Windows certificate revocation check. Revocation checking remains enabled on Windows
+with best-effort offline handling (`CURLSSLOPT_REVOKE_BEST_EFFORT`), so revoked
+certificates are still rejected while unreachable CRL/OCSP responders do not stall
+DNS resolution; `TLS_REVOCATION_OFFLINE` does not imply that the certificate is expired
+or that the DNS upstream is unavailable. Connection failures and request timeouts have
+distinct `CONNECT` and `TIMEOUT` codes.
 
 DNS cache/coalescing, upstream health and connection pools are separated by
 adapter context and network generation. A DHCP DNS or interface-state change

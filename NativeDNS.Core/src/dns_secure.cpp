@@ -109,13 +109,19 @@ void ensure_curl_global() {
     static CurlGlobal global;
 }
 
-void apply_test_ca_if_configured(CURL* easy) {
+void apply_tls_platform_options(CURL* easy) {
     const auto ca = detail::test_ca_file_for_testing();
-    if (ca.empty())
-        return;
-    curl_check(curl_easy_setopt(easy, CURLOPT_CAINFO, ca.c_str()));
+    if (!ca.empty()) {
+        curl_check(curl_easy_setopt(easy, CURLOPT_CAINFO, ca.c_str()));
 #ifdef _WIN32
-    curl_check(curl_easy_setopt(easy, CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NO_REVOKE)));
+        curl_check(
+            curl_easy_setopt(easy, CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NO_REVOKE)));
+#endif
+        return;
+    }
+#ifdef _WIN32
+    curl_check(curl_easy_setopt(
+        easy, CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_REVOKE_BEST_EFFORT)));
 #endif
 }
 
@@ -757,7 +763,7 @@ private:
         handle.set(CURLOPT_RESOLVE, resolve.value);
         if (!pins.empty())
             handle.set(CURLOPT_PINNEDPUBLICKEY, pins.c_str());
-        apply_test_ca_if_configured(handle.value);
+        apply_tls_platform_options(handle.value);
         const long timeout_ms = static_cast<long>(remaining(deadline));
         handle.set(CURLOPT_TIMEOUT_MS, timeout_ms);
         handle.set(CURLOPT_CONNECTTIMEOUT_MS, timeout_ms);
@@ -824,7 +830,7 @@ private:
         set(CURLOPT_RESOLVE, resolve.value);
         if (!pins.empty())
             set(CURLOPT_PINNEDPUBLICKEY, pins.c_str());
-        apply_test_ca_if_configured(job->easy);
+        apply_tls_platform_options(job->easy);
 
         List headers;
         headers.add("Content-Type: application/dns-message");

@@ -347,8 +347,30 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
         if (!leader) {
             if (logger_.enabled(Level::debug))
                 logger_.write(Level::debug, "DNS_COALESCED", "server=" + primary.name);
-            const auto wait_ms = std::min<uint64_t>(
-                120000, std::max<uint64_t>(primary.timeout_ms, 5000) * 2);
+            uint64_t group_budget_ms = primary.timeout_ms;
+            if (primary.id && !primary.fallback_ids.empty()) {
+                std::set<uint32_t> visited;
+                uint64_t sum_ms = 0;
+                std::function<void(const Server&)> accumulate = [&](const Server& server) {
+                    if (!server.id || !visited.insert(server.id).second)
+                        return;
+                    if (server.enabled)
+                        sum_ms = std::min<uint64_t>(120000, sum_ms + server.timeout_ms);
+                    for (const auto id : server.fallback_ids) {
+                        const auto candidate = std::find_if(
+                            snapshot.config.servers.begin(),
+                            snapshot.config.servers.end(),
+                            [&](const Server& value) { return value.id == id; });
+                        if (candidate != snapshot.config.servers.end())
+                            accumulate(*candidate);
+                    }
+                };
+                accumulate(primary);
+                group_budget_ms = std::max<uint64_t>(
+                    primary.timeout_ms, std::min<uint64_t>(30000, sum_ms));
+            }
+            const auto wait_ms =
+                std::min<uint64_t>(120000, std::max<uint64_t>(group_budget_ms + 1000, 2000));
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
             while (!pending->done)

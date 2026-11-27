@@ -253,6 +253,32 @@ void NetworkMonitor::poll_once() {
 NetworkSnapshotPtr NetworkMonitor::snapshot() const {
     return snapshot_.load();
 }
+namespace {
+bool active_routing_equal(const InterfaceInfo& a, const InterfaceInfo& b) {
+    return a.id == b.id && a.name == b.name && a.dns_suffix == b.dns_suffix && a.luid == b.luid &&
+           a.index4 == b.index4 && a.index6 == b.index6 && a.up == b.up &&
+           a.loopback == b.loopback && a.captive_portal == b.captive_portal &&
+           a.addresses == b.addresses && a.dns_servers == b.dns_servers &&
+           a.gateways == b.gateways;
+}
+bool routing_equivalent(const std::vector<InterfaceInfo>& previous,
+                        const std::vector<InterfaceInfo>& current) {
+    size_t i = 0, j = 0;
+    while (i < previous.size() || j < current.size()) {
+        while (i < previous.size() && !previous[i].up)
+            ++i;
+        while (j < current.size() && !current[j].up)
+            ++j;
+        if (i == previous.size() || j == current.size())
+            return i == previous.size() && j == current.size();
+        if (!active_routing_equal(previous[i], current[j]))
+            return false;
+        ++i;
+        ++j;
+    }
+    return select_bootstrap_dns_servers(previous) == select_bootstrap_dns_servers(current);
+}
+} // namespace
 void NetworkMonitor::refresh(bool invalidate) {
     std::lock_guard lock(refresh_mutex_);
     const auto previous = snapshot();
@@ -266,8 +292,16 @@ void NetworkMonitor::refresh(bool invalidate) {
         next->interfaces = previous->interfaces;
         next->error = error.what();
     }
-    if (!invalidate && next->interfaces == previous->interfaces && next->error == previous->error)
+    const bool initial = previous->generation == 0;
+    const bool routing_changed = initial || invalidate || next->error != previous->error ||
+                                 !routing_equivalent(previous->interfaces, next->interfaces);
+    if (!routing_changed) {
+        if (next->interfaces == previous->interfaces)
+            return;
+        next->generation = previous->generation;
+        snapshot_.store(std::move(next));
         return;
+    }
     next->generation = previous->generation + 1;
     snapshot_.store(std::move(next));
 }
