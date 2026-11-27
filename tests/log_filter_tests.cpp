@@ -7,15 +7,18 @@
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QHeaderView>
+#include <QImage>
 #include <QInputDialog>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QProcess>
+#include <QStyleOptionViewItem>
 #include <QTableWidget>
 #include <QTemporaryDir>
 #include <QTextBrowser>
@@ -1826,6 +1829,87 @@ private slots:
                 QCOMPARE(tree->topLevelItemCount(), 2000);
             }
         }
+    }
+    void poolSummaryAndDetailsHoverContrast() {
+        QTemporaryDir directory;
+        QSettings settings(directory.filePath("pool_hover.ini"), QSettings::IniFormat);
+        applyUiTheme(*qobject_cast<QApplication*>(QCoreApplication::instance()), false);
+        LogPanel panel(nullptr, &settings);
+        panel.resize(960, 420);
+        panel.show();
+
+        LogRecord okPool;
+        okPool.sequence = 1;
+        okPool.timestamp = QDateTime::fromMSecsSinceEpoch(1700000000000LL);
+        okPool.code = "DNS_ROUTE";
+        okPool.address = "lh3.googleusercontent.com";
+        okPool.dnsType = "A";
+        okPool.rule = "[Google] Static";
+        okPool.action = "process";
+        okPool.message =
+            "lh3.googleusercontent.com [A] - process : server=Bezmezhau #2 DoH (DoH) "
+            "(DNS over HTTPS), rule=[Google] Static, time=28.96 ms, endpoint=31.58.216.201 "
+            "port=0 interface=automatic generation=1, server_id=2 pool_id=1 pool=\"AI\", rcode=0";
+
+        LogRecord failPool;
+        failPool.sequence = 2;
+        failPool.error = true;
+        failPool.timestamp = QDateTime::fromMSecsSinceEpoch(1700000001000LL);
+        failPool.code = "TIMEOUT";
+        failPool.address = "fail.example";
+        failPool.dnsType = "A";
+        failPool.rule = "[Google] Static";
+        failPool.action = "process";
+        failPool.message =
+            "fail.example [A] - process : server=none, rule=[Google] Static, time=3000.00 ms, "
+            "pool_id=1 pool=\"AI\", error=Server pool exhausted: TIMEOUT";
+
+        panel.appendRecords({okPool, failPool});
+        const auto compactText = panel.findChild<QPlainTextEdit*>("logDisplay")->toPlainText();
+        QVERIFY(compactText.contains("P| AI -> Bezmezhau #2 DoH"));
+        QVERIFY(compactText.contains("P| AI  ·  Rule: [Google] Static"));
+        QVERIFY(!compactText.contains("P| AI -> none"));
+
+        QVERIFY(panel.setLogView(LogView::table));
+        auto* table = panel.findChild<QTableWidget*>("logTable");
+        QVERIFY(table);
+        QCOMPARE(table->item(0, 3)->text(), QString("P| AI -> Bezmezhau #2 DoH"));
+        QCOMPARE(table->item(1, 3)->text(), QString("P| AI"));
+
+        QVERIFY(panel.setLogView(LogView::details));
+        auto* tree = panel.findChild<QTreeWidget*>("logDetailsTree");
+        QVERIFY(tree && tree->topLevelItemCount() == 2);
+        QVERIFY(tree->topLevelItem(0)->text(0).contains("P| AI -> Bezmezhau #2 DoH"));
+        tree->topLevelItem(0)->setExpanded(true);
+        auto* child = tree->topLevelItem(0)->child(0);
+        QVERIFY(child && child->text(0).contains("Server pool: AI"));
+        QVERIFY(child->text(0).contains("DNS server: Bezmezhau #2 DoH"));
+
+        // Verify selected + hovered expanded details row renders dark text on light hover fill.
+        const QModelIndex childIdx = tree->model()->index(0, 0, tree->model()->index(0, 0));
+        QStyleOptionViewItem opt;
+        opt.widget = tree;
+        opt.palette = tree->palette();
+        opt.font = tree->font();
+        opt.rect = QRect(0, 0, 520, 140);
+        opt.state = QStyle::State_Enabled | QStyle::State_Active | QStyle::State_Selected |
+                    QStyle::State_MouseOver;
+
+        QImage img(opt.rect.size(), QImage::Format_ARGB32);
+        img.fill(Qt::white);
+        {
+            QPainter painter(&img);
+            tree->itemDelegate()->paint(&painter, opt, childIdx);
+        }
+        int darkPixels = 0;
+        for (int y = 0; y < img.height(); ++y) {
+            for (int x = 0; x < img.width(); ++x) {
+                if (img.pixelColor(x, y).lightness() < 90)
+                    ++darkPixels;
+            }
+        }
+        QVERIFY2(darkPixels > 100,
+                 "Selected + hovered expanded log details must paint dark readable text");
     }
 };
 QTEST_MAIN(LogFilterTests)

@@ -37,10 +37,11 @@ QString capture(const QString& message, const QRegularExpression& pattern) {
     return pattern.match(message).captured(1);
 }
 struct Presentation {
-    QString domain, action, server, duration, failure, briefFailure, summary;
+    QString domain, action, server, pool, target, duration, failure, briefFailure, summary;
 };
 Presentation present(const LogRecord& record) {
     static const QRegularExpression serverPattern("server=(.*?)[, ]+rule=");
+    static const QRegularExpression poolPattern("pool=\"([^\"]+)\"");
     static const QRegularExpression transportPattern(" \\(DNS over [^)]+\\)$");
     static const QRegularExpression repeatedTransportPattern(" (\\([^)]+\\))(?: \\1)+$");
     static const QRegularExpression redundantNamedProtocolPattern(
@@ -62,6 +63,14 @@ Presentation present(const LogRecord& record) {
     p.server.remove(transportPattern);
     p.server.replace(repeatedTransportPattern, " \\1");
     p.server.replace(redundantNamedProtocolPattern, "\\1");
+    p.pool = capture(record.message, poolPattern);
+    if (!p.pool.isEmpty()) {
+        p.target = (!p.server.isEmpty() && p.server != "none")
+                       ? (QStringLiteral("P| ") + p.pool + QStringLiteral(" -> ") + p.server)
+                       : (QStringLiteral("P| ") + p.pool);
+    } else {
+        p.target = p.server;
+    }
     p.duration = capture(record.message, durationPattern);
     p.failure = capture(record.message, errorPattern);
     if (record.error && p.failure.isEmpty())
@@ -76,15 +85,16 @@ Presentation present(const LogRecord& record) {
         if (!changed.isEmpty() && changed != "none") {
             p.summary = uiText("Network interfaces updated") + ": " + changed;
             p.server = changed;
+            p.target = changed;
         } else {
             p.summary = uiText("Network interfaces updated");
         }
     } else if (record.code == "CORE_STARTED") {
         p.summary = uiText("CoreHost is running");
-    } else if (p.server.isEmpty()) {
+    } else if (p.target.isEmpty()) {
         p.summary = record.message;
     } else {
-        QStringList parts{p.domain, p.action, p.server};
+        QStringList parts{p.domain, p.action, p.target};
         if (!record.rule.isEmpty())
             parts << uiText("Rule: %1").arg(record.rule);
         if (!p.duration.isEmpty())
@@ -109,6 +119,8 @@ QString detailsText(const LogRecord& record, const Presentation& p) {
     if (!p.server.isEmpty())
         lines << uiText(record.code == "NETWORK_CHANGED" ? "Changed interfaces" : "DNS server") +
                      ": " + p.server;
+    if (!p.pool.isEmpty())
+        lines << uiText("Server pool") + ": " + p.pool;
     if (!record.rule.isEmpty())
         lines << uiText("Rule") + ": " + record.rule;
     if (!p.duration.isEmpty())
@@ -176,8 +188,17 @@ public:
 
         painter->save();
         painter->setClipRect(opt.rect);
+        const bool dark = opt.palette.color(QPalette::Window).lightness() < 128;
+        const bool selected = (opt.state & QStyle::State_Selected) != 0;
+        const bool hovered = (opt.state & QStyle::State_MouseOver) != 0;
         QColor textColor = opt.palette.color(QPalette::Text);
-        if (opt.state & QStyle::State_Selected) {
+        if (hovered) {
+            if (selected) {
+                textColor = dark ? QColor(255, 255, 255) : QColor(32, 32, 32);
+            } else if (const auto fg = index.data(Qt::ForegroundRole); fg.canConvert<QBrush>()) {
+                textColor = qvariant_cast<QBrush>(fg).color();
+            }
+        } else if (selected) {
             textColor = opt.palette.color(QPalette::HighlightedText);
         } else if (const auto fg = index.data(Qt::ForegroundRole); fg.canConvert<QBrush>()) {
             textColor = qvariant_cast<QBrush>(fg).color();
@@ -530,7 +551,7 @@ void LogDisplay::renderRecord(const LogRecord& record) {
         const QStringList cells{time,
                                 p.domain.isEmpty() ? p.summary : p.domain,
                                 p.action,
-                                p.server,
+                                p.target,
                                 record.rule,
                                 p.duration,
                                 p.briefFailure};
