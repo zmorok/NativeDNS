@@ -243,6 +243,39 @@ int main() {
             std::filesystem::remove(unrelated);
             std::filesystem::remove(unicode_directory);
         }
+        {
+            const auto dist_root = std::filesystem::temp_directory_path() /
+                ("NativeDNS-dist-test-" + std::to_string(nd::platform::process_id()));
+            std::filesystem::remove_all(dist_root);
+            std::filesystem::create_directories(dist_root / "bin");
+            std::filesystem::create_directories(dist_root / "app");
+            check(nd::platform::detect_distribution_in_directory(dist_root, false) ==
+                      nd::platform::DistributionKind::portable,
+                  "Default distribution without marker is portable");
+            check(nd::platform::detect_distribution_in_directory(dist_root, true) ==
+                      nd::platform::DistributionKind::executable,
+                  "Registry fallback identifies executable installation");
+            { std::ofstream f(dist_root / "unins000.exe"); f << "stub"; }
+            check(nd::platform::detect_distribution_in_directory(dist_root, false) ==
+                      nd::platform::DistributionKind::executable,
+                  "Inno Setup uninstaller fallback identifies executable installation");
+            { std::ofstream f(dist_root / "app" / "distribution"); f << "portable\n"; }
+            check(nd::platform::detect_distribution_in_directory(dist_root, true) ==
+                      nd::platform::DistributionKind::portable,
+                  "Explicit app/distribution marker overrides fallback");
+            { std::ofstream f(dist_root / "bin" / "distribution"); f << "Executable\r\n"; }
+            check(nd::platform::detect_distribution_in_directory(dist_root, false) ==
+                      nd::platform::DistributionKind::executable,
+                  "bin/distribution marker takes precedence and is case-insensitive");
+            check(std::string(nd::platform::distribution_name(nd::platform::DistributionKind::portable)) == "portable" &&
+                  std::string(nd::platform::distribution_label(nd::platform::DistributionKind::portable)) == "Portable" &&
+                  std::string(nd::platform::distribution_name(nd::platform::DistributionKind::executable)) == "executable" &&
+                  std::string(nd::platform::distribution_label(nd::platform::DistributionKind::executable)) == "Executable",
+                  "Distribution names and UI labels match");
+            check(nd::platform::system_summary().find("distribution=") != std::string::npos,
+                  "system_summary includes distribution field");
+            std::filesystem::remove_all(dist_root);
+        }
         std::cout << "foundation passed\n";
         return 0;
     } catch (const std::exception& error) {

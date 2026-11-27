@@ -49,6 +49,7 @@ cmake --install $build --config $Configuration --prefix $stage
 if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 
 & (Join-Path $PSScriptRoot 'deploy-windows-runtime.ps1') -PackageDirectory $stage -Configuration $Configuration
+[IO.File]::WriteAllText((Join-Path $stage 'app/distribution'),"portable`n",[Text.UTF8Encoding]::new($false))
 $required = @(
     'NativeDNS.exe','NativeDNS.Debug.exe','app/bin/NativeDNS.CoreHost.exe','app/bin/NativeDNS.Diagnostics.exe',
     'app/bin/nativednsctl.exe','app/bin/NativeDNS.Cli.exe','app/bin/qt.conf','app/drivers/windivert/WinDivert.dll',

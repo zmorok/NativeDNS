@@ -74,3 +74,11 @@ begin
     Sleep(500);
   end;
 end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    SaveStringToFile(ExpandConstant('{app}\app\distribution'), 'executable' + #10, False);
+  end;
+end;

@@ -15,8 +15,10 @@
 #include <set>
 #include <optional>
 #include <algorithm>
+#include <cctype>
 #include <condition_variable>
 #include <cstdlib>
+#include <fstream>
 
 namespace nd::platform {
 std::vector<std::string> command_line_arguments(int, char**) {
@@ -299,6 +301,111 @@ bool is_elevated() {
     CloseHandle(token);
     return result;
 }
+namespace {
+std::optional<DistributionKind> read_distribution_marker(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+        return std::nullopt;
+    std::ifstream file(path);
+    std::string line;
+    if (!std::getline(file, line))
+        return std::nullopt;
+    std::string token;
+    for (unsigned char ch : line) {
+        if (!std::isspace(ch))
+            token.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    if (token == "executable" || token == "installer")
+        return DistributionKind::executable;
+    if (token == "portable")
+        return DistributionKind::portable;
+    if (token == "appimage")
+        return DistributionKind::appimage;
+    if (token == "deb" || token == "package")
+        return DistributionKind::package;
+    return std::nullopt;
+}
+bool is_inno_setup_installed_at(const std::filesystem::path& root) {
+    constexpr wchar_t uninstall_key[] =
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{2F47E185-E56B-42F0-A85F-D6F276F3AF6B}_is1";
+    std::error_code ec;
+    const auto canonical_root = std::filesystem::weakly_canonical(root, ec).wstring();
+    if (canonical_root.empty())
+        return false;
+    for (const HKEY hive : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
+        wchar_t location[32768]{};
+        DWORD bytes = sizeof(location);
+        if (RegGetValueW(hive,
+                         uninstall_key,
+                         L"InstallLocation",
+                         RRF_RT_REG_SZ,
+                         nullptr,
+                         location,
+                         &bytes) != ERROR_SUCCESS)
+            continue;
+        std::wstring text(location);
+        while (!text.empty() && (text.back() == L'\\' || text.back() == L'/'))
+            text.pop_back();
+        if (text.empty())
+            continue;
+        const auto canonical_installed = std::filesystem::weakly_canonical(text, ec).wstring();
+        if (!canonical_installed.empty() &&
+            CompareStringOrdinal(canonical_root.c_str(),
+                                 -1,
+                                 canonical_installed.c_str(),
+                                 -1,
+                                 TRUE) == CSTR_EQUAL)
+            return true;
+    }
+    return false;
+}
+} // namespace
+const char* distribution_name(DistributionKind kind) noexcept {
+    switch (kind) {
+        case DistributionKind::portable:
+            return "portable";
+        case DistributionKind::executable:
+            return "executable";
+        case DistributionKind::appimage:
+            return "appimage";
+        case DistributionKind::package:
+            return "package";
+    }
+    return "portable";
+}
+const char* distribution_label(DistributionKind kind) noexcept {
+    switch (kind) {
+        case DistributionKind::portable:
+            return "Portable";
+        case DistributionKind::executable:
+            return "Executable";
+        case DistributionKind::appimage:
+            return "AppImage";
+        case DistributionKind::package:
+            return "Package";
+    }
+    return "Portable";
+}
+DistributionKind detect_distribution_in_directory(const std::filesystem::path& root,
+                                                  bool registry_installed) {
+    for (const auto& candidate :
+         {root / L"bin" / L"distribution", root / L"app" / L"distribution", root / L"distribution"}) {
+        if (const auto marked = read_distribution_marker(candidate))
+            return *marked;
+    }
+    std::error_code ec;
+    if (registry_installed || std::filesystem::is_regular_file(root / L"unins000.exe", ec))
+        return DistributionKind::executable;
+    return DistributionKind::portable;
+}
+DistributionKind distribution_kind() {
+    try {
+        const auto root = application_root_directory();
+        return detect_distribution_in_directory(root, is_inno_setup_installed_at(root));
+    } catch (...) {
+        return DistributionKind::portable;
+    }
+}
 std::string system_summary() {
     using RtlGetVersionFunction = LONG(WINAPI*)(OSVERSIONINFOW*);
     OSVERSIONINFOW version{};
@@ -341,6 +448,7 @@ std::string system_summary() {
     if (ubr)
         output << '.' << *ubr;
     output << " pid=" << process_id() << " elevated=" << (is_elevated() ? 1 : 0)
+           << " distribution=" << distribution_name(distribution_kind())
            << " ansi_cp=" << GetACP() << " oem_cp=" << GetOEMCP()
            << " console_input_cp=" << GetConsoleCP()
            << " console_output_cp=" << GetConsoleOutputCP() << " log_encoding=UTF-8";

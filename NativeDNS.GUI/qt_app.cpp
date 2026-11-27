@@ -440,9 +440,14 @@ void showAboutDialog(QWidget* parent) {
     icon->setPixmap(QApplication::windowIcon().pixmap(64, 64));
     icon->setAlignment(Qt::AlignTop | Qt::AlignHCenter);
 
-    auto* description = new QLabel("<b>NativeDNS</b><br>" + uiText("Cross-platform DNS client") +
-                                       "<br>Qt 6 + native C++ Core",
-                                   &dialog);
+    const auto distColor = dialog.palette().color(QPalette::PlaceholderText).name();
+    const auto distLabel =
+        QString::fromLatin1(nd::platform::distribution_label(nd::platform::distribution_kind()))
+            .toHtmlEscaped();
+    auto* description = new QLabel(
+        "<b>NativeDNS</b> <span style=\"color:" + distColor + ";\">" + distLabel + "</span><br>" +
+            uiText("Cross-platform DNS client") + "<br>Qt 6 + native C++ Core",
+        &dialog);
     description->setTextFormat(Qt::RichText);
 
     auto* summary = new QHBoxLayout;

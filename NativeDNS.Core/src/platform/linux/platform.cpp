@@ -22,6 +22,7 @@
 #include <sstream>
 #include <set>
 #include <fstream>
+#include <optional>
 #include <algorithm>
 
 namespace nd::platform {
@@ -178,6 +179,80 @@ std::filesystem::path user_config_directory() {
 bool is_elevated() {
     return geteuid() == 0;
 }
+namespace {
+std::optional<DistributionKind> read_distribution_marker(const std::filesystem::path& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec))
+        return std::nullopt;
+    std::ifstream file(path);
+    std::string line;
+    if (!std::getline(file, line))
+        return std::nullopt;
+    std::string token;
+    for (unsigned char ch : line) {
+        if (!std::isspace(ch))
+            token.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    if (token == "executable" || token == "installer")
+        return DistributionKind::executable;
+    if (token == "portable")
+        return DistributionKind::portable;
+    if (token == "appimage")
+        return DistributionKind::appimage;
+    if (token == "deb" || token == "package")
+        return DistributionKind::package;
+    return std::nullopt;
+}
+} // namespace
+const char* distribution_name(DistributionKind kind) noexcept {
+    switch (kind) {
+        case DistributionKind::portable:
+            return "portable";
+        case DistributionKind::executable:
+            return "executable";
+        case DistributionKind::appimage:
+            return "appimage";
+        case DistributionKind::package:
+            return "package";
+    }
+    return "portable";
+}
+const char* distribution_label(DistributionKind kind) noexcept {
+    switch (kind) {
+        case DistributionKind::portable:
+            return "Portable";
+        case DistributionKind::executable:
+            return "Executable";
+        case DistributionKind::appimage:
+            return "AppImage";
+        case DistributionKind::package:
+            return "Package";
+    }
+    return "Portable";
+}
+DistributionKind detect_distribution_in_directory(const std::filesystem::path& root,
+                                                  bool registry_installed) {
+    for (const auto& candidate :
+         {root / "bin" / "distribution", root / "app" / "distribution", root / "distribution"}) {
+        if (const auto marked = read_distribution_marker(candidate))
+            return *marked;
+    }
+    if (registry_installed)
+        return DistributionKind::executable;
+    if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage)
+        return DistributionKind::appimage;
+    const auto text = root.string();
+    if (text == "/usr" || text.starts_with("/usr/") || text.starts_with("/opt/"))
+        return DistributionKind::package;
+    return DistributionKind::portable;
+}
+DistributionKind distribution_kind() {
+    try {
+        return detect_distribution_in_directory(application_root_directory(), false);
+    } catch (...) {
+        return DistributionKind::portable;
+    }
+}
 std::string system_summary() {
     utsname details{};
     const bool available = ::uname(&details) == 0;
@@ -186,7 +261,8 @@ std::string system_summary() {
     if (available)
         output << " kernel=" << details.sysname << ' ' << details.release
                << " machine=" << details.machine;
-    output << " pid=" << process_id() << " uid=" << ::getuid() << " euid=" << ::geteuid();
+    output << " pid=" << process_id() << " uid=" << ::getuid() << " euid=" << ::geteuid()
+           << " distribution=" << distribution_name(distribution_kind());
     return output.str();
 }
 void wait_socket(std::intptr_t raw, bool writing, std::chrono::steady_clock::time_point deadline) {

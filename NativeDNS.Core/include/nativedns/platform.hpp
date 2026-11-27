@@ -60,6 +60,12 @@ bool is_elevated();
 // Windows can release interception handles by exiting after stuck cleanup.
 // Linux must finish nftables cleanup and currently has no forced-exit fallback.
 std::jthread watch_shutdown_deadline(std::function<bool()> shutdown_requested);
+enum class DistributionKind { portable, executable, appimage, package };
+DistributionKind distribution_kind();
+const char* distribution_name(DistributionKind kind) noexcept;
+const char* distribution_label(DistributionKind kind) noexcept;
+DistributionKind detect_distribution_in_directory(const std::filesystem::path& root,
+                                                  bool registry_installed = false);
 std::string system_summary();
 // Application text is UTF-8, independently of the Windows ANSI/OEM code pages.
 std::string path_to_utf8(const std::filesystem::path& path);
