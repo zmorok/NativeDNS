@@ -103,6 +103,8 @@ private:
     };
     std::shared_ptr<CoreLaunchState> coreLaunchState_ = std::make_shared<CoreLaunchState>();
     std::atomic_bool statusRefreshPending_ = false;
+    bool statusRefreshQueued_ = false;
+    uint64_t statusPollGeneration_ = 0;
     std::atomic_bool logRefreshPending_ = false;
     std::shared_ptr<std::atomic_bool> exitConfirmed_ = std::make_shared<std::atomic_bool>(false);
     std::jthread shutdownWorker_;

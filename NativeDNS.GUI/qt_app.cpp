@@ -2726,7 +2726,6 @@ NativeDnsWindow::NativeDnsWindow(bool background, bool diagnostic_logging)
     statusTimer_.setTimerType(Qt::CoarseTimer);
     logTimer_.setTimerType(Qt::CoarseTimer);
     QTimer::singleShot(100, this, [this] {
-        refreshStatus();
         ensureCoreStarted();
     });
     QTimer::singleShot(1000, this, [this] {
@@ -2787,7 +2786,7 @@ void NativeDnsWindow::buildUi() {
 
     log_ = new LogPanel(this, nullptr, diagnosticLogging_);
     setCentralWidget(log_);
-    coreStatus_ = new QLabel(uiText("Core: unknown"), this);
+    coreStatus_ = new QLabel(uiText("Core: starting..."), this);
     coreStatus_->installEventFilter(this);
     statusBar()->addPermanentWidget(log_->countLabel(), 1);
     statusBar()->addPermanentWidget(coreStatus_);
@@ -3622,6 +3621,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
         return;
     if (coreStartOperationPending_.exchange(true))
         return;
+    ++statusPollGeneration_;
     networkProbeTimer_.restart();
     const QString helper = coreHostExecutable();
     QStringList args{"--config", qPath(configPath())};
@@ -3647,7 +3647,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
          captureRequest,
          diagnostic = diagnosticLogging_] {
             bool success = false, running = false, scheduledDebug = false;
-            QString failure;
+            QString failure, readyStatus;
             try {
                 const auto response = readCoreStatus();
                 if (response.status)
@@ -3656,6 +3656,8 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                     response.payload.rfind("STARTING", 0) == 0) {
                     success = true;
                     running = true;
+                    if (response.payload.rfind("RUNNING", 0) == 0)
+                        readyStatus = q(response.payload);
                 } else {
                     const auto started =
                         nd::pipe_request(nd::core_pipe_name, nd::IpcOperation::start, {}, 500);
@@ -3747,6 +3749,7 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                                 failure = q(applied.payload);
                                 break;
                             }
+                            readyStatus = q(ready.payload);
                             success = running = true;
                             break;
                         } catch (const nd::Error& error) {
@@ -3764,10 +3767,18 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
             launchState->pending = false;
             QMetaObject::invokeMethod(
                 qApp,
-                [self, success, running, failure, reportFailure, launchState, scheduledDebug] {
+                [self,
+                 success,
+                 running,
+                 failure,
+                 readyStatus,
+                 reportFailure,
+                 launchState,
+                 scheduledDebug] {
                     if (!self)
                         return;
                     self->coreStartOperationPending_ = false;
+                    ++self->statusPollGeneration_;
                     if (launchState->cancelled)
                         return;
                     self->restartWhenNetworkReturns_ = false;
@@ -3785,9 +3796,25 @@ void NativeDnsWindow::startCore(bool transparent, bool reportFailure) {
                                    "initialization used the task's logging profile."));
                     self->coreLaunchPending_ = !running;
                     self->refreshAutostartAction();
-                    if (running)
+                    if (running) {
+                        self->coreLaunchState_->issued = false;
+                        self->failedCorePolls_ = 0;
+                        self->coreFailureTimer_.invalidate();
+                        if (!readyStatus.isEmpty()) {
+                            self->lastCoreStatus_ = readyStatus;
+                            self->lastCoreContact_ =
+                                QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+                            const bool degraded = readyStatus.contains("verification=DEGRADED");
+                            self->setStatusText(
+                                friendlyCoreStatus(readyStatus) +
+                                    (degraded ? " | " + uiText("Interception degraded")
+                                              : QString{}) +
+                                    (self->networkAvailable_ ? QString{}
+                                                             : " | " + uiText("Offline")),
+                                degraded || !self->networkAvailable_);
+                        }
                         self->refreshStatus();
-                    else {
+                    } else {
                         self->coreLaunchTimer_.restart();
                         self->setStatusText(uiText("Core: starting..."));
                     }
@@ -4016,11 +4043,14 @@ void NativeDnsWindow::exitApplication(bool force) {
 }
 
 void NativeDnsWindow::refreshStatus() {
-    if (statusRefreshPending_.exchange(true))
+    if (statusRefreshPending_.exchange(true)) {
+        statusRefreshQueued_ = true;
         return;
+    }
+    const uint64_t pollGeneration = statusPollGeneration_;
     const auto reachability = currentReachability();
     QPointer<NativeDnsWindow> self(this);
-    QThreadPool::globalInstance()->start([self, reachability] {
+    QThreadPool::globalInstance()->start([self, reachability, pollGeneration] {
         const auto network = probeNetwork(reachability);
         QString status, diagnostics;
         bool failed = false, processAlive = false;
@@ -4075,12 +4105,25 @@ void NativeDnsWindow::refreshStatus() {
              status = std::move(status),
              diagnostics = std::move(diagnostics),
              failed,
-             processAlive] {
+             processAlive,
+             pollGeneration] {
                 if (!self)
                     return;
                 self->statusRefreshPending_ = false;
+                const bool queued = self->statusRefreshQueued_;
+                self->statusRefreshQueued_ = false;
                 if (self->exiting_)
                     return;
+                if (pollGeneration != self->statusPollGeneration_) {
+                    if (queued)
+                        self->refreshStatus();
+                    return;
+                }
+                if (queued)
+                    QTimer::singleShot(0, self, [self] {
+                        if (self && !self->exiting_)
+                            self->refreshStatus();
+                    });
                 if (failed) {
                     self->coreHealthyTimer_.invalidate();
                     if (!self->coreFailureTimer_.isValid())
@@ -4143,15 +4186,15 @@ void NativeDnsWindow::refreshStatus() {
                                             (available ? QString{} : " | " + uiText("Offline")),
                                         isError || degraded || !available,
                                         tips.join("\n\n"));
+                } else if (self->coreStartOperationPending_) {
+                    if (!self->restartWhenNetworkReturns_)
+                        self->setStatusText(uiText("Core: starting..."));
                 } else if (processAlive && !self->coreLaunchPending_) {
                     self->coreHealthyTimer_.invalidate();
                     self->setStatusText(uiText("Core: control unavailable"), true);
                     if (++self->failedCorePolls_ >= 3 &&
                         self->coreFailureTimer_.elapsed() >= 10000)
                         self->showCoreControlFailure(diagnostics);
-                } else if (self->coreStartOperationPending_) {
-                    if (!self->restartWhenNetworkReturns_)
-                        self->setStatusText(uiText("Core: checking network..."));
                 } else if (self->coreLaunchPending_ && self->coreLaunchTimer_.isValid() &&
                            self->coreLaunchTimer_.elapsed() < 15000) {
                     self->setStatusText(uiText("Core: starting..."));
