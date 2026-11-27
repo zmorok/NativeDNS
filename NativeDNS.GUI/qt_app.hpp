@@ -60,6 +60,7 @@ private:
     void refreshStatus();
     void refreshLogs();
     void refreshAutostartAction();
+    void attachUpdateInstaller(UpdateDialog* dialog);
     void setStatusText(const QString& text, bool error = false, const QString& tooltip = {});
     void appendLocalLog(const QString& message, bool error = false);
     void appendLogLines(const QString& payload);

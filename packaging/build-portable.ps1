@@ -45,13 +45,13 @@ if (-not $SkipBuild) {
     cmake --build $build --config $Configuration
     if ($LASTEXITCODE -ne 0) { throw 'NativeDNS build failed' }
 }
-cmake --install $build --config $Configuration --prefix $stage
+cmake --install $build --config $Configuration --component Runtime --prefix $stage
 if ($LASTEXITCODE -ne 0) { throw 'NativeDNS install failed' }
 
 & (Join-Path $PSScriptRoot 'deploy-windows-runtime.ps1') -PackageDirectory $stage -Configuration $Configuration
 [IO.File]::WriteAllText((Join-Path $stage 'bin/distribution'),"portable`n",[Text.UTF8Encoding]::new($false))
 $required = @(
-    'NativeDNS.exe','bin/NativeDNS.GUI.dll','bin/NativeDNS.CoreHost.dll','bin/NativeDNS.Cli.dll',
+    'NativeDNS.exe','Updater.exe','bin/NativeDNS.GUI.dll','bin/NativeDNS.CoreHost.dll','bin/NativeDNS.Cli.dll',
     'bin/NativeDNS.Diagnostics.dll','bin/qt.conf','bin/distribution','bin/drivers/WinDivert.dll',
     'bin/drivers/WinDivert64.sys','docs/README.md','docs/licenses/THIRD_PARTY_NOTICES.md',
     'docs/licenses/WinDivert.txt','docs/licenses/curl.txt','docs/licenses/libsodium.txt',

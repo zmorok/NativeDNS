@@ -1523,6 +1523,7 @@ NativeDnsWindow::NativeDnsWindow(bool background, bool diagnostic_logging)
             return;
         auto* dialog = new UpdateDialog(QCoreApplication::applicationVersion(), this);
         dialog->setAttribute(Qt::WA_DeleteOnClose);
+        attachUpdateInstaller(dialog);
         updateDialog_ = dialog;
         dialog->checkOnStart();
     });
@@ -1922,6 +1923,7 @@ void NativeDnsWindow::buildUi() {
         if (!updateDialog_) {
             auto* dialog = new UpdateDialog(QCoreApplication::applicationVersion(), this);
             dialog->setAttribute(Qt::WA_DeleteOnClose);
+            attachUpdateInstaller(dialog);
             updateDialog_ = dialog;
             dialog->show();
             dialog->check();
@@ -1969,6 +1971,78 @@ void NativeDnsWindow::buildUi() {
         }
     });
     refreshAutostartAction();
+}
+
+void NativeDnsWindow::attachUpdateInstaller(UpdateDialog* dialog) {
+    if (!dialog)
+        return;
+    dialog->setDistributionKind(nd::platform::distribution_kind());
+    dialog->setInstallHandler(
+        [this](const ReleaseAsset&, const QString& downloadedPath, QString& error) -> bool {
+#ifdef _WIN32
+            const auto root = nd::platform::application_root_directory();
+            const auto updaterSource = root / L"Updater.exe";
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(updaterSource, ec)) {
+                error = uiText("Updater.exe was not found next to NativeDNS.exe.");
+                return false;
+            }
+
+            const QString tempRoot = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+            if (tempRoot.isEmpty()) {
+                error = uiText("Cannot access the system temporary directory.");
+                return false;
+            }
+
+            const auto stagingDir = fsPath(tempRoot) /
+                                    (L"NativeDNS-Updater-" +
+                                     std::to_wstring(QCoreApplication::applicationPid()) + L"-" +
+                                     std::to_wstring(QDateTime::currentMSecsSinceEpoch()));
+            std::filesystem::create_directories(stagingDir, ec);
+            if (ec) {
+                error = uiText("Cannot prepare temporary updater directory.");
+                return false;
+            }
+
+            const auto updaterCopy = stagingDir / L"Updater.exe";
+            std::filesystem::copy_file(updaterSource,
+                                       updaterCopy,
+                                       std::filesystem::copy_options::overwrite_existing,
+                                       ec);
+            if (ec) {
+                std::filesystem::remove_all(stagingDir, ec);
+                error = uiText("Cannot copy Updater.exe to temporary directory.");
+                return false;
+            }
+
+            const auto distKind = nd::platform::distribution_kind();
+            const QString mode = distKind == nd::platform::DistributionKind::executable
+                                     ? "executable"
+                                     : "portable";
+            QStringList args;
+            args << "--mode" << mode << "--install-dir" << qPath(root) << "--package"
+                 << downloadedPath << "--wait-pid"
+                 << QString::number(QCoreApplication::applicationPid()) << "--lang"
+                 << (uiLanguage() == UiLanguage::russian ? "ru" : "en") << "--cleanup-package";
+            if (diagnosticLogging_)
+                args << "--relaunch-args" << "--diagnostics";
+
+            if (!QProcess::startDetached(qPath(updaterCopy), args, qPath(stagingDir))) {
+                std::filesystem::remove_all(stagingDir, ec);
+                error = uiText("Cannot launch the updater.");
+                return false;
+            }
+
+            appendLocalLog(uiText("Launching updater and closing NativeDNS..."));
+            QTimer::singleShot(0, this, [this] { exitApplication(); });
+            return true;
+#else
+            (void)downloadedPath;
+            error = uiText("Automatic installation is currently supported on Windows only. Use "
+                           "Open release to download manually.");
+            return false;
+#endif
+        });
 }
 
 void NativeDnsWindow::refreshAutostartAction() {

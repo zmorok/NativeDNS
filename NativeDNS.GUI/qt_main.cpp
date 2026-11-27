@@ -10,11 +10,33 @@
 #include <QSettings>
 #include <QStringList>
 #include <QMessageBox>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <exception>
 
 namespace {
+void cleanup_stale_updater_dirs() noexcept {
+    try {
+        std::error_code ec;
+        const auto temp = std::filesystem::temp_directory_path(ec);
+        if (ec || temp.empty())
+            return;
+        const auto now = std::filesystem::file_time_type::clock::now();
+        for (const auto& entry : std::filesystem::directory_iterator(temp, ec)) {
+            if (!entry.is_directory(ec))
+                continue;
+            const auto name = entry.path().filename().string();
+            if (!name.starts_with("NativeDNS-Updater-"))
+                continue;
+            const auto modified = entry.last_write_time(ec);
+            if (!ec && now - modified > std::chrono::seconds(60))
+                std::filesystem::remove_all(entry.path(), ec);
+        }
+    } catch (...) {
+    }
+}
+
 [[noreturn]] void gui_terminate() noexcept {
     std::string message = "GUI terminated without an active exception";
     if (const auto failure = std::current_exception())
@@ -41,6 +63,7 @@ namespace {
 int run_gui_main(int argc, char** argv) {
     std::set_terminate(&gui_terminate);
     nd::platform::initialize_application_paths();
+    cleanup_stale_updater_dirs();
     {
         std::error_code ec;
         const auto plugins_dir = nd::platform::application_root_directory() / "bin" / "plugins";

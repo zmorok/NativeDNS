@@ -66,7 +66,14 @@ The GUI's **Help > Check for updates** command downloads the `update.json`
 asset from the latest stable GitHub release. It compares numeric version components
 and displays English/Russian release notes with links to the contributing commits.
 Only the notes scroll; the version labels and action buttons remain visible.
-This command checks metadata and opens the release page; it does not install packages.
+When `update.json` includes matching release `assets` (`windows-x64-portable` or
+`windows-x64-setup`) for the running distribution (`Portable` or `Executable`),
+the dialog offers an **Update** button that downloads the package with progress,
+speed, and ETA, verifies its size and SHA-256 checksum, and launches a temporary
+copy of `Updater.exe` to stop NativeDNS/CoreHost, apply the update (ZIP swap
+with rollback preserving `logs/` for Portable, or silent Inno Setup upgrade for
+Executable), and restart NativeDNS. **Open release** remains available as a
+manual fallback.
 
 The release tag must be `v` followed by the version in `VERSION`.
 Prepare the manifest after committing the release version and before publishing:
@@ -198,12 +205,14 @@ For portable/AppImage generation, provide `linuxdeploy` and `linuxdeploy-plugin-
 
 ## Network diagnostics
 
-Windows packages have two public entry points:
+Windows packages have two root executables:
 
-- `NativeDNS.exe` starts the normal GUI.
-- `NativeDNS.Debug.exe` starts the same GUI with forced Debug screen/file capture and file recording enabled.
+- `NativeDNS.exe` is the unified entry point (GUI by default, `--diagnostics` for forced Debug screen/file capture, `--core-host` for CoreHost, `--cli` for CLI commands, `--collect` for diagnostic archive collection).
+- `Updater.exe` is the standalone static Win32 updater launched automatically from **Check for updates**.
 
-They share the same GUI lock, activation endpoint and machine-wide CoreHost lock.
+Installer (`Executable`) builds create both `NativeDNS` and `NativeDNS (Debug)` (`NativeDNS.exe --diagnostics`) Start Menu shortcuts. Portable builds keep a clean root containing `NativeDNS.exe`, `Updater.exe`, `bin/`, `docs/`, and `logs/`.
+
+Normal and diagnostic launches share the same GUI lock, activation endpoint and machine-wide CoreHost lock.
 A second launch activates the current instance; a request for a different mode
 shows a message asking the user to exit first. Exit through the application menu
 before switching modes. Debug logging is a runtime profile: the saved XML logging
@@ -222,8 +231,8 @@ collect a report and the latest available logs. Collection also works without
 the GUI or CoreHost running:
 
 ```powershell
-./NativeDNS.Debug.exe --collect --host example.com
-./NativeDNS.Debug.exe --collect --host example.com --offline --quiet
+./NativeDNS.exe --collect --host example.com
+./NativeDNS.exe --collect --host example.com --offline --quiet
 ```
 
 Optional arguments are `--config FILE`, `--host DOMAIN`, `--offline` and `--quiet`.
@@ -245,21 +254,22 @@ changes DNS settings, hosts, autostart, drivers or browser profiles. Missing
 explicit Edge preferences do not prove Secure DNS is disabled.
 
 The collector uses the packaged CLI and libcurl, with bounded subprocess/probe
-timeouts. PowerShell and external curl.exe are not required at runtime. Internal
-executables in `app/bin` are started through the root bootstrap so that libraries
-in `app/lib` are available even before their main function and after elevation.
+timeouts. PowerShell and external curl.exe are not required at runtime. Runtime
+DLL modules (`NativeDNS.GUI.dll`, `NativeDNS.CoreHost.dll`, `NativeDNS.Cli.dll`,
+`NativeDNS.Diagnostics.dll`) and Qt/libsodium/WinDivert/MSVC runtime files live
+under `bin/` and are loaded in-process by `NativeDNS.exe`.
 For manual CLI inspection:
 
 ```powershell
-./app/bin/nativednsctl.exe diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com
-./app/bin/nativednsctl.exe resolve "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com 1.1.1.1 --type AAAA
+./NativeDNS.exe --cli diagnose "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com
+./NativeDNS.exe --cli resolve "$env:LOCALAPPDATA/NativeDNS/NativeDNS.xml" example.com 1.1.1.1 --type AAAA
 ```
 
 On Linux use `NativeDNS --diagnostics`, `NativeDNSCoreHost --diagnostics` and
 `nativednsctl diagnose <config-path> <hostname>`. The native report collector and
-Windows root launchers are Windows-specific. The CMake option
+Windows root executables are Windows-specific. The CMake option
 `NATIVEDNS_DIAGNOSTIC_BUILD=ON` forces the profile by default for development;
-regular distributable packages leave it OFF and include the separate Debug entry.
+regular distributable packages leave it OFF.
 
 ## Sanitizers and fuzzing
 
@@ -323,14 +333,14 @@ Use `--debug-logging` for the logging-overhead variant. Longer soak runs use the
 Main desktop executable:
 
 ```text
-Windows: NativeDNS.exe
+Windows: NativeDNS.exe (plus Updater.exe; runtime modules and DLLs in bin/)
 Linux:   NativeDNS
 ```
 
 Background helper:
 
 ```text
-Windows: app/bin/NativeDNS.CoreHost.exe
+Windows: NativeDNS.exe --core-host (loads bin/NativeDNS.CoreHost.dll)
 Linux:   NativeDNSCoreHost
 ```
 
@@ -338,21 +348,19 @@ The GUI should run unprivileged. Transparent interception privileges belong to C
 
 ## Interception CLI and target-machine validation
 
-The packaged `app/bin/nativednsctl.exe` is a static console bootstrap. It sets the
-private DLL search directory before launching `NativeDNS.Cli.exe`, so no external
-Qt installation or PATH modification is needed. Prefer this console entry point
-in PowerShell: it waits, prints stdout/stderr and returns the worker exit code.
-The GUI-subsystem `NativeDNS.exe --cli ...` also attaches to an available parent
-console when needed, but PowerShell may return its prompt before a GUI program
-finishes. For redirected capture, pipe it or use the console entry point.
+On Windows, CLI commands run through `NativeDNS.exe --cli ...`, which sets the
+private `bin/` DLL search directory and loads `bin/NativeDNS.Cli.dll` in-process,
+so no external Qt installation or PATH modification is needed. Because
+`NativeDNS.exe` uses the Windows GUI subsystem, pipe output or redirect when
+capturing from PowerShell:
 
 ```powershell
-& ./app/bin/nativednsctl.exe core status
-& ./app/bin/nativednsctl.exe core interception-status
-& ./app/bin/nativednsctl.exe core interception-test
-& ./app/bin/nativednsctl.exe core profile Debug
-& ./app/bin/nativednsctl.exe core flush-file
-& ./app/bin/nativednsctl.exe core profile Normal
+& ./NativeDNS.exe --cli core status | Out-Host
+& ./NativeDNS.exe --cli core interception-status | Out-Host
+& ./NativeDNS.exe --cli core interception-test | Out-Host
+& ./NativeDNS.exe --cli core profile Debug | Out-Host
+& ./NativeDNS.exe --cli core flush-file | Out-Host
+& ./NativeDNS.exe --cli core profile Normal | Out-Host
 ```
 
 The interception-status command is read-only. The test sends the bounded reserved

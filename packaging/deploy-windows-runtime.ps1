@@ -32,7 +32,7 @@ if ($Configuration -eq 'Debug') {
     if (-not $ucrt) { throw 'Debug UCRT was not found in the Windows SDK' }
     Copy-Item -LiteralPath $ucrt -Destination $bin -Force
 }
-foreach ($relative in 'NativeDNS.exe','bin\NativeDNS.GUI.dll','bin\NativeDNS.CoreHost.dll','bin\NativeDNS.Cli.dll','bin\NativeDNS.Diagnostics.dll','bin\Qt6Core.dll','bin\drivers\WinDivert64.sys','bin\plugins\platforms\qwindows.dll') {
+foreach ($relative in 'NativeDNS.exe','Updater.exe','bin\NativeDNS.GUI.dll','bin\NativeDNS.CoreHost.dll','bin\NativeDNS.Cli.dll','bin\NativeDNS.Diagnostics.dll','bin\Qt6Core.dll','bin\drivers\WinDivert64.sys','bin\plugins\platforms\qwindows.dll') {
     if ($Configuration -eq 'Debug') { $relative = $relative.Replace('Qt6Core.dll','Qt6Cored.dll').Replace('qwindows.dll','qwindowsd.dll') }
     if (-not (Test-Path -LiteralPath (Join-Path $package $relative) -PathType Leaf)) { throw "Incomplete package: $relative" }
 }
