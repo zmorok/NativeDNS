@@ -233,12 +233,20 @@ void Router::reload(Config config) const {
     }
     platform::set_captive_portal_polling_enabled(next->options.captive_portal_detection);
     snapshot_.store(std::move(next));
+    {
+        std::lock_guard mlock(monitor_mutex_);
+    }
     monitor_cv_.notify_all();
 }
 void Router::cancel_pending() const {
     cancellation_.load()->request_stop();
-    std::lock_guard lock(transport_mutex_);
-    transports_.fill(nullptr);
+    {
+        std::lock_guard lock(transport_mutex_);
+        transports_.fill(nullptr);
+    }
+    {
+        std::lock_guard mlock(monitor_mutex_);
+    }
     monitor_cv_.notify_all();
 }
 void Router::resume() const {

@@ -119,7 +119,8 @@ MonotonicClocks monotonic_clocks() {
     return {boot, boot};
 }
 struct SuspendResumeSubscription::Impl {};
-SuspendResumeSubscription::SuspendResumeSubscription(std::function<void()>) = default;
+SuspendResumeSubscription::SuspendResumeSubscription(std::function<void()>) {
+}
 SuspendResumeSubscription::~SuspendResumeSubscription() = default;
 void elevate_service_process_priority() noexcept {
     if (::geteuid() == 0)

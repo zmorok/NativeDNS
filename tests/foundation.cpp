@@ -255,10 +255,12 @@ int main() {
             check(nd::platform::detect_distribution_in_directory(dist_root, true) ==
                       nd::platform::DistributionKind::executable,
                   "Registry fallback identifies executable installation");
+#ifdef _WIN32
             { std::ofstream f(dist_root / "unins000.exe"); f << "stub"; }
             check(nd::platform::detect_distribution_in_directory(dist_root, false) ==
                       nd::platform::DistributionKind::executable,
                   "Inno Setup uninstaller fallback identifies executable installation");
+#endif
             { std::ofstream f(dist_root / "app" / "distribution"); f << "portable\n"; }
             check(nd::platform::detect_distribution_in_directory(dist_root, true) ==
                       nd::platform::DistributionKind::portable,
