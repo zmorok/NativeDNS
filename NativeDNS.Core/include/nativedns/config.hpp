@@ -72,6 +72,7 @@ std::filesystem::path save_config_replacing_corrupt(const Config& config,
                                                     const std::filesystem::path& path);
 std::string serialize_config(const Config& config);
 std::string protocol_name(Protocol protocol);
+std::string pool_type_name(PoolType type);
 std::string action_name(Action action);
 // Transactional mutations: validate candidate before replacing live snapshot.
 class ConfigEditor {
@@ -88,6 +89,9 @@ public:
     void add_server(Server server);
     void update_server(Server server);
     void remove_server(uint32_t id);
+    void add_pool(ServerPool pool);
+    void update_pool(ServerPool pool);
+    void remove_pool(uint32_t id);
 
 private:
     void commit(Config next);

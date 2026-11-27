@@ -147,7 +147,18 @@ Server fields include:
 
 Server ID `0` is reserved as the original/system destination sentinel and is not a normal configured server.
 
-The optional semicolon-separated `fallbacks` attribute defines a server group rooted at that server. References must exist, be unique, and form an acyclic graph. A request uses a bounded aggregate deadline across the enabled candidates; it never falls back implicitly to the system resolver.
+A rule referencing a single `Server` always routes strictly to that server without switching to another server. The legacy `fallbacks` attribute on `<Server>` is still parsed for backwards compatibility with older configs, while multi-server failover and balancing are configured explicitly through `<Pool>`.
+
+## Server Pools
+
+`<Pool>` elements define named groups of configured servers:
+
+- stable numeric `id`;
+- `name`;
+- `type`: `redundancy` or `load_balancing`;
+- semicolon-separated `servers` (member server IDs);
+- `testHostname` (default `iana.org`, used by `redundancy` background probes);
+- `recheckSeconds` (`5..86400`, default `60`, used by `redundancy` background probes).
 
 ## Rules
 
@@ -159,7 +170,7 @@ Rules contain:
 - permanent Default marker;
 - hostname patterns;
 - action;
-- selected server ID;
+- selected server ID (`server`) or server pool ID (`pool`, mutually exclusive);
 - interface/security metadata;
 - block mode.
 

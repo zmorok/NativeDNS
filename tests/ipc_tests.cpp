@@ -438,6 +438,10 @@ int main() {
               "reload restores original rule");
         check(nd::test_server(local, "example.com").success,
               "listener remains usable after repeated reloads");
+        {
+            const auto pool_resp = nd::pipe_request(host_name, nd::IpcOperation::pool_status);
+            check(pool_resp.status == 0, "pool_status IPC operation succeeds");
+        }
         host.logger().flush_file();
         diagnostic_log = find_new_diagnostic_log(log_directory, existing_logs);
         {

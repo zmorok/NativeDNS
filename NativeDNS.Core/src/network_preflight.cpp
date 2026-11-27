@@ -63,7 +63,8 @@ std::vector<PreflightFinding> inspect_hosts_overrides(const Config& config,
             }
             const auto decision = evaluate_rule(config, normalized, snapshot);
             if (decision.rule->action == Action::bypass ||
-                (decision.rule->action == Action::process && decision.rule->server_id == 0) ||
+                (decision.rule->action == Action::process && decision.rule->server_id == 0 &&
+                 decision.rule->pool_id == 0) ||
                 !reported.insert(normalized).second)
                 continue;
             result.push_back({Level::errors_only,

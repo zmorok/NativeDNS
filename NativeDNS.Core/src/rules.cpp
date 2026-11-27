@@ -211,6 +211,15 @@ std::string protocol_name(Protocol value) {
     }
     throw Error("PROTOCOL", "Unknown protocol");
 }
+std::string pool_type_name(PoolType value) {
+    switch (value) {
+        case PoolType::redundancy:
+            return "redundancy";
+        case PoolType::load_balancing:
+            return "load_balancing";
+    }
+    throw Error("POOL_TYPE", "Unknown pool type");
+}
 std::string action_name(Action value) {
     switch (value) {
         case Action::process:
@@ -226,7 +235,8 @@ void validate(const Config& config) {
     (void)runtime_options(config);
     if (config.schema_version != 1)
         throw Error("SCHEMA", "Unsupported schema version");
-    if (config.servers.size() > 4096 || config.rules.empty() || config.rules.size() > 4096)
+    if (config.servers.size() > 4096 || config.pools.size() > 4096 || config.rules.empty() ||
+        config.rules.size() > 4096)
         throw Error("CONFIG_LIMIT", "Configuration count limit or missing Default");
     if (!config.test_concurrency || config.test_concurrency > 64)
         throw Error("CONFIG", "Test concurrency must be 1..64");
@@ -295,6 +305,22 @@ void validate(const Config& config) {
     };
     for (const auto& server : config.servers)
         visit(server.id);
+    std::set<uint32_t> pool_ids;
+    for (const auto& pool : config.pools) {
+        if (!pool.id || !pool_ids.insert(pool.id).second || pool.name.empty())
+            throw Error("POOL_ID", "Missing/duplicate pool ID or name");
+        (void)pool_type_name(pool.type);
+        (void)normalize_host(pool.test_hostname);
+        if (pool.recheck_seconds < 5 || pool.recheck_seconds > 86400)
+            throw Error("POOL_CONFIG", "Pool recheck interval must be 5..86400 seconds");
+        std::set<uint32_t> members;
+        for (const auto sid : pool.server_ids) {
+            if (!sid || !members.insert(sid).second)
+                throw Error("POOL_MEMBER", "Pool server IDs must be nonzero and unique");
+            if (!ids.contains(sid))
+                throw Error("POOL_MEMBER", "Pool references a missing server");
+        }
+    }
     std::set<uint32_t> rule_ids;
     for (size_t i = 0; i < config.rules.size(); ++i) {
         const auto& rule = config.rules[i];
@@ -311,10 +337,17 @@ void validate(const Config& config) {
             throw Error("PATTERN", "Missing or excessive patterns");
         for (const auto& pattern : rule.patterns)
             (void)normalize_dns_name(pattern, true);
-        if (rule.action == Action::process && rule.server_id && !ids.contains(rule.server_id))
-            throw Error("SERVER_REFERENCE", "Rule references missing server");
-        if (rule.action != Action::process && rule.server_id)
-            throw Error("SERVER_REFERENCE", "Non-Process rule cannot select server");
+        if (rule.action == Action::process) {
+            if (rule.server_id && rule.pool_id)
+                throw Error("POOL_REFERENCE", "Rule cannot select both a server and a pool");
+            if (rule.server_id && !ids.contains(rule.server_id))
+                throw Error("SERVER_REFERENCE", "Rule references missing server");
+            if (rule.pool_id && !pool_ids.contains(rule.pool_id))
+                throw Error("POOL_REFERENCE", "Rule references missing server pool");
+        } else {
+            if (rule.server_id || rule.pool_id)
+                throw Error("SERVER_REFERENCE", "Non-Process rule cannot select server or pool");
+        }
     }
 }
 const Rule& match_rule(const Config& config, const std::string& hostname) {
@@ -418,8 +451,8 @@ RuleDecision evaluate_compiled_rule(const CompiledRules& compiled,
         }
         decision.reinject_udp =
             decision.captive_bypass || rule.action == Action::bypass ||
-            (rule.action == Action::process && rule.server_id == 0 && selector.empty() &&
-             options.ttl_min == 0 && options.ttl_max == 2147483647);
+            (rule.action == Action::process && rule.server_id == 0 && rule.pool_id == 0 &&
+             selector.empty() && options.ttl_min == 0 && options.ttl_max == 2147483647);
         return decision;
     }
     throw Error("DEFAULT", "No usable Default rule");
@@ -503,6 +536,31 @@ void ConfigEditor::remove_server(uint32_t id) {
     auto next = config_;
     if (!std::erase_if(next.servers, [&](const Server& s) { return s.id == id; }))
         throw Error("SERVER_ID", "Server not found");
+    for (auto& server : next.servers)
+        std::erase(server.fallback_ids, id);
+    for (auto& pool : next.pools)
+        std::erase(pool.server_ids, id);
+    commit(std::move(next));
+}
+void ConfigEditor::add_pool(ServerPool pool) {
+    auto next = config_;
+    next.pools.push_back(std::move(pool));
+    commit(std::move(next));
+}
+void ConfigEditor::update_pool(ServerPool pool) {
+    auto next = config_;
+    auto it = std::find_if(next.pools.begin(), next.pools.end(), [&](const ServerPool& p) {
+        return p.id == pool.id;
+    });
+    if (it == next.pools.end())
+        throw Error("POOL_ID", "Server pool not found");
+    *it = std::move(pool);
+    commit(std::move(next));
+}
+void ConfigEditor::remove_pool(uint32_t id) {
+    auto next = config_;
+    if (!std::erase_if(next.pools, [&](const ServerPool& p) { return p.id == id; }))
+        throw Error("POOL_ID", "Server pool not found");
     commit(std::move(next));
 }
 } // namespace nd

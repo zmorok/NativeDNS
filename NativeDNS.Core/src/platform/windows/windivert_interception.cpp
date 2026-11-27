@@ -746,7 +746,8 @@ struct WinDivertInterception::Impl {
                                 " impostor=" + (address.Impostor ? "1" : "0") +
                                 " rule=" + captured_rule.name +
                                 " action=" + action_name(captured_rule.action) +
-                                " server=" + std::to_string(captured_rule.server_id));
+                                " server=" + std::to_string(captured_rule.server_id) +
+                                " pool=" + std::to_string(captured_rule.pool_id));
                     if (captured_decision.reinject_udp) {
                         counters.rules_evaluated.fetch_add(1, std::memory_order_relaxed);
                         if (captured_rule.action == Action::bypass)
@@ -986,6 +987,7 @@ void WinDivertInterception::start() {
                 }
             });
         p.receiver = std::jthread([&p] { p.receive_loop(); });
+        p.router.start_pool_monitor();
         p.logger.write(Level::normal,
                        "WINDIVERT_STARTED",
                        "Transparent UDP/TCP DNS interception started; TCP proxy port=" +
@@ -1005,6 +1007,7 @@ void WinDivertInterception::start() {
         const auto failure = std::current_exception();
         p.state = State::stopping;
         p.router.cancel_pending();
+        p.router.stop_pool_monitor();
         lock.unlock();
         if (p.handle != INVALID_HANDLE_VALUE && p.shutdown)
             p.shutdown(p.handle, WINDIVERT_SHUTDOWN_BOTH);
@@ -1045,6 +1048,7 @@ void WinDivertInterception::stop() {
         p.state = State::stopping;
     }
     p.router.cancel_pending();
+    p.router.stop_pool_monitor();
     if (p.handle != INVALID_HANDLE_VALUE)
         p.shutdown(p.handle, WINDIVERT_SHUTDOWN_BOTH);
     p.queue_changed.notify_all();
@@ -1081,6 +1085,9 @@ InterceptionStatus WinDivertInterception::status() const {
     const auto& p = *impl_;
     std::lock_guard lock(p.lifecycle);
     return {p.state.load(), p.tcp_proxy_port, true, true, true, p.error_code, p.error_message};
+}
+std::vector<PoolStatusSnapshot> WinDivertInterception::pool_statuses() const {
+    return impl_->router.pool_statuses();
 }
 
 InterceptionDiagnostics WinDivertInterception::diagnostics() const {

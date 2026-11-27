@@ -381,9 +381,11 @@ void LocalProxy::start() {
         p.udp_handlers.start(8, 1024);
         p.tcp_handlers.start(16, 128);
         p.state = State::running;
+        p.router->start_pool_monitor();
         p.udp_worker = std::jthread([&p] { p.udp_loop(); });
         p.tcp_worker = std::jthread([&p] { p.tcp_loop(); });
     } catch (...) {
+        p.router->stop_pool_monitor();
         if (p.stop_event)
             SetEvent(p.stop_event);
         if (p.udp_worker.joinable())
@@ -404,6 +406,7 @@ void LocalProxy::stop() {
         return;
     p.state = State::stopping;
     p.router->cancel_pending();
+    p.router->stop_pool_monitor();
     if (p.stop_event)
         SetEvent(p.stop_event);
     if (p.udp_worker.joinable())
@@ -424,5 +427,8 @@ void LocalProxy::cancel_pending() {
 InterceptionStatus LocalProxy::status() const {
     std::lock_guard lock(impl_->lifecycle);
     return {impl_->state.load(), impl_->bound_port, false, true, true};
+}
+std::vector<PoolStatusSnapshot> LocalProxy::pool_statuses() const {
+    return impl_->router->pool_statuses();
 }
 } // namespace nd

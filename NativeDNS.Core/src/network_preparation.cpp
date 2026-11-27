@@ -107,8 +107,9 @@ NetworkPreparationResult NetworkPreparation::apply(const Config& config, const N
     catch (const std::exception& error) { failure(result, "recovery-journal", error); return result; }
     const bool needed = runtime_options(config).prepare_system_dns &&
         std::any_of(config.rules.begin(), config.rules.end(), [](const Rule& rule) {
-            return rule.enabled && (rule.action == Action::block ||
-                                    (rule.action == Action::process && rule.server_id != 0));
+            return rule.enabled &&
+                   (rule.action == Action::block ||
+                    (rule.action == Action::process && (rule.server_id != 0 || rule.pool_id != 0)));
         });
     if (!recovered_ || !needed) {
         result = restore(); recovered_ = true;

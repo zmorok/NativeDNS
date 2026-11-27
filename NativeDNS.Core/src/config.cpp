@@ -285,8 +285,15 @@ Protocol protocol(const std::string& name) {
         return Protocol::udp;
     throw Error("PROTOCOL", "Unsupported protocol in config: " + name);
 }
+PoolType pool_type(const std::string& name) {
+    if (name == "redundancy")
+        return PoolType::redundancy;
+    if (name == "load_balancing" || name == "loadbalancing" || name == "round_robin")
+        return PoolType::load_balancing;
+    throw Error("POOL_TYPE", "Unsupported pool type: " + name);
+}
 Action action(const std::string& name) {
-    if (name == "process" || name == "process_server")
+    if (name == "process" || name == "process_server" || name == "process_pool")
         return Action::process;
     if (name == "bypass")
         return Action::bypass;
@@ -522,6 +529,32 @@ ImportResult import_yoga(const std::filesystem::path& path) {
                     result.warnings.push_back("Unmapped server field retained: " + key);
             }
             result.config.servers.push_back(std::move(server));
+        } else if (node.name == "DnsServerPool" || node.name == "Pool") {
+            ServerPool pool;
+            pool.id = num(node, "id", 0);
+            pool.name = attr(node, "name");
+            const auto type_attr = attr(node, "type", "redundancy");
+            pool.type = (type_attr == "1" || type_attr == "load_balancing" ||
+                         type_attr == "loadbalancing")
+                            ? PoolType::load_balancing
+                            : PoolType::redundancy;
+            pool.test_hostname = attr(node, "test_hostname", attr(node, "testHostname", "iana.org"));
+            pool.recheck_seconds =
+                num(node, "recheck", num(node, "recheckSeconds", 60));
+            if (pool.recheck_seconds < 5)
+                pool.recheck_seconds = 5;
+            if (pool.recheck_seconds > 86400)
+                pool.recheck_seconds = 86400;
+            pool.server_ids = split_ids(attr(node, "servers"));
+            for (const auto& child : node.children) {
+                if (child.name == "Server" || child.name == "DnsServer" || child.name == "Member") {
+                    const auto member_id = num(child, "id", 0);
+                    if (member_id)
+                        pool.server_ids.push_back(member_id);
+                }
+            }
+            pool.metadata = node.attrs;
+            result.config.pools.push_back(std::move(pool));
         } else if (node.name == "Rule") {
             if (!node.children.empty())
                 throw Error("YOGA_FIELD", "Unexpected rule children");
@@ -531,9 +564,15 @@ ImportResult import_yoga(const std::filesystem::path& path) {
             rule.enabled = flag(node, "enabled", true);
             rule.patterns = split_patterns(attr(node, "hostnames"));
             rule.is_default = rule.name == "Default";
-            rule.action = action(attr(node, "action"));
+            const auto raw_action = attr(node, "action");
+            rule.action = action(raw_action);
             const uint32_t target = num(node, "action_id", 0);
-            rule.server_id = rule.action == Action::process ? target : 0;
+            if (rule.action == Action::process) {
+                if (raw_action == "process_pool")
+                    rule.pool_id = target;
+                else
+                    rule.server_id = target;
+            }
             if (rule.action != Action::process && target)
                 result.warnings.push_back("Inactive action_id preserved in rule metadata: " +
                                           rule.name);
@@ -581,6 +620,22 @@ ImportResult import_yoga(const std::filesystem::path& path) {
                     result.config.rules.end());
         result.warnings.push_back("Moved Default rule to the end of the rule list");
     }
+    // Resolve Yoga rules whose action_id references a pool ID instead of a server ID.
+    if (!result.config.pools.empty()) {
+        std::set<uint32_t> server_ids;
+        std::set<uint32_t> pool_ids;
+        for (const auto& s : result.config.servers)
+            server_ids.insert(s.id);
+        for (const auto& p : result.config.pools)
+            pool_ids.insert(p.id);
+        for (auto& r : result.config.rules) {
+            if (r.action == Action::process && r.server_id && !server_ids.contains(r.server_id) &&
+                pool_ids.contains(r.server_id)) {
+                r.pool_id = r.server_id;
+                r.server_id = 0;
+            }
+        }
+    }
     validate(result.config);
     return result;
 }
@@ -610,11 +665,22 @@ std::string serialize_config(const Config& config) {
         metadata(out, s.metadata);
         out << "  </Server>\n";
     }
+    for (const auto& p : config.pools) {
+        out << "  <Pool" << field("id", p.id) << field("name", p.name)
+            << field("type", pool_type_name(p.type)) << field("servers", join_ids(p.server_ids))
+            << field("testHostname", p.test_hostname)
+            << field("recheckSeconds", p.recheck_seconds) << ">\n";
+        metadata(out, p.metadata);
+        out << "  </Pool>\n";
+    }
     for (const auto& r : config.rules) {
         out << "  <Rule" << field("id", r.id) << field("name", r.name)
             << field("enabled", r.enabled) << field("default", r.is_default)
             << field("patterns", join(r.patterns)) << field("action", action_name(r.action))
-            << field("server", r.server_id) << field("interface", r.interface_id)
+            << field("server", r.server_id);
+        if (r.pool_id)
+            out << field("pool", r.pool_id);
+        out << field("interface", r.interface_id)
             << field("validate", r.dnssec_validate)
             << field("rejectUnsigned", r.dnssec_reject_unsigned)
             << field("blockMode", static_cast<uint32_t>(r.block_mode)) << ">\n";
@@ -694,6 +760,17 @@ Config config_from_root(const Node& root) {
             s.relay = attr(node, "relay");
             s.metadata = read_metadata(node);
             config.servers.push_back(std::move(s));
+        } else if (node.name == "Pool") {
+            known(node, {"id", "name", "type", "servers", "testHostname", "recheckSeconds"});
+            ServerPool p;
+            p.id = num(node, "id", 0);
+            p.name = attr(node, "name");
+            p.type = pool_type(attr(node, "type", "redundancy"));
+            p.server_ids = split_ids(attr(node, "servers"));
+            p.test_hostname = attr(node, "testHostname", "iana.org");
+            p.recheck_seconds = num(node, "recheckSeconds", 60);
+            p.metadata = read_metadata(node);
+            config.pools.push_back(std::move(p));
         } else if (node.name == "Rule") {
             known(node,
                   {"id",
@@ -703,6 +780,7 @@ Config config_from_root(const Node& root) {
                    "patterns",
                    "action",
                    "server",
+                   "pool",
                    "interface",
                    "validate",
                    "rejectUnsigned",
@@ -715,6 +793,7 @@ Config config_from_root(const Node& root) {
             r.patterns = split(attr(node, "patterns"));
             r.action = action(attr(node, "action"));
             r.server_id = num(node, "server", 0);
+            r.pool_id = num(node, "pool", 0);
             r.interface_id = attr(node, "interface");
             r.dnssec_validate = flag(node, "validate", false);
             r.dnssec_reject_unsigned = flag(node, "rejectUnsigned", false);

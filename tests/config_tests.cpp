@@ -183,7 +183,53 @@ int main() {
         auto grouped = config;
         grouped.servers.front().fallback_ids = {1002};
         nd::save_config(grouped, path);
-        check(nd::load_config(path) == grouped, "Fallback group round trip");
+        check(nd::load_config(path) == grouped, "Legacy fallback attribute round trip");
+
+        // Server Pools round trip, editor mutations, and validation.
+        {
+            auto pooled = config;
+            nd::ServerPool red;
+            red.id = 1;
+            red.name = "RU DNS AI";
+            red.type = nd::PoolType::redundancy;
+            red.server_ids = {1001, 1002};
+            red.test_hostname = "example.org";
+            red.recheck_seconds = 45;
+            nd::ServerPool lb;
+            lb.id = 2;
+            lb.name = "Random Pool";
+            lb.type = nd::PoolType::load_balancing;
+            lb.server_ids = {1002, 1003};
+            nd::ConfigEditor pool_editor(pooled);
+            pool_editor.add_pool(red);
+            pool_editor.add_pool(lb);
+            pooled = pool_editor.get();
+            pooled.rules.front().server_id = 0;
+            pooled.rules.front().pool_id = 1;
+            nd::save_config(pooled, path);
+            check(nd::load_config(path) == pooled, "Server pools XML round trip");
+
+            auto both = pooled;
+            both.rules.front().server_id = 1001;
+            both.rules.front().pool_id = 1;
+            fails([&] { nd::validate(both); });
+
+            auto bad_recheck = pooled;
+            bad_recheck.pools.front().recheck_seconds = 3;
+            fails([&] { nd::validate(bad_recheck); });
+
+            auto bad_member = pooled;
+            bad_member.pools.front().server_ids.push_back(9999);
+            fails([&] { nd::validate(bad_member); });
+
+            nd::ConfigEditor ref_editor(pooled);
+            fails([&] { ref_editor.remove_pool(1); }); // Referenced by rule 0
+            ref_editor.remove_pool(2);                 // Unreferenced pool removes cleanly
+            check(ref_editor.get().pools.size() == 1, "Unreferenced pool removed");
+            ref_editor.remove_server(1001); // Also cleans up pool member reference
+            check(ref_editor.get().pools.front().server_ids == std::vector<uint32_t>{1002},
+                  "Removing server removes it from pool membership");
+        }
         nd::save_config(config, path);
         auto changed = config;
         changed.logging.directory = "журнал & <test>";

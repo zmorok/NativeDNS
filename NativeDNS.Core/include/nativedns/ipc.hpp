@@ -24,7 +24,8 @@ enum class IpcOperation : uint16_t {
     interception_status = 12,
     interception_test = 13,
     diagnostic_profile = 14,
-    flush_file_log = 15
+    flush_file_log = 15,
+    pool_status = 16
 };
 struct IpcResponse {
     uint32_t status = 0;

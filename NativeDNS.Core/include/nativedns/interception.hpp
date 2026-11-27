@@ -52,6 +52,9 @@ public:
         throw Error("NOT_SUPPORTED",
                     "Active interception test is available for Windows UDP/IPv4 only");
     }
+    virtual std::vector<PoolStatusSnapshot> pool_statuses() const {
+        return {};
+    }
 };
 
 // Explicit loopback fallback. It is portable and does not modify system DNS.
@@ -67,6 +70,7 @@ public:
     void cancel_pending() override;
     void reload(Config config) override;
     InterceptionStatus status() const override;
+    std::vector<PoolStatusSnapshot> pool_statuses() const override;
 
 private:
     struct Impl;
@@ -90,6 +94,7 @@ public:
     InterceptionStatus status() const override;
     InterceptionDiagnostics diagnostics() const override;
     InterceptionTestResult self_test() override;
+    std::vector<PoolStatusSnapshot> pool_statuses() const override;
 
 private:
     struct Impl;

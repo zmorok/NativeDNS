@@ -110,6 +110,7 @@ void CoreHost::log_configuration() {
                       saved_config_id_ + " routing_config_id=" + routing_fingerprint(config_) +
                       " runtime_profile=" + (diagnostic_logging_ ? "Debug" : "Normal") +
                       " servers=" + std::to_string(config_.servers.size()) +
+                      " pools=" + std::to_string(config_.pools.size()) +
                       " rules=" + std::to_string(config_.rules.size()) + " mode=" +
                       (mode_ == InterceptionMode::transparent ? "transparent" : "local_proxy"));
     for (const auto& rule : config_.rules) {
@@ -122,7 +123,8 @@ void CoreHost::log_configuration() {
                       "id=" + std::to_string(rule.id) + " name=\"" + rule.name +
                           "\" enabled=" + (rule.enabled ? "1" : "0") +
                           " action=" + action_name(rule.action) + " server=" +
-                          std::to_string(rule.server_id) + " interface=\"" + rule.interface_id +
+                          std::to_string(rule.server_id) + " pool=" +
+                          std::to_string(rule.pool_id) + " interface=\"" + rule.interface_id +
                           "\" patterns=" + patterns);
     }
 }
@@ -384,6 +386,11 @@ IpcResponse CoreHost::handle(IpcOperation operation, const std::string& payload)
             throw Error("IPC_PROTOCOL", "Flush accepts no arguments");
         logger_.flush_file();
         return {0, "FILE_LOG_FLUSHED"};
+    }
+    if (operation == IpcOperation::pool_status) {
+        if (!payload.empty())
+            throw Error("IPC_PROTOCOL", "Pool status accepts no arguments");
+        return {0, format_pool_statuses(interception_->pool_statuses())};
     }
     if (operation == IpcOperation::diagnostic_profile) {
         if (payload != "Normal" && payload != "Debug")

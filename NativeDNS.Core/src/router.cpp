@@ -1,8 +1,12 @@
 #include <nativedns/router.hpp>
 #include <nativedns/detail/cancellation.hpp>
+#include <nativedns/platform.hpp>
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <set>
 #include <sstream>
 namespace nd {
@@ -28,16 +32,123 @@ std::string protocol_log_suffix(Protocol protocol) {
     }
     return {};
 }
+uint64_t epoch_now_ms() noexcept {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch())
+                                     .count());
+}
+std::string sanitize_wire_field(std::string text) {
+    for (char& ch : text) {
+        if (ch == '\t' || ch == '\r' || ch == '\n')
+            ch = ' ';
+    }
+    if (text.size() > 256)
+        text.resize(256);
+    return text;
+}
+const Server* find_server(const Config& config, uint32_t id) {
+    const auto it = std::find_if(
+        config.servers.begin(), config.servers.end(), [id](const Server& s) { return s.id == id; });
+    return it == config.servers.end() ? nullptr : &*it;
+}
+const ServerPool* find_pool(const Config& config, uint32_t id) {
+    const auto it = std::find_if(config.pools.begin(),
+                                 config.pools.end(),
+                                 [id](const ServerPool& p) { return p.id == id; });
+    return it == config.pools.end() ? nullptr : &*it;
+}
+uint32_t parse_u32_field(std::string_view sv) {
+    uint32_t v = 0;
+    const auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), v);
+    return ec == std::errc{} && ptr == sv.data() + sv.size() ? v : 0;
+}
+uint64_t parse_u64_field(std::string_view sv) {
+    uint64_t v = 0;
+    const auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), v);
+    return ec == std::errc{} && ptr == sv.data() + sv.size() ? v : 0;
+}
 } // namespace
+std::string format_pool_statuses(const std::vector<PoolStatusSnapshot>& statuses) {
+    std::ostringstream out;
+    for (const auto& pool : statuses) {
+        out << "POOL\t" << pool.pool_id << '\t' << pool.active_server_id << '\n';
+        for (const auto& member : pool.members) {
+            const char* health = member.health == PoolMemberHealth::healthy ? "healthy"
+                                 : member.health == PoolMemberHealth::failed ? "failed"
+                                                                             : "untested";
+            out << "MEMBER\t" << pool.pool_id << '\t' << member.server_id << '\t' << health << '\t'
+                << static_cast<uint64_t>(std::llround(std::max(0.0, member.rtt_ms))) << '\t'
+                << member.checked_epoch_ms << '\t' << sanitize_wire_field(member.last_error)
+                << '\n';
+        }
+    }
+    return out.str();
+}
+std::vector<PoolStatusSnapshot> parse_pool_statuses(const std::string& payload) {
+    std::vector<PoolStatusSnapshot> result;
+    std::unordered_map<uint32_t, size_t> index_by_pool;
+    std::istringstream in(payload);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty())
+            continue;
+        std::vector<std::string_view> parts;
+        size_t pos = 0;
+        while (true) {
+            const auto tab = line.find('\t', pos);
+            if (tab == std::string::npos) {
+                parts.emplace_back(line.data() + pos, line.size() - pos);
+                break;
+            }
+            parts.emplace_back(line.data() + pos, tab - pos);
+            pos = tab + 1;
+        }
+        if (parts.size() >= 3 && parts[0] == "POOL") {
+            const uint32_t pid = parse_u32_field(parts[1]);
+            if (!pid)
+                continue;
+            const auto [it, inserted] = index_by_pool.emplace(pid, result.size());
+            if (inserted)
+                result.push_back({pid, parse_u32_field(parts[2]), {}});
+            else
+                result[it->second].active_server_id = parse_u32_field(parts[2]);
+        } else if (parts.size() >= 6 && parts[0] == "MEMBER") {
+            const uint32_t pid = parse_u32_field(parts[1]);
+            const uint32_t sid = parse_u32_field(parts[2]);
+            if (!pid || !sid)
+                continue;
+            const auto [it, inserted] = index_by_pool.emplace(pid, result.size());
+            if (inserted)
+                result.push_back({pid, 0, {}});
+            PoolMemberStatus member;
+            member.server_id = sid;
+            if (parts[3] == "healthy")
+                member.health = PoolMemberHealth::healthy;
+            else if (parts[3] == "failed")
+                member.health = PoolMemberHealth::failed;
+            else
+                member.health = PoolMemberHealth::untested;
+            member.rtt_ms = static_cast<double>(parse_u64_field(parts[4]));
+            member.checked_epoch_ms = parse_u64_field(parts[5]);
+            if (parts.size() >= 7)
+                member.last_error = std::string(parts[6]);
+            result[it->second].members.push_back(std::move(member));
+        }
+    }
+    return result;
+}
 std::string route_log_message(const Question& question,
                               const Rule& rule,
                               const Server* server,
-                              std::optional<double> elapsed_ms) {
+                              std::optional<double> elapsed_ms,
+                              const ServerPool* pool) {
     std::ostringstream output;
     output << question.name << " [" << dns_type_name(question.type) << "] - "
            << action_name(rule.action) << " : ";
     if (server) {
-        const auto identity = rule.server_id && !server->name.empty()
+        const auto identity = (rule.server_id || rule.pool_id) && !server->name.empty()
                                   ? server->name
                                   : (!server->ip.empty() ? server->ip : server->name);
         output << "server=" << identity << protocol_log_suffix(server->protocol) << ", ";
@@ -54,14 +165,21 @@ std::string route_log_message(const Question& question,
                << (server->route.interface_id.empty() ? "automatic" : server->route.interface_id)
                << " generation=" << server->route.generation;
     const uint32_t reported_server_id =
-        (rule.server_id && server && server->id) ? server->id : rule.server_id;
+        ((rule.server_id || rule.pool_id) && server && server->id) ? server->id : rule.server_id;
     output << ", server_id=" << reported_server_id;
-    if (rule.server_id && server && server->id && server->id != rule.server_id)
+    if (rule.pool_id) {
+        output << " pool_id=" << rule.pool_id;
+        if (pool && !pool->name.empty())
+            output << " pool=\"" << pool->name << '"';
+    } else if (rule.server_id && server && server->id && server->id != rule.server_id)
         output << " rule_server_id=" << rule.server_id;
     return output.str();
 }
 Router::Router(Config config, Logger& logger) : logger_(logger) {
     reload(std::move(config));
+}
+Router::~Router() {
+    stop_pool_monitor();
 }
 Router::SnapshotPtr Router::snapshot() const {
     return snapshot_.load();
@@ -69,19 +187,304 @@ Router::SnapshotPtr Router::snapshot() const {
 void Router::reload(Config config) const {
     validate(config);
     auto next = std::make_shared<Snapshot>(std::move(config));
+    // Preserve last known health for unchanged pool members so GUI does not flicker on unrelated reloads.
+    if (const auto previous = snapshot_.load()) {
+        std::lock_guard prev_lock(previous->pool_mutex);
+        std::lock_guard next_lock(next->pool_mutex);
+        for (const auto& pool : next->config.pools) {
+            const auto prev_pool_it = previous->pool_states.find(pool.id);
+            const auto* prev_pool_cfg = find_pool(previous->config, pool.id);
+            if (prev_pool_it == previous->pool_states.end() || !prev_pool_cfg)
+                continue;
+            auto& next_state = next->pool_states[pool.id];
+            bool all_preserved = true;
+            for (const auto sid : pool.server_ids) {
+                const auto* prev_srv = find_server(previous->config, sid);
+                const auto* next_srv = find_server(next->config, sid);
+                const auto prev_m = prev_pool_it->second.members.find(sid);
+                if (prev_srv && next_srv && prev_m != prev_pool_it->second.members.end() &&
+                    prev_srv->protocol == next_srv->protocol && prev_srv->ip == next_srv->ip &&
+                    prev_srv->hostname == next_srv->hostname && prev_srv->url == next_srv->url &&
+                    prev_srv->port == next_srv->port && prev_srv->enabled == next_srv->enabled) {
+                    next_state.members[sid] = prev_m->second;
+                } else {
+                    all_preserved = false;
+                }
+            }
+            if (all_preserved && prev_pool_cfg->test_hostname == pool.test_hostname &&
+                prev_pool_cfg->type == pool.type &&
+                prev_pool_cfg->recheck_seconds == pool.recheck_seconds) {
+                next_state.next_probe = prev_pool_it->second.next_probe;
+            }
+            uint32_t best_id = 0;
+            double best_rtt = std::numeric_limits<double>::infinity();
+            for (const auto sid : pool.server_ids) {
+                const auto* srv = find_server(next->config, sid);
+                if (!srv || !srv->enabled)
+                    continue;
+                const auto& m = next_state.members[sid];
+                if (m.health == PoolMemberHealth::healthy && m.rtt_ms < best_rtt) {
+                    best_rtt = m.rtt_ms;
+                    best_id = sid;
+                }
+            }
+            next_state.active_server_id = best_id;
+        }
+    }
     platform::set_captive_portal_polling_enabled(next->options.captive_portal_detection);
     snapshot_.store(std::move(next));
+    monitor_cv_.notify_all();
 }
 void Router::cancel_pending() const {
     cancellation_.load()->request_stop();
     std::lock_guard lock(transport_mutex_);
     transports_.fill(nullptr);
+    monitor_cv_.notify_all();
 }
 void Router::resume() const {
     if (cancellation_.load()->stop_requested()) {
         cancellation_.store(std::make_shared<std::stop_source>());
         reload(snapshot()->config);
     }
+}
+void Router::start_pool_monitor() const {
+    std::lock_guard lock(monitor_mutex_);
+    if (monitor_running_)
+        return;
+    monitor_running_ = true;
+    monitor_thread_ = std::jthread([this] { pool_monitor_loop(); });
+}
+void Router::stop_pool_monitor() const {
+    std::jthread worker;
+    {
+        std::lock_guard lock(monitor_mutex_);
+        if (!monitor_running_)
+            return;
+        monitor_running_ = false;
+        worker = std::move(monitor_thread_);
+    }
+    monitor_cv_.notify_all();
+    if (worker.joinable())
+        worker.join();
+}
+void Router::probe_pool(const Snapshot& snapshot, const ServerPool& pool) const {
+    if (pool.server_ids.empty()) {
+        std::lock_guard lock(snapshot.pool_mutex);
+        auto& state = snapshot.pool_states[pool.id];
+        state.active_server_id = 0;
+        state.next_probe =
+            std::chrono::steady_clock::now() + std::chrono::seconds(pool.recheck_seconds);
+        return;
+    }
+    std::vector<Server> targets;
+    targets.reserve(pool.server_ids.size());
+    for (const auto sid : pool.server_ids) {
+        if (const auto* srv = find_server(snapshot.config, sid); srv && srv->enabled)
+            targets.push_back(*srv);
+    }
+    if (targets.empty()) {
+        std::lock_guard lock(snapshot.pool_mutex);
+        auto& state = snapshot.pool_states[pool.id];
+        state.active_server_id = 0;
+        state.next_probe =
+            std::chrono::steady_clock::now() + std::chrono::seconds(pool.recheck_seconds);
+        return;
+    }
+
+    const auto probe_query = make_query(pool.test_hostname);
+    const auto probe_question = parse_question(probe_query);
+    struct ProbeResult {
+        uint32_t server_id = 0;
+        PoolMemberHealth health = PoolMemberHealth::failed;
+        double rtt_ms = 0.0;
+        std::string error;
+        uint64_t checked_epoch_ms = 0;
+    };
+    std::vector<ProbeResult> results(targets.size());
+    std::atomic_size_t cursor{0};
+    const size_t workers_count = std::min<size_t>(
+        targets.size(), std::clamp<size_t>(snapshot.config.test_concurrency, 1, 8));
+    auto run_worker = [&] {
+        for (;;) {
+            if (cancellation_.load()->stop_requested())
+                return;
+            const size_t idx = cursor.fetch_add(1, std::memory_order_relaxed);
+            if (idx >= targets.size())
+                return;
+            const auto& srv = targets[idx];
+            auto& out = results[idx];
+            out.server_id = srv.id;
+            const auto started = std::chrono::steady_clock::now();
+            try {
+                auto prepared = with_network_context(srv);
+                const auto reply = exchange(probe_query, prepared);
+                const auto elapsed = std::chrono::duration<double, std::milli>(
+                                         std::chrono::steady_clock::now() - started)
+                                         .count();
+                const auto parsed = parse_response(reply, probe_question);
+                out.rtt_ms = elapsed;
+                out.checked_epoch_ms = epoch_now_ms();
+                if (parsed.rcode == 0) {
+                    out.health = PoolMemberHealth::healthy;
+                } else {
+                    out.health = PoolMemberHealth::failed;
+                    out.error = "DNS RCODE " + std::to_string(parsed.rcode) + " (" +
+                                dns_rcode_name(parsed.rcode) + ")";
+                }
+            } catch (const Error& error) {
+                if (error.code == "CANCELLED")
+                    return;
+                out.health = PoolMemberHealth::failed;
+                out.error = error.code + ": " + error.what();
+                out.checked_epoch_ms = epoch_now_ms();
+            } catch (const std::exception& error) {
+                out.health = PoolMemberHealth::failed;
+                out.error = error.what();
+                out.checked_epoch_ms = epoch_now_ms();
+            }
+        }
+    };
+    if (workers_count <= 1) {
+        run_worker();
+    } else {
+        std::vector<std::jthread> workers;
+        workers.reserve(workers_count);
+        for (size_t i = 0; i < workers_count; ++i)
+            workers.emplace_back(run_worker);
+    }
+
+    if (cancellation_.load()->stop_requested())
+        return;
+
+    uint32_t previous_active = 0;
+    uint32_t next_active = 0;
+    double best_rtt = std::numeric_limits<double>::infinity();
+    {
+        std::lock_guard lock(snapshot.pool_mutex);
+        auto& state = snapshot.pool_states[pool.id];
+        previous_active = state.active_server_id;
+        for (const auto& res : results) {
+            if (!res.server_id || !res.checked_epoch_ms)
+                continue;
+            auto& m = state.members[res.server_id];
+            m.health = res.health;
+            m.rtt_ms = res.rtt_ms;
+            m.last_error = res.error;
+            m.checked_epoch_ms = res.checked_epoch_ms;
+        }
+        for (const auto sid : pool.server_ids) {
+            const auto* srv = find_server(snapshot.config, sid);
+            if (!srv || !srv->enabled)
+                continue;
+            const auto it = state.members.find(sid);
+            if (it != state.members.end() && it->second.health == PoolMemberHealth::healthy &&
+                it->second.rtt_ms < best_rtt) {
+                best_rtt = it->second.rtt_ms;
+                next_active = sid;
+            }
+        }
+        state.active_server_id = next_active;
+        state.next_probe =
+            std::chrono::steady_clock::now() + std::chrono::seconds(pool.recheck_seconds);
+    }
+    if (next_active != previous_active && logger_.enabled(Level::verbose)) {
+        const auto* chosen = next_active ? find_server(snapshot.config, next_active) : nullptr;
+        logger_.write(
+            Level::verbose,
+            "POOL_MONITOR",
+            "pool=\"" + pool.name + "\" pool_id=" + std::to_string(pool.id) + " active_server=" +
+                (chosen ? chosen->name : "none") + " active_server_id=" +
+                std::to_string(next_active) +
+                (chosen ? " rtt_ms=" + std::to_string(static_cast<uint64_t>(std::llround(best_rtt)))
+                        : ""));
+    }
+}
+void Router::probe_redundancy_pools_now() const {
+    const auto current = snapshot();
+    if (!current)
+        return;
+    for (const auto& pool : current->config.pools) {
+        if (pool.type == PoolType::redundancy)
+            probe_pool(*current, pool);
+    }
+}
+void Router::pool_monitor_loop() const {
+    for (;;) {
+        {
+            std::lock_guard lock(monitor_mutex_);
+            if (!monitor_running_)
+                return;
+        }
+        const auto current = snapshot();
+        auto wake_at = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        std::vector<ServerPool> due;
+        if (current) {
+            const auto now = std::chrono::steady_clock::now();
+            std::lock_guard lock(current->pool_mutex);
+            for (const auto& pool : current->config.pools) {
+                if (pool.type != PoolType::redundancy)
+                    continue;
+                const auto& state = current->pool_states[pool.id];
+                if (state.next_probe == std::chrono::steady_clock::time_point{} ||
+                    state.next_probe <= now) {
+                    due.push_back(pool);
+                } else if (state.next_probe < wake_at) {
+                    wake_at = state.next_probe;
+                }
+            }
+        }
+        if (!due.empty()) {
+            for (const auto& pool : due) {
+                {
+                    std::lock_guard lock(monitor_mutex_);
+                    if (!monitor_running_)
+                        return;
+                }
+                if (snapshot().get() != current.get())
+                    break;
+                probe_pool(*current, pool);
+            }
+            continue;
+        }
+        std::unique_lock lock(monitor_mutex_);
+        if (!monitor_running_)
+            return;
+        monitor_cv_.wait_until(lock, wake_at, [this, &current] {
+            return !monitor_running_ || snapshot().get() != current.get();
+        });
+    }
+}
+std::vector<PoolStatusSnapshot> Router::pool_statuses() const {
+    const auto current = snapshot();
+    if (!current)
+        return {};
+    std::vector<PoolStatusSnapshot> out;
+    out.reserve(current->config.pools.size());
+    std::lock_guard lock(current->pool_mutex);
+    for (const auto& pool : current->config.pools) {
+        PoolStatusSnapshot ps;
+        ps.pool_id = pool.id;
+        const auto st_it = current->pool_states.find(pool.id);
+        if (st_it != current->pool_states.end())
+            ps.active_server_id = st_it->second.active_server_id;
+        ps.members.reserve(pool.server_ids.size());
+        for (const auto sid : pool.server_ids) {
+            PoolMemberStatus ms;
+            ms.server_id = sid;
+            if (st_it != current->pool_states.end()) {
+                if (const auto m_it = st_it->second.members.find(sid);
+                    m_it != st_it->second.members.end()) {
+                    ms.health = m_it->second.health;
+                    ms.rtt_ms = m_it->second.rtt_ms;
+                    ms.last_error = m_it->second.last_error;
+                    ms.checked_epoch_ms = m_it->second.checked_epoch_ms;
+                }
+            }
+            ps.members.push_back(std::move(ms));
+        }
+        out.push_back(std::move(ps));
+    }
+    return out;
 }
 Packet Router::exchange(const Packet& request, const Server& server) const {
     detail::CancellationScope cancellation(detail::request_cancellation.stop_possible()
@@ -126,108 +529,86 @@ RoutingStatistics Router::statistics() const {
 #undef ND_LOAD
     return v;
 }
-std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot,
-                                                        const Packet& request,
-                                                        const Server& primary) const {
-    if (!primary.id || primary.fallback_ids.empty())
-        return {exchange(request, primary), &primary};
+std::pair<Packet, const Server*> Router::exchange_pool(const Snapshot& snapshot,
+                                                       const Packet& request,
+                                                       const ServerPool& pool,
+                                                       const NetworkRoute& route) const {
     std::vector<const Server*> candidates;
-    std::set<uint32_t> added;
-    std::function<void(const Server&)> append = [&](const Server& server) {
-        if (!added.insert(server.id).second)
-            return;
-        candidates.push_back(&server);
-        for (const auto id : server.fallback_ids) {
-            const auto found = std::find_if(snapshot.config.servers.begin(),
-                                            snapshot.config.servers.end(),
-                                            [&](const Server& value) { return value.id == id; });
-            if (found != snapshot.config.servers.end())
-                append(*found);
-        }
-    };
-    append(primary);
-    std::erase_if(candidates, [](const Server* server) { return !server->enabled; });
+    candidates.reserve(pool.server_ids.size());
+    for (const auto sid : pool.server_ids) {
+        if (const auto* srv = find_server(snapshot.config, sid); srv && srv->enabled)
+            candidates.push_back(srv);
+    }
     if (candidates.empty())
-        throw Error("SERVER_DISABLED", "All servers in fallback group are disabled");
+        throw Error("POOL_EMPTY", "Server pool has no enabled servers: " + pool.name);
+
     const auto started = std::chrono::steady_clock::now();
     uint64_t budget_ms = 0;
     for (const auto* server : candidates)
         budget_ms = std::min<uint64_t>(120000, budget_ms + server->timeout_ms);
-    budget_ms = std::max<uint64_t>(primary.timeout_ms, std::min<uint64_t>(30000, budget_ms));
+    budget_ms =
+        std::max<uint64_t>(candidates.front()->timeout_ms, std::min<uint64_t>(30000, budget_ms));
     const auto deadline = started + std::chrono::milliseconds(budget_ms);
-    const auto health_key = [&](const Server* server) {
-        return std::to_string(server->id) + '|' + network_route_key(primary.route);
-    };
-    const Server* claimed_probe = nullptr;
-    {
-        std::lock_guard lock(snapshot.health_mutex);
-        const auto now = std::chrono::steady_clock::now();
-        if (snapshot.health.size() + candidates.size() > 8192)
-            snapshot.health.clear();
-        for (const auto* candidate : candidates)
-            snapshot.health.try_emplace(health_key(candidate));
-        const bool any_ready =
-            std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                const auto& h = snapshot.health.at(health_key(server));
-                return h.retry_after <= now && !h.probing;
-            });
-        std::stable_sort(
-            candidates.begin(), candidates.end(), [&](const Server* left, const Server* right) {
-                const auto& a = snapshot.health.at(health_key(left));
-                const auto& b = snapshot.health.at(health_key(right));
-                const bool a_open = any_ready && (a.retry_after > now || a.probing),
-                           b_open = any_ready && (b.retry_after > now || b.probing);
-                if (a_open != b_open)
-                    return !a_open;
-                const bool a_probe = a.consecutive_failures >= 2 && a.retry_after <= now && !a.probing,
-                           b_probe = b.consecutive_failures >= 2 && b.retry_after <= now && !b.probing;
-                if (a_probe != b_probe)
-                    return a_probe;
-                if (a.latency_ms.has_value() != b.latency_ms.has_value())
-                    return !a.latency_ms.has_value();
-                if (a.latency_ms && b.latency_ms)
-                    return *a.latency_ms < *b.latency_ms;
-                return false;
-            });
-        for (const auto* candidate : candidates) {
-            auto& h = snapshot.health.at(health_key(candidate));
-            if (h.consecutive_failures >= 2 && h.retry_after <= now && !h.probing) {
-                h.probing = true;
-                claimed_probe = candidate;
-                break;
-            }
+
+    if (pool.type == PoolType::redundancy) {
+        std::lock_guard lock(snapshot.pool_mutex);
+        const auto& state = snapshot.pool_states[pool.id];
+        auto rank_of = [&](const Server* srv) -> std::pair<int, double> {
+            const auto it = state.members.find(srv->id);
+            if (it == state.members.end() || it->second.health == PoolMemberHealth::untested)
+                return {1, 0.0};
+            if (it->second.health == PoolMemberHealth::healthy)
+                return {0, it->second.rtt_ms};
+            return {2, it->second.rtt_ms};
+        };
+        std::stable_sort(candidates.begin(),
+                         candidates.end(),
+                         [&](const Server* left, const Server* right) {
+                             const auto a = rank_of(left);
+                             const auto b = rank_of(right);
+                             if (a.first != b.first)
+                                 return a.first < b.first;
+                             if (a.first == 0)
+                                 return a.second < b.second;
+                             return false;
+                         });
+    } else {
+        // Load Balancing: pick a random enabled server for each request, with
+        // failover to remaining pool members on failure.
+        for (size_t i = candidates.size(); i > 1; --i) {
+            const size_t j = platform::secure_random_u32() % i;
+            std::swap(candidates[i - 1], candidates[j]);
         }
     }
-    struct ProbeRelease {
-        const Snapshot& snapshot;
-        std::string key;
-        ~ProbeRelease() {
-            if (!key.empty()) {
-                std::lock_guard lock(snapshot.health_mutex);
-                if (const auto it = snapshot.health.find(key); it != snapshot.health.end())
-                    it->second.probing = false;
+
+    auto recompute_active = [&](PoolRuntimeState& state) {
+        uint32_t best_id = 0;
+        double best_rtt = std::numeric_limits<double>::infinity();
+        for (const auto sid : pool.server_ids) {
+            const auto* srv = find_server(snapshot.config, sid);
+            if (!srv || !srv->enabled)
+                continue;
+            const auto it = state.members.find(sid);
+            if (it != state.members.end() && it->second.health == PoolMemberHealth::healthy &&
+                it->second.rtt_ms < best_rtt) {
+                best_rtt = it->second.rtt_ms;
+                best_id = sid;
             }
         }
-    } probe_release{snapshot, claimed_probe ? health_key(claimed_probe) : std::string{}};
-    std::string last_code = "UPSTREAM_UNAVAILABLE", last_message = "No upstream attempt completed";
+        state.active_server_id = best_id;
+    };
+
+    std::string last_code = "UPSTREAM_UNAVAILABLE", last_message = "No pool upstream attempt completed";
     std::optional<std::pair<Packet, const Server*>> fallback_rcode_reply;
     for (size_t index = 0; index < candidates.size(); ++index) {
         const auto* candidate = candidates[index];
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline)
             break;
-        {
-            std::lock_guard lock(snapshot.health_mutex);
-            const bool another_ready =
-                std::any_of(candidates.begin(), candidates.end(), [&](const Server* server) {
-                    return server != candidate &&
-                           snapshot.health[health_key(server)].retry_after <= now;
-                });
-            if (snapshot.health[health_key(candidate)].retry_after > now && another_ready)
-                continue;
-        }
         auto attempt = *candidate;
-        attempt.route = primary.route;
+        if (!route.interface_id.empty())
+            attempt.route = route;
+        attempt = with_network_context(std::move(attempt));
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
         attempt.timeout_ms = static_cast<uint32_t>(
@@ -240,72 +621,95 @@ std::pair<Packet, const Server*> Router::exchange_group(const Snapshot& snapshot
             if ((base_rcode == 2 || base_rcode == 5) && index + 1 < candidates.size()) {
                 if (!fallback_rcode_reply)
                     fallback_rcode_reply.emplace(std::move(packet), candidate);
+                {
+                    std::lock_guard lock(snapshot.pool_mutex);
+                    auto& state = snapshot.pool_states[pool.id];
+                    auto& member = state.members[candidate->id];
+                    member.health = PoolMemberHealth::failed;
+                    member.last_error = "DNS RCODE " + std::to_string(base_rcode) + " (" +
+                                        dns_rcode_name(base_rcode) + ")";
+                    member.checked_epoch_ms = epoch_now_ms();
+                    if (pool.type == PoolType::redundancy)
+                        recompute_active(state);
+                }
                 if (logger_.enabled(Level::verbose))
                     logger_.write_limited(
                         Level::verbose,
-                        "fallback-rcode|" + health_key(candidate) + '|' +
-                            std::to_string(base_rcode),
+                        "pool-rcode|" + std::to_string(pool.id) + '|' +
+                            std::to_string(candidate->id) + '|' + std::to_string(base_rcode),
                         "UPSTREAM_FAILOVER",
-                        "server=" + candidate->name + " failure=DNS_RCODE(" +
-                            dns_rcode_name(base_rcode) + ") trying_next=1");
+                        "pool=\"" + pool.name + "\" server=" + candidate->name +
+                            " failure=DNS_RCODE(" + dns_rcode_name(base_rcode) +
+                            ") trying_next=1");
                 continue;
             }
             const double elapsed = std::chrono::duration<double, std::milli>(
                                        std::chrono::steady_clock::now() - attempt_started)
                                        .count();
             {
-                std::lock_guard lock(snapshot.health_mutex);
-                auto& state = snapshot.health[health_key(candidate)];
-                state.consecutive_failures = 0;
-                state.retry_after = {};
-                state.latency_ms =
-                    state.latency_ms ? (*state.latency_ms * 0.8 + elapsed * 0.2) : elapsed;
+                std::lock_guard lock(snapshot.pool_mutex);
+                auto& state = snapshot.pool_states[pool.id];
+                auto& member = state.members[candidate->id];
+                const bool was_healthy = member.health == PoolMemberHealth::healthy;
+                member.health = PoolMemberHealth::healthy;
+                member.rtt_ms = was_healthy ? (member.rtt_ms * 0.8 + elapsed * 0.2) : elapsed;
+                member.last_error.clear();
+                member.checked_epoch_ms = epoch_now_ms();
+                if (pool.type == PoolType::redundancy)
+                    recompute_active(state);
             }
             return {std::move(packet), candidate};
         } catch (const Error& error) {
             if (error.code == "CANCELLED")
                 throw;
             last_code = error.code;
-            last_message =
-                "server=" + candidate->name + " protocol=" + protocol_name(candidate->protocol) +
-                " context=" + network_route_key(attempt.route) + " error=" + error.what();
-            unsigned failures = 0;
+            last_message = "pool=" + pool.name + " server=" + candidate->name +
+                           " protocol=" + protocol_name(candidate->protocol) +
+                           " context=" + network_route_key(attempt.route) +
+                           " error=" + error.what();
             {
-                std::lock_guard lock(snapshot.health_mutex);
-                auto& state = snapshot.health[health_key(candidate)];
-                failures = ++state.consecutive_failures;
-                if (failures >= 2) {
-                    const auto shift = std::min(failures - 2, 3u);
-                    state.retry_after =
-                        std::chrono::steady_clock::now() + std::chrono::seconds(30u << shift);
-                }
+                std::lock_guard lock(snapshot.pool_mutex);
+                auto& state = snapshot.pool_states[pool.id];
+                auto& member = state.members[candidate->id];
+                member.health = PoolMemberHealth::failed;
+                member.last_error = error.code + ": " + error.what();
+                member.checked_epoch_ms = epoch_now_ms();
+                if (pool.type == PoolType::redundancy)
+                    recompute_active(state);
             }
             if (logger_.enabled(Level::verbose))
                 logger_.write_limited(Level::verbose,
-                                      "fallback|" + health_key(candidate) + '|' + error.code,
+                                      "pool-fail|" + std::to_string(pool.id) + '|' +
+                                          std::to_string(candidate->id) + '|' + error.code,
                                       "UPSTREAM_FAILOVER",
-                                      "server=" + candidate->name + " failure=" + last_code +
-                                          " consecutive=" + std::to_string(failures));
+                                      "pool=\"" + pool.name + "\" server=" + candidate->name +
+                                          " failure=" + last_code);
         }
     }
     if (fallback_rcode_reply)
         return std::move(*fallback_rcode_reply);
-    throw Error(last_code, "Fallback group exhausted: " + last_message);
+    throw Error(last_code, "Server pool exhausted: " + last_message);
 }
 Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
                                                const Packet& request,
                                                const Question& question,
                                                const Server& primary,
-                                               bool configured) const {
+                                               bool configured,
+                                               const ServerPool* pool) const {
     if (request.size() < 2)
         throw Error("DNS_MALFORMED", "DNS request is too short");
     std::string key;
     key.reserve(request.size() + 96);
-    key += configured ? "configured:" : "original:";
-    key += std::to_string(configured ? primary.id : static_cast<uint32_t>(primary.protocol));
+    if (pool) {
+        key += "pool:";
+        key += std::to_string(pool->id);
+    } else {
+        key += configured ? "configured:" : "original:";
+        key += std::to_string(configured ? primary.id : static_cast<uint32_t>(primary.protocol));
+    }
     key += '|';
     key += network_route_key(primary.route) + '|';
-    if (!configured)
+    if (!configured && !pool)
         key += primary.ip + '|' + std::to_string(primary.port) + '|';
     key.append(2, '\0');
     key.append(reinterpret_cast<const char*>(request.data() + 2), request.size() - 2);
@@ -327,7 +731,9 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
                     std::chrono::duration_cast<std::chrono::seconds>(now - found->second.stored)
                         .count());
                 if (logger_.enabled(Level::debug))
-                    logger_.write(Level::debug, "DNS_CACHE_HIT", "server=" + primary.name);
+                    logger_.write(Level::debug,
+                                  "DNS_CACHE_HIT",
+                                  pool ? ("pool=" + pool->name) : ("server=" + primary.name));
                 return {age_dns_response(found->second.packet, transaction_id, elapsed),
                         found->second.parsed,
                         found->second.used_server_id,
@@ -346,28 +752,25 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
         }
         if (!leader) {
             if (logger_.enabled(Level::debug))
-                logger_.write(Level::debug, "DNS_COALESCED", "server=" + primary.name);
+                logger_.write(Level::debug,
+                              "DNS_COALESCED",
+                              pool ? ("pool=" + pool->name) : ("server=" + primary.name));
             uint64_t group_budget_ms = primary.timeout_ms;
-            if (primary.id && !primary.fallback_ids.empty()) {
-                std::set<uint32_t> visited;
+            if (pool) {
                 uint64_t sum_ms = 0;
-                std::function<void(const Server&)> accumulate = [&](const Server& server) {
-                    if (!server.id || !visited.insert(server.id).second)
-                        return;
-                    if (server.enabled)
-                        sum_ms = std::min<uint64_t>(120000, sum_ms + server.timeout_ms);
-                    for (const auto id : server.fallback_ids) {
-                        const auto candidate = std::find_if(
-                            snapshot.config.servers.begin(),
-                            snapshot.config.servers.end(),
-                            [&](const Server& value) { return value.id == id; });
-                        if (candidate != snapshot.config.servers.end())
-                            accumulate(*candidate);
+                uint64_t first_timeout = 3000;
+                bool saw_first = false;
+                for (const auto sid : pool->server_ids) {
+                    if (const auto* srv = find_server(snapshot.config, sid); srv && srv->enabled) {
+                        if (!saw_first) {
+                            first_timeout = srv->timeout_ms;
+                            saw_first = true;
+                        }
+                        sum_ms = std::min<uint64_t>(120000, sum_ms + srv->timeout_ms);
                     }
-                };
-                accumulate(primary);
-                group_budget_ms = std::max<uint64_t>(
-                    primary.timeout_ms, std::min<uint64_t>(30000, sum_ms));
+                }
+                group_budget_ms =
+                    std::max<uint64_t>(first_timeout, std::min<uint64_t>(30000, sum_ms));
             }
             const auto wait_ms =
                 std::min<uint64_t>(120000, std::max<uint64_t>(group_budget_ms + 1000, 2000));
@@ -386,11 +789,16 @@ Router::ExchangeResult Router::exchange_cached(const Snapshot& snapshot,
         }
     }
     try {
-        auto exchanged = exchange_group(snapshot, request, primary);
+        std::pair<Packet, const Server*> exchanged;
+        if (pool) {
+            exchanged = exchange_pool(snapshot, request, *pool, primary.route);
+        } else {
+            exchanged = {exchange(request, primary), &primary};
+        }
         exchanged.first =
             clamp_dns_ttl(exchanged.first, snapshot.options.ttl_min, snapshot.options.ttl_max);
         auto parsed = parse_response(exchanged.first, question);
-        const uint32_t used_id = configured ? exchanged.second->id : 0;
+        const uint32_t used_id = (configured || pool) ? exchanged.second->id : 0;
         {
             std::lock_guard lock(snapshot.cache_mutex);
             const auto now = std::chrono::steady_clock::now();
@@ -495,14 +903,16 @@ RouteResult Router::route(const Packet& request,
     bool valid_question = false;
     const Rule* matched_rule = nullptr;
     const Server* selected_server = nullptr;
+    const ServerPool* selected_pool = nullptr;
     std::optional<Server> diagnostic_server;
-    const auto log = [this, &context, &selected_server](Level level,
-                                                        std::string code,
-                                                        std::string message,
-                                                        std::string extra_key = {}) {
+    const auto log = [this, &context, &selected_server, &selected_pool](Level level,
+                                                                        std::string code,
+                                                                        std::string message,
+                                                                        std::string extra_key = {}) {
         if (level == Level::errors_only) {
             auto key =
                 code + '|' + context.rule + '|' +
+                (selected_pool ? ("pool:" + std::to_string(selected_pool->id) + '|') : "") +
                 (selected_server
                      ? std::to_string(selected_server->id) + '|' +
                            protocol_name(selected_server->protocol) + '|' + selected_server->ip +
@@ -539,6 +949,7 @@ RouteResult Router::route(const Packet& request,
         context.action = action_name(rule.action);
         result.rule_id = rule.id;
         result.server_id = rule.server_id;
+        result.pool_id = rule.pool_id;
         result.action = rule.action;
         if (!decision.error_code.empty())
             throw Error(decision.error_code, decision.message);
@@ -577,13 +988,16 @@ RouteResult Router::route(const Packet& request,
             return result;
         }
         const Server* server = &original;
-        if (rule.server_id) {
-            const auto it = std::find_if(snapshot.config.servers.begin(),
-                                         snapshot.config.servers.end(),
-                                         [&](const Server& s) { return s.id == rule.server_id; });
-            if (it == snapshot.config.servers.end())
+        if (rule.pool_id) {
+            selected_pool = find_pool(snapshot.config, rule.pool_id);
+            if (!selected_pool)
+                throw Error("POOL_REFERENCE", "Missing selected server pool");
+        } else if (rule.server_id) {
+            server = find_server(snapshot.config, rule.server_id);
+            if (!server)
                 throw Error("SERVER_REFERENCE", "Missing selected server");
-            server = &*it;
+            if (!server->enabled)
+                throw Error("SERVER_DISABLED", "Selected DNS server is disabled");
         }
         selected_server = server;
         diagnostic_server = *server;
@@ -591,7 +1005,7 @@ RouteResult Router::route(const Packet& request,
         selected_server = &routed_server;
         if (!decision.route.interface_id.empty()) {
             routed_server.route = decision.route;
-            if (!rule.server_id) {
+            if (!rule.server_id && !rule.pool_id) {
                 if (decision.interface_dns.empty())
                     throw Error("INTERFACE_DNS", "Selected interface has no DNS resolver");
                 routed_server.ip = decision.interface_dns.front();
@@ -600,11 +1014,17 @@ RouteResult Router::route(const Packet& request,
         }
         routed_server = with_network_context(std::move(routed_server));
         if (logger_.enabled(Level::verbose))
-            log(Level::verbose, "DNS_UPSTREAM", route_log_message(question, rule, &routed_server));
+            log(Level::verbose,
+                "DNS_UPSTREAM",
+                route_log_message(
+                    question, rule, selected_pool ? nullptr : &routed_server, std::nullopt, selected_pool));
         exchange_started = std::chrono::steady_clock::now();
         ExchangeResult exchanged;
-        if (!decision.route.interface_id.empty() && !rule.server_id &&
-            decision.interface_dns.size() > 1) {
+        if (selected_pool) {
+            exchanged = exchange_cached(
+                snapshot, request, question, routed_server, true, selected_pool);
+        } else if (!decision.route.interface_id.empty() && !rule.server_id &&
+                   decision.interface_dns.size() > 1) {
             const auto total_deadline =
                 exchange_started + std::chrono::milliseconds(routed_server.timeout_ms);
             std::exception_ptr last_error;
@@ -645,11 +1065,7 @@ RouteResult Router::route(const Packet& request,
         result.packet = std::move(exchanged.packet);
         result.server_id = exchanged.used_server_id;
         if (result.server_id) {
-            const auto used = std::find_if(
-                snapshot.config.servers.begin(),
-                snapshot.config.servers.end(),
-                [&](const Server& candidate) { return candidate.id == result.server_id; });
-            if (used != snapshot.config.servers.end()) {
+            if (const auto* used = find_server(snapshot.config, result.server_id)) {
                 const auto route = routed_server.route;
                 routed_server = *used;
                 routed_server.route = route;
@@ -686,7 +1102,8 @@ RouteResult Router::route(const Packet& request,
                     details += " nodata=1";
                 log(Level::normal,
                     "DNS_ROUTE",
-                    route_log_message(question, rule, selected_server, elapsed) + details);
+                    route_log_message(question, rule, selected_server, elapsed, selected_pool) +
+                        details);
             }
             if (logger_.enabled(Level::debug))
                 log(Level::debug,
@@ -699,8 +1116,8 @@ RouteResult Router::route(const Packet& request,
             if (logger_.enabled(Level::normal))
                 log(Level::normal,
                     "DNS_ROUTE",
-                    route_log_message(question, rule, selected_server, elapsed) + ", rcode=3" +
-                        common_meta());
+                    route_log_message(question, rule, selected_server, elapsed, selected_pool) +
+                        ", rcode=3" + common_meta());
         } else {
             counters_.route_errors.fetch_add(1, std::memory_order_relaxed);
             counters_.upstream_error_rcodes.fetch_add(1, std::memory_order_relaxed);
@@ -709,7 +1126,7 @@ RouteResult Router::route(const Packet& request,
                 "Upstream returned RCODE " + std::to_string(parsed.rcode) + " (" + rcode_text + ")";
             log(Level::errors_only,
                 result.error_code,
-                route_log_message(question, rule, selected_server, elapsed) +
+                route_log_message(question, rule, selected_server, elapsed, selected_pool) +
                     ", rcode=" + std::to_string(parsed.rcode) + common_meta() +
                     ", error=" + result.message,
                 "rcode=" + std::to_string(parsed.rcode));
@@ -729,7 +1146,8 @@ RouteResult Router::route(const Packet& request,
                                                 .count()};
             log(Level::errors_only,
                 error.code,
-                route_log_message(question, *matched_rule, selected_server, elapsed) +
+                route_log_message(
+                    question, *matched_rule, selected_pool ? nullptr : selected_server, elapsed, selected_pool) +
                     ", error=" + error.what());
         } else
             log(Level::errors_only, error.code, question.name + " " + error.what());
@@ -750,7 +1168,8 @@ RouteResult Router::route(const Packet& request,
                                                 .count()};
             log(Level::errors_only,
                 result.error_code,
-                route_log_message(question, *matched_rule, selected_server, elapsed) +
+                route_log_message(
+                    question, *matched_rule, selected_pool ? nullptr : selected_server, elapsed, selected_pool) +
                     ", error=" + error.what());
         } else
             log(Level::errors_only, result.error_code, result.message);

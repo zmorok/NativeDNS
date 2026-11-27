@@ -83,6 +83,7 @@ Current operations include:
 | 13 | Active interception test (empty payload, bounded UDP/IPv4 probe) |
 | 14 | Runtime logging profile (`Normal` or `Debug`) |
 | 15 | Flush file logging (empty payload, ordered writer barrier) |
+| 16 | Pool status (empty payload, read-only live pool health/RTT snapshot) |
 
 The GUI polls status/logs through IPC instead of owning DNS routing lifetime directly.
 

@@ -154,6 +154,9 @@ public:
         std::lock_guard lock(mutex_);
         return status_;
     }
+    std::vector<PoolStatusSnapshot> pool_statuses() const override {
+        return router_->pool_statuses();
+    }
 
 private:
     Config config_;

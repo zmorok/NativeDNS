@@ -6,6 +6,7 @@
 
 namespace nd {
 enum class Protocol { udp, tcp, doh, dot, doh3, doq, dnscrypt, anonymized_dnscrypt };
+enum class PoolType { redundancy, load_balancing };
 enum class Action { process, bypass, block };
 enum class BlockMode { zero_address, nxdomain, refused, silent_drop };
 enum class Level { errors_only, normal, verbose, debug };
@@ -35,6 +36,16 @@ struct Server {
     std::map<std::string, std::string> metadata;
     bool operator==(const Server&) const = default;
 };
+struct ServerPool {
+    uint32_t id = 0;
+    std::string name;
+    PoolType type = PoolType::redundancy;
+    std::vector<uint32_t> server_ids;
+    std::string test_hostname = "iana.org";
+    uint32_t recheck_seconds = 60;
+    std::map<std::string, std::string> metadata;
+    bool operator==(const ServerPool&) const = default;
+};
 struct Rule {
     uint32_t id = 0;
     std::string name;
@@ -42,6 +53,7 @@ struct Rule {
     std::vector<std::string> patterns;
     Action action = Action::process;
     uint32_t server_id = 0; // original/system destination; NOT bypass action
+    uint32_t pool_id = 0;   // mutually exclusive with server_id
     std::string interface_id;
     bool dnssec_validate = false, dnssec_reject_unsigned = false;
     BlockMode block_mode = BlockMode::zero_address;
@@ -57,6 +69,7 @@ struct LoggingSettings {
 struct Config {
     uint32_t schema_version = 1;
     std::vector<Server> servers;
+    std::vector<ServerPool> pools;
     std::vector<Rule> rules;
     LoggingSettings logging;
     std::string test_target = "iana.org";
