@@ -5,6 +5,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <powrprof.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
 #include <sodium.h>
@@ -145,6 +146,84 @@ uint32_t secure_random_u32() {
 }
 uint64_t monotonic_millis() {
     return GetTickCount64();
+}
+MonotonicClocks monotonic_clocks() {
+    const uint64_t boot = GetTickCount64();
+    ULONGLONG unbiased = 0;
+    const uint64_t active =
+        QueryUnbiasedInterruptTime(&unbiased) ? static_cast<uint64_t>(unbiased / 10000ULL) : boot;
+    return {boot, active};
+}
+struct SuspendResumeSubscription::Impl {
+    using RegisterFn = DWORD(WINAPI*)(DWORD, HANDLE, PHPOWERNOTIFY);
+    using UnregisterFn = DWORD(WINAPI*)(HPOWERNOTIFY);
+    HMODULE powrprof = nullptr;
+    UnregisterFn unregister_fn = nullptr;
+    HPOWERNOTIFY handle = nullptr;
+    std::function<void()> callback;
+
+    static ULONG CALLBACK on_power_event(PVOID context, ULONG type, PVOID) noexcept {
+        if (type == PBT_APMRESUMEAUTOMATIC || type == PBT_APMRESUMESUSPEND) {
+            auto* self = static_cast<Impl*>(context);
+            if (self && self->callback) {
+                try {
+                    self->callback();
+                } catch (...) {
+                }
+            }
+        }
+        return ERROR_SUCCESS;
+    }
+
+    ~Impl() {
+        if (handle && unregister_fn)
+            (void)unregister_fn(handle);
+        if (powrprof)
+            FreeLibrary(powrprof);
+    }
+};
+SuspendResumeSubscription::SuspendResumeSubscription(std::function<void()> on_resume) {
+    if (!on_resume)
+        return;
+    auto impl = std::make_unique<Impl>();
+    impl->callback = std::move(on_resume);
+    impl->powrprof = LoadLibraryExW(L"powrprof.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!impl->powrprof)
+        return;
+    const auto register_fn = reinterpret_cast<Impl::RegisterFn>(
+        GetProcAddress(impl->powrprof, "PowerRegisterSuspendResumeNotification"));
+    impl->unregister_fn = reinterpret_cast<Impl::UnregisterFn>(
+        GetProcAddress(impl->powrprof, "PowerUnregisterSuspendResumeNotification"));
+    if (!register_fn || !impl->unregister_fn)
+        return;
+    DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS params{};
+    params.Callback = &Impl::on_power_event;
+    params.Context = impl.get();
+    if (register_fn(DEVICE_NOTIFY_CALLBACK, &params, &impl->handle) == ERROR_SUCCESS &&
+        impl->handle)
+        impl_ = std::move(impl);
+}
+SuspendResumeSubscription::~SuspendResumeSubscription() = default;
+void elevate_service_process_priority() noexcept {
+    (void)SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+}
+void set_current_thread_priority(ThreadPriority priority) noexcept {
+    int level = THREAD_PRIORITY_NORMAL;
+    switch (priority) {
+        case ThreadPriority::below_normal:
+            level = THREAD_PRIORITY_BELOW_NORMAL;
+            break;
+        case ThreadPriority::normal:
+            level = THREAD_PRIORITY_NORMAL;
+            break;
+        case ThreadPriority::above_normal:
+            level = THREAD_PRIORITY_ABOVE_NORMAL;
+            break;
+        case ThreadPriority::highest:
+            level = THREAD_PRIORITY_HIGHEST;
+            break;
+    }
+    (void)SetThreadPriority(GetCurrentThread(), level);
 }
 uint32_t process_id() {
     return GetCurrentProcessId();

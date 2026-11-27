@@ -198,30 +198,57 @@ select_bootstrap_dns_servers(const std::vector<InterfaceInfo>& interfaces) {
             result.push_back(candidate.address);
     return result;
 }
-NetworkMonitor::NetworkMonitor(Source source, bool watch)
-    : source_(source ? std::move(source) : platform::enumerate_interfaces) {
+uint64_t detected_suspend_millis(platform::MonotonicClocks previous,
+                                 platform::MonotonicClocks current) noexcept {
+    if (current.boottime_ms <= previous.boottime_ms)
+        return 0;
+    const uint64_t boot_delta = current.boottime_ms - previous.boottime_ms;
+    const uint64_t active_delta =
+        current.active_ms > previous.active_ms ? current.active_ms - previous.active_ms : 0;
+    return boot_delta > active_delta ? boot_delta - active_delta : 0;
+}
+NetworkMonitor::NetworkMonitor(Source source, bool watch, ClockSource clocks)
+    : source_(source ? std::move(source) : platform::enumerate_interfaces),
+      clocks_(clocks ? std::move(clocks) : platform::monotonic_clocks) {
     snapshot_.store(std::make_shared<NetworkSnapshot>());
+    last_clocks_ = clocks_();
     refresh();
-    if (watch)
+    if (watch) {
+        suspend_subscription_ = std::make_unique<platform::SuspendResumeSubscription>([this] {
+            resume_pending_.store(true, std::memory_order_release);
+            changed_.notify_all();
+        });
         watcher_ = std::jthread([this](std::stop_token stop) {
-            auto last = platform::monotonic_millis();
             while (!stop.stop_requested()) {
                 std::unique_lock lock(wait_mutex_);
-                changed_.wait_for(lock, stop, std::chrono::seconds(1), [] { return false; });
+                changed_.wait_for(lock, stop, std::chrono::seconds(1), [this] {
+                    return resume_pending_.load(std::memory_order_acquire);
+                });
                 lock.unlock();
-                if (!stop.stop_requested()) {
-                    const auto now = platform::monotonic_millis();
-                    refresh(now - last > 5000);
-                    last = now;
-                }
+                if (!stop.stop_requested())
+                    poll_once();
             }
         });
+    }
 }
 NetworkMonitor::~NetworkMonitor() {
+    suspend_subscription_.reset();
     watcher_.request_stop();
     changed_.notify_all();
     if (watcher_.joinable())
         watcher_.join();
+}
+void NetworkMonitor::poll_once() {
+    constexpr uint64_t resume_threshold_ms = 3000;
+    const auto now = clocks_();
+    uint64_t suspend_ms = 0;
+    {
+        std::lock_guard lock(wait_mutex_);
+        suspend_ms = detected_suspend_millis(last_clocks_, now);
+        last_clocks_ = now;
+    }
+    const bool power_resumed = resume_pending_.exchange(false, std::memory_order_acq_rel);
+    refresh(power_resumed || suspend_ms >= resume_threshold_ms);
 }
 NetworkSnapshotPtr NetworkMonitor::snapshot() const {
     return snapshot_.load();

@@ -486,6 +486,7 @@ private:
              std::condition_variable& init_cv,
              bool& initialized,
              std::string& init_error) {
+        platform::set_current_thread_priority(platform::ThreadPriority::above_normal);
         CURLM* multi = curl_multi_init();
         if (!multi) {
             std::lock_guard lock(init_mutex);

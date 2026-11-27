@@ -151,6 +151,7 @@ int main(int argc, char** native_argv) {
         }
 #endif
 
+        nd::platform::elevate_service_process_priority();
         for (;;) {
             auto config = nd::load_config(config_path);
             // Outlive CoreHost and its file/transport destructors as well as stop().

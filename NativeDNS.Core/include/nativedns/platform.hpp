@@ -20,6 +20,25 @@ std::string format_ip(const void* bytes, bool ipv6);
 uint16_t secure_random_u16();
 uint32_t secure_random_u32();
 uint64_t monotonic_millis();
+struct MonotonicClocks {
+    uint64_t boottime_ms = 0; // advances during OS suspend/sleep
+    uint64_t active_ms = 0;   // pauses during OS suspend/sleep
+};
+MonotonicClocks monotonic_clocks();
+class SuspendResumeSubscription {
+public:
+    explicit SuspendResumeSubscription(std::function<void()> on_resume);
+    ~SuspendResumeSubscription();
+    SuspendResumeSubscription(const SuspendResumeSubscription&) = delete;
+    SuspendResumeSubscription& operator=(const SuspendResumeSubscription&) = delete;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+enum class ThreadPriority { below_normal, normal, above_normal, highest };
+void elevate_service_process_priority() noexcept;
+void set_current_thread_priority(ThreadPriority priority) noexcept;
 uint32_t process_id();
 struct ProcessIdentity {
     uint32_t pid = 0;

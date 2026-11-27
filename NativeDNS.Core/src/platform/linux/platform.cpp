@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <sys/file.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <time.h>
 #include <sys/utsname.h>
 #include <fcntl.h>
@@ -106,6 +107,42 @@ uint64_t monotonic_millis() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                      std::chrono::steady_clock::now().time_since_epoch())
                                      .count());
+}
+MonotonicClocks monotonic_clocks() {
+    const uint64_t boot = monotonic_millis();
+    timespec active{};
+    if (clock_gettime(CLOCK_MONOTONIC, &active) == 0)
+        return {boot,
+                static_cast<uint64_t>(active.tv_sec) * 1000 +
+                    static_cast<uint64_t>(active.tv_nsec) / 1000000};
+    return {boot, boot};
+}
+struct SuspendResumeSubscription::Impl {};
+SuspendResumeSubscription::SuspendResumeSubscription(std::function<void()>) = default;
+SuspendResumeSubscription::~SuspendResumeSubscription() = default;
+void elevate_service_process_priority() noexcept {
+    if (::geteuid() == 0)
+        (void)::setpriority(PRIO_PROCESS, 0, -5);
+}
+void set_current_thread_priority(ThreadPriority priority) noexcept {
+    if (::geteuid() != 0)
+        return;
+    int nice_value = 0;
+    switch (priority) {
+        case ThreadPriority::below_normal:
+            nice_value = 5;
+            break;
+        case ThreadPriority::normal:
+            nice_value = 0;
+            break;
+        case ThreadPriority::above_normal:
+            nice_value = -5;
+            break;
+        case ThreadPriority::highest:
+            nice_value = -8;
+            break;
+    }
+    (void)::setpriority(PRIO_PROCESS, 0, nice_value);
 }
 uint32_t process_id() {
     return static_cast<uint32_t>(::getpid());

@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 #include <nativedns/model.hpp>
+#include <nativedns/platform.hpp>
 
 namespace nd {
 struct InterfaceInfo {
@@ -40,20 +41,30 @@ std::string network_route_key(const NetworkRoute& route);
 std::string describe_network_change(const NetworkSnapshot& previous, const NetworkSnapshot& current);
 Server with_network_context(Server server);
 std::vector<std::string> select_bootstrap_dns_servers(const std::vector<InterfaceInfo>& interfaces);
+uint64_t detected_suspend_millis(platform::MonotonicClocks previous,
+                                 platform::MonotonicClocks current) noexcept;
 class NetworkMonitor final {
 public:
     using Source = std::function<std::vector<InterfaceInfo>()>;
-    explicit NetworkMonitor(Source source = {}, bool watch = true);
+    using ClockSource = std::function<platform::MonotonicClocks()>;
+    explicit NetworkMonitor(Source source = {},
+                            bool watch = true,
+                            ClockSource clocks = {});
     ~NetworkMonitor();
     NetworkSnapshotPtr snapshot() const;
     void refresh(bool invalidate = false);
+    void poll_once();
     static NetworkMonitor& shared();
 
 private:
     Source source_;
+    ClockSource clocks_;
     std::mutex refresh_mutex_, wait_mutex_;
     std::condition_variable_any changed_;
     std::atomic<NetworkSnapshotPtr> snapshot_;
+    std::atomic_bool resume_pending_{false};
+    platform::MonotonicClocks last_clocks_{};
+    std::unique_ptr<platform::SuspendResumeSubscription> suspend_subscription_;
     std::jthread watcher_;
 };
 namespace platform {

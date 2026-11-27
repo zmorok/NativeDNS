@@ -311,6 +311,7 @@ void Logger::record_file_failure(const std::string& message) {
     changed_.notify_all();
 }
 void Logger::file_loop() {
+    platform::set_current_thread_priority(platform::ThreadPriority::below_normal);
     writer_active_ = true;
     bool sink_enabled = false;
     for (;;) {

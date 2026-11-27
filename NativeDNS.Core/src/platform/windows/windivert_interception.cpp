@@ -622,6 +622,7 @@ struct WinDivertInterception::Impl {
                 "Routing queue is full; returned SERVFAIL (count=" + std::to_string(count) + ")");
     }
     void receive_loop() {
+        platform::set_current_thread_priority(platform::ThreadPriority::highest);
         receiver_active = true;
         try {
             Packet recv_buffer(WINDIVERT_MTU_MAX);
@@ -818,6 +819,7 @@ struct WinDivertInterception::Impl {
         queue_changed.notify_all();
     }
     void worker_loop() {
+        platform::set_current_thread_priority(platform::ThreadPriority::above_normal);
         struct Active {
             std::atomic_uint64_t& count;
             explicit Active(std::atomic_uint64_t& value) : count(value) {
