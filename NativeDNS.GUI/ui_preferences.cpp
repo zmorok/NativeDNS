@@ -322,6 +322,39 @@ constexpr std::array translations{
     Translation{"bypass", "обходить"},
     Translation{"block", "блокировать"},
     Translation{"Rules", "Правила"},
+    Translation{"Server Pools", "Пулы серверов"},
+    Translation{"Pool Type", "Тип пула"},
+    Translation{"Pool Name:", "Имя пула:"},
+    Translation{"New Pool", "Новый пул"},
+    Translation{"Redundancy", "Отказоустойчивость (Redundancy)"},
+    Translation{"Load Balancing", "Балансировка нагрузки (Load Balancing)"},
+    Translation{"Automatically monitor DNS servers and use the best one.",
+                "Автоматически отслеживать DNS-серверы и использовать лучший."},
+    Translation{"On each request use a random DNS server from the pool.",
+                "На каждый запрос выбирать случайный DNS-сервер из пула."},
+    Translation{"Options...", "Настройки..."},
+    Translation{"Redundancy Pool Options", "Настройки пула отказоустойчивости"},
+    Translation{"Test hostname:", "Тестовый домен:"},
+    Translation{"Recheck in:", "Перепроверять каждые:"},
+    Translation{"(seconds)", "(секунд)"},
+    Translation{"Create", "Создать"},
+    Translation{"Type...", "Тип..."},
+    Translation{"Drag and drop DNS servers from the list above into a pool.\nRedundancy pools monitor servers and use the best one; Load Balancing pools use a random server for each request.",
+                "Перетащите DNS-серверы из списка выше в нужный пул.\nПулы отказоустойчивости (Redundancy) отслеживают серверы и используют лучший; пулы балансировки (Load Balancing) выбирают случайный сервер для каждого запроса."},
+    Translation{"Pool name must not be empty.", "Имя пула не должно быть пустым."},
+    Translation{"Recheck interval must be between 5 and 86400 seconds.",
+                "Интервал перепроверки должен быть от 5 до 86400 секунд."},
+    Translation{"Remove selected server pool?", "Удалить выбранный пул серверов?"},
+    Translation{"Cannot remove a pool referenced by one or more rules.",
+                "Нельзя удалить пул, который используется в одном или нескольких правилах."},
+    Translation{"Server name must not be empty.", "Имя сервера не должно быть пустым."},
+    Translation{"Port must be between 1 and 65535.", "Порт должен быть в диапазоне от 1 до 65535."},
+    Translation{"Bootstrap entries must be numeric IP addresses.",
+                "Bootstrap-адреса должны быть числовыми IP-адресами."},
+    Translation{"Rule name must not be empty.", "Имя правила не должно быть пустым."},
+    Translation{"At least one hostname pattern is required.",
+                "Необходимо указать хотя бы один домен или шаблон."},
+    Translation{"Server pool", "Пул серверов"},
     Translation{"Action", "Действие"},
     Translation{"Hostnames", "Доменные имена"},
     Translation{"DNS Server", "DNS-сервер"},
@@ -451,6 +484,15 @@ constexpr std::array translations{
 class NativeDnsStyle final : public QProxyStyle {
 public:
     NativeDnsStyle() : QProxyStyle(QStyleFactory::create("Fusion")) {
+    }
+
+    int styleHint(StyleHint hint,
+                  const QStyleOption* option = nullptr,
+                  const QWidget* widget = nullptr,
+                  QStyleHintReturn* returnData = nullptr) const override {
+        if (hint == SH_ComboBox_Popup)
+            return 0;
+        return QProxyStyle::styleHint(hint, option, widget, returnData);
     }
 
     QSize sizeFromContents(ContentsType type,

@@ -40,11 +40,11 @@ private:
                 return value;
         return nullptr;
     }
-    void choose(uint32_t value) {
+    void choose(qulonglong value) {
         QTRY_COMPARE(editors().size(), 1);
         auto* combo = editors().front();
         QTRY_VERIFY(combo->view()->isVisible());
-        const int row = combo->findData(value);
+        const int row = combo->findData(QVariant::fromValue(value));
         QVERIFY(row >= 0);
         const auto index = combo->model()->index(row, combo->modelColumn());
         combo->view()->scrollTo(index);
@@ -55,8 +55,8 @@ private:
         QTRY_VERIFY(editors().isEmpty());
         QCoreApplication::processEvents();
     }
-    uint32_t value(int row, int column) const {
-        return table_->model()->index(row, column).data(Qt::UserRole).toUInt();
+    qulonglong value(int row, int column) const {
+        return table_->model()->index(row, column).data(Qt::UserRole).toULongLong();
     }
     static QList<int> columnWidths(QHeaderView* header) {
         QList<int> widths;
@@ -590,6 +590,340 @@ private slots:
             nd::validate(config_);
         } else
             QCOMPARE(config_, before);
+    }
+    void serverPoolsDialogAndScrollableRulesDropdown() {
+        applyUiTheme(*qApp, false);
+        // 1) Exercise ServerPoolsDialog with live status fetcher (green RTT + red failed)
+        auto poolCfg = config_;
+        ServerPoolsDialog poolsDialog(
+            nullptr,
+            poolCfg,
+            [this] {
+                ++commits_;
+                return true;
+            },
+            []() -> std::vector<nd::PoolStatusSnapshot> {
+                nd::PoolStatusSnapshot snap;
+                snap.pool_id = 1;
+                snap.active_server_id = 10;
+                snap.members = {
+                    {10, nd::PoolMemberHealth::healthy, 23.0, {}, 1000},
+                    {20, nd::PoolMemberHealth::failed, 0.0, "TIMEOUT", 1000},
+                };
+                return {snap};
+            });
+        poolsDialog.show();
+        auto* sourceTable = poolsDialog.findChild<QTableWidget*>("poolSourceServersTable");
+        auto* tree = poolsDialog.findChild<QTreeWidget*>("serverPoolsTree");
+        auto* createBtn = poolsDialog.findChild<QPushButton*>("createPoolButton");
+        auto* typeBtn = poolsDialog.findChild<QPushButton*>("poolTypeButton");
+        auto* removeBtn = poolsDialog.findChild<QPushButton*>("removePoolButton");
+        QVERIFY(sourceTable && tree && createBtn && typeBtn && removeBtn);
+        QCOMPARE(sourceTable->columnCount(), 3);
+        QCOMPARE(sourceTable->rowCount(), 2);
+        QVERIFY(!typeBtn->isEnabled() && !removeBtn->isEnabled());
+
+        QTest::mouseClick(createBtn, Qt::LeftButton);
+        QCOMPARE(tree->topLevelItemCount(), 1);
+        QVERIFY(tree->topLevelItem(0)->text(0).contains("New Pool [Redundancy]"));
+        QVERIFY(typeBtn->isEnabled() && removeBtn->isEnabled());
+
+        QVERIFY(poolsDialog.addServersToPool(1, {10, 20}));
+        QCOMPARE(tree->topLevelItem(0)->childCount(), 2);
+        // Wait for async live status poll to colorize the members.
+        QTRY_VERIFY(tree->topLevelItem(0)->child(0)->text(0).startsWith("23 "));
+
+        for (auto* candidate : poolsDialog.findChildren<QPushButton*>()) {
+            if (candidate->text() == uiText("OK")) {
+                QTest::mouseClick(candidate, Qt::LeftButton);
+                break;
+            }
+        }
+        QCOMPARE(commits_, 1);
+        QCOMPARE(poolCfg.pools.size(), size_t(1));
+        QCOMPARE(poolCfg.pools.front().server_ids, (std::vector<uint32_t>{10, 20}));
+
+        // 2) Add many servers (including a long name) so the Rules dropdown requires scrolling,
+        // widens to display full server names, and fits inside the screen.
+        for (uint32_t id = 100; id < 135; ++id) {
+            nd::Server extra;
+            extra.id = id;
+            extra.name = id == 100 ? "Bezmezhau #2 DoH (Long Server Name)"
+                                   : "Extra Server " + std::to_string(id);
+            extra.ip = "127.0.0.1";
+            poolCfg.servers.push_back(extra);
+        }
+        nd::validate(poolCfg);
+        RulesDialog rulesDlg(nullptr, poolCfg, [] { return true; });
+        rulesDlg.show();
+        auto* rulesTable = rulesDlg.findChild<QTableView*>();
+        QVERIFY(rulesTable);
+        QTRY_VERIFY(rulesTable->isEnabled());
+
+        // Existing single-server row should render with "S| " prefix.
+        QCOMPARE(rulesTable->model()->index(0, 4).data(Qt::DisplayRole).toString(),
+                 QString("S| Server 10"));
+
+        // Open dropdown on row 0, column 4 and verify order: P| -> separator -> Original/System -> S|
+        QTest::mouseClick(rulesTable->viewport(),
+                          Qt::LeftButton,
+                          Qt::NoModifier,
+                          rulesTable->visualRect(rulesTable->model()->index(0, 4)).center());
+        QComboBox* combo = nullptr;
+        QTRY_VERIFY([&] {
+            for (auto* c : rulesTable->findChildren<QComboBox*>())
+                if (c->isVisible()) {
+                    combo = c;
+                    return true;
+                }
+            return false;
+        }());
+        QTRY_VERIFY(combo->view()->isVisible());
+        QCOMPARE(combo->itemText(0), QString("P| New Pool"));
+        QCOMPARE(combo->itemData(0).toULongLong(), encodeRuleTarget(0, 1));
+        QCOMPARE(combo->itemData(1, Qt::AccessibleDescriptionRole).toString(), QString("separator"));
+        QCOMPARE(combo->itemText(2), uiText("Original/System"));
+        QCOMPARE(combo->itemText(3), QString("S| Server 10"));
+
+        // Scrollable, wide enough for full server names, & bounded within screen availableGeometry
+        QTRY_VERIFY(combo->view()->verticalScrollBar()->maximum() > 0);
+        const int expectedTextWidth =
+            QFontMetrics(combo->view()->font())
+                .horizontalAdvance(QStringLiteral("S| Bezmezhau #2 DoH (Long Server Name)"));
+        QTRY_VERIFY(combo->view()->window()->width() > combo->width());
+        QVERIFY(combo->view()->window()->width() >=
+                expectedTextWidth + combo->style()->pixelMetric(QStyle::PM_ScrollBarExtent));
+        if (auto* scr = QGuiApplication::primaryScreen()) {
+            const QRect popupRect = combo->view()->window()->geometry();
+            const QRect avail = scr->availableGeometry();
+            QVERIFY(popupRect.top() >= avail.top() && popupRect.bottom() <= avail.bottom());
+            QVERIFY(popupRect.left() >= avail.left() && popupRect.right() <= avail.right());
+        }
+
+        // Select pool P| New Pool
+        const auto poolIdx = combo->model()->index(0, combo->modelColumn());
+        combo->view()->scrollTo(poolIdx);
+        QTest::mouseClick(combo->view()->viewport(),
+                          Qt::LeftButton,
+                          Qt::NoModifier,
+                          combo->view()->visualRect(poolIdx).center());
+        QTRY_COMPARE(rulesTable->model()->index(0, 4).data(Qt::DisplayRole).toString(),
+                     QString("P| New Pool"));
+        for (auto* candidate : rulesDlg.findChildren<QPushButton*>()) {
+            if (candidate->text() == uiText("OK")) {
+                QTest::mouseClick(candidate, Qt::LeftButton);
+                break;
+            }
+        }
+        QCOMPARE(poolCfg.rules[0].server_id, 0u);
+        QCOMPARE(poolCfg.rules[0].pool_id, 1u);
+    }
+    void serverEditorValidationKeepsDialogOpenAndHighlightsFields() {
+        nd::Server server;
+        server.id = 99;
+        server.name = "My Custom UDP";
+        server.protocol = nd::Protocol::udp;
+
+        bool sawDialogStayedOpen = false;
+        bool sawIpHighlighted = false;
+        bool sawClearedOnEdit = false;
+        bool sawDohUrlHighlighted = false;
+        bool sawPortHighlighted = false;
+
+        QTimer::singleShot(0, [&] {
+            auto* dlg = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dlg || dlg->objectName() != "serverEditorDialog")
+                return;
+            auto* nameEdit = dlg->findChild<QLineEdit*>("serverNameEdit");
+            auto* ipEdit = dlg->findChild<QLineEdit*>("serverIpEdit");
+            auto* portEdit = dlg->findChild<QLineEdit*>("serverPortEdit");
+            auto* urlEdit = dlg->findChild<QLineEdit*>("serverUrlEdit");
+            auto* protoCombo = dlg->findChild<QComboBox*>("serverProtocolCombo");
+            auto* box = dlg->findChild<QDialogButtonBox*>();
+            auto* okBtn = box ? box->button(QDialogButtonBox::Ok) : nullptr;
+            if (!nameEdit || !ipEdit || !portEdit || !urlEdit || !protoCombo || !okBtn)
+                return;
+
+            const auto clickOkAndDismissError = [okBtn](const std::function<void()>& afterDismiss) {
+                QTimer::singleShot(0, [afterDismiss] {
+                    if (auto* err = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                        err->accept();
+                    QTimer::singleShot(0, afterDismiss);
+                });
+                okBtn->click();
+            };
+
+            // 1) Empty IP on UDP must keep editor open, keep entered Name, and highlight IP in red.
+            nameEdit->setText("Preserved Server Name");
+            clickOkAndDismissError(
+                [&, clickOkAndDismissError, dlg, nameEdit, ipEdit, portEdit, urlEdit, protoCombo, okBtn] {
+                    sawDialogStayedOpen =
+                        dlg->isVisible() && nameEdit->text() == "Preserved Server Name";
+                    sawIpHighlighted = ipEdit->property("validationError").toBool() &&
+                                       ipEdit->styleSheet().contains("#d32f2f") &&
+                                       !nameEdit->property("validationError").toBool();
+                    // Editing the invalid field immediately clears the red border.
+                    ipEdit->setText("1.1.1.1");
+                    sawClearedOnEdit = !ipEdit->property("validationError").toBool() &&
+                                       ipEdit->styleSheet().isEmpty();
+
+                    // 2) Switching to DoH with empty URL highlights URL and keeps dialog open.
+                    protoCombo->setCurrentIndex(protocolIndex(nd::Protocol::doh));
+                    clickOkAndDismissError([&, clickOkAndDismissError, dlg, portEdit, urlEdit, okBtn] {
+                        sawDohUrlHighlighted = dlg->isVisible() &&
+                                               urlEdit->property("validationError").toBool() &&
+                                               urlEdit->styleSheet().contains("#d32f2f");
+                        urlEdit->setText("https://dns.example/dns-query");
+                        portEdit->setText("99999");
+
+                        // 3) Invalid port highlights Port and keeps dialog open.
+                        clickOkAndDismissError([&, dlg, portEdit, okBtn] {
+                            sawPortHighlighted = dlg->isVisible() &&
+                                                 portEdit->property("validationError").toBool() &&
+                                                 portEdit->styleSheet().contains("#d32f2f");
+                            portEdit->clear();
+                            // 4) Valid inputs now accept cleanly.
+                            okBtn->click();
+                        });
+                    });
+                });
+        });
+
+        QVERIFY(editServer(nullptr, server));
+        QVERIFY(sawDialogStayedOpen);
+        QVERIFY(sawIpHighlighted);
+        QVERIFY(sawClearedOnEdit);
+        QVERIFY(sawDohUrlHighlighted);
+        QVERIFY(sawPortHighlighted);
+        QCOMPARE(QString::fromStdString(server.name), QString("Preserved Server Name"));
+        QCOMPARE(server.protocol, nd::Protocol::doh);
+        QCOMPARE(QString::fromStdString(server.url), QString("https://dns.example/dns-query"));
+    }
+    void ruleAndPoolEditorsValidateInPlaceWithRedBorders() {
+        // 1) DNS Rule editor: invalid name + invalid hostname pattern stay open & highlight red.
+        nd::Rule rule;
+        rule.id = 77;
+        rule.name = "Initial";
+        rule.patterns = {"example.com"};
+        bool ruleStayedOpen = false;
+        bool ruleBothHighlighted = false;
+        bool ruleClearedOnEdit = false;
+
+        QTimer::singleShot(0, [&] {
+            auto* dlg = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dlg || dlg->objectName() != "ruleEditorDialog")
+                return;
+            auto* nameEdit = dlg->findChild<QLineEdit*>("ruleNameEdit");
+            auto* hostsEdit = dlg->findChild<QPlainTextEdit*>("ruleHostnamesEdit");
+            auto* box = dlg->findChild<QDialogButtonBox*>();
+            auto* okBtn = box ? box->button(QDialogButtonBox::Ok) : nullptr;
+            if (!nameEdit || !hostsEdit || !okBtn)
+                return;
+
+            nameEdit->clear();
+            hostsEdit->setPlainText("bad..domain");
+            QTimer::singleShot(0, [&, dlg, nameEdit, hostsEdit, okBtn] {
+                if (auto* err = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                    err->accept();
+                QTimer::singleShot(0, [&, dlg, nameEdit, hostsEdit, okBtn] {
+                    ruleStayedOpen =
+                        dlg->isVisible() && hostsEdit->toPlainText() == "bad..domain";
+                    ruleBothHighlighted = nameEdit->property("validationError").toBool() &&
+                                          nameEdit->styleSheet().contains("#d32f2f") &&
+                                          hostsEdit->property("validationError").toBool() &&
+                                          hostsEdit->styleSheet().contains("#d32f2f");
+                    nameEdit->setText("Fixed Rule");
+                    hostsEdit->setPlainText("good.example");
+                    ruleClearedOnEdit = !nameEdit->property("validationError").toBool() &&
+                                        !hostsEdit->property("validationError").toBool();
+                    okBtn->click();
+                });
+            });
+            okBtn->click();
+        });
+        QVERIFY(editRule(nullptr, config_, rule));
+        QVERIFY(ruleStayedOpen);
+        QVERIFY(ruleBothHighlighted);
+        QVERIFY(ruleClearedOnEdit);
+        QCOMPARE(QString::fromStdString(rule.name), QString("Fixed Rule"));
+        QCOMPARE(rule.patterns, (std::vector<std::string>{"good.example"}));
+
+        // 2) Pool Type editor: empty pool name stays open & highlights poolNameEdit in red.
+        nd::ServerPool pool;
+        pool.id = 1;
+        pool.name = "Initial Pool";
+        bool poolStayedOpen = false;
+        bool poolHighlighted = false;
+        QTimer::singleShot(0, [&] {
+            auto* dlg = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dlg || dlg->objectName() != "poolTypeDialog")
+                return;
+            auto* nameEdit = dlg->findChild<QLineEdit*>("poolNameEdit");
+            QPushButton* okBtn = nullptr;
+            for (auto* b : dlg->findChildren<QPushButton*>())
+                if (b->text() == uiText("OK"))
+                    okBtn = b;
+            if (!nameEdit || !okBtn)
+                return;
+            nameEdit->clear();
+            QTimer::singleShot(0, [&, dlg, nameEdit, okBtn] {
+                if (auto* err = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                    err->accept();
+                QTimer::singleShot(0, [&, dlg, nameEdit, okBtn] {
+                    poolStayedOpen = dlg->isVisible();
+                    poolHighlighted = nameEdit->property("validationError").toBool() &&
+                                      nameEdit->styleSheet().contains("#d32f2f");
+                    nameEdit->setText("AI Pool");
+                    okBtn->click();
+                });
+            });
+            okBtn->click();
+        });
+        QVERIFY(editPoolType(nullptr, pool));
+        QVERIFY(poolStayedOpen);
+        QVERIFY(poolHighlighted);
+        QCOMPARE(QString::fromStdString(pool.name), QString("AI Pool"));
+
+        // 3) Redundancy Pool Options: invalid hostname + out-of-range interval both highlight red.
+        std::string testHost = "iana.org";
+        uint32_t recheck = 60;
+        bool optStayedOpen = false;
+        bool optBothHighlighted = false;
+        QTimer::singleShot(0, [&] {
+            auto* dlg = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+            if (!dlg || dlg->objectName() != "redundancyOptionsDialog")
+                return;
+            auto* hostEdit = dlg->findChild<QLineEdit*>("redundancyTestHostname");
+            auto* recheckEdit = dlg->findChild<QLineEdit*>("redundancyRecheckSeconds");
+            QPushButton* okBtn = nullptr;
+            for (auto* b : dlg->findChildren<QPushButton*>())
+                if (b->text() == uiText("OK"))
+                    okBtn = b;
+            if (!hostEdit || !recheckEdit || !okBtn)
+                return;
+            hostEdit->setText("bad..host");
+            recheckEdit->setText("2");
+            QTimer::singleShot(0, [&, dlg, hostEdit, recheckEdit, okBtn] {
+                if (auto* err = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()))
+                    err->accept();
+                QTimer::singleShot(0, [&, dlg, hostEdit, recheckEdit, okBtn] {
+                    optStayedOpen = dlg->isVisible() && hostEdit->text() == "bad..host";
+                    optBothHighlighted = hostEdit->property("validationError").toBool() &&
+                                         hostEdit->styleSheet().contains("#d32f2f") &&
+                                         recheckEdit->property("validationError").toBool() &&
+                                         recheckEdit->styleSheet().contains("#d32f2f");
+                    hostEdit->setText("example.org");
+                    recheckEdit->setText("30");
+                    okBtn->click();
+                });
+            });
+            okBtn->click();
+        });
+        QVERIFY(editRedundancyOptions(nullptr, testHost, recheck));
+        QVERIFY(optStayedOpen);
+        QVERIFY(optBothHighlighted);
+        QCOMPARE(QString::fromStdString(testHost), QString("example.org"));
+        QCOMPARE(recheck, 30u);
     }
 };
 

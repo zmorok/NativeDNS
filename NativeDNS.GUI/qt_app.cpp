@@ -9,14 +9,17 @@
 #include "ui_preferences.hpp"
 #include <nativedns/autostart.hpp>
 #include <nativedns/dns.hpp>
+#include <nativedns/dnscrypt.hpp>
 #include <nativedns/ipc.hpp>
 #include <nativedns/platform.hpp>
 #include <nativedns/network_preflight.hpp>
+#include <nativedns/router.hpp>
 #include <QApplication>
 #include <QAbstractTableModel>
 #include <QAbstractItemView>
 #include <QAction>
 #include <QActionGroup>
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -26,15 +29,21 @@
 #include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDateTime>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QEventLoop>
 #include <QFileDialog>
 #include <QFont>
 #include <QFormLayout>
+#include <QGroupBox>
+#include <QGuiApplication>
 #include <QHeaderView>
 #include <QHelpEvent>
 #include <QIcon>
 #include <QInputDialog>
+#include <QIntValidator>
+#include <QMimeData>
 #include <QProcess>
 #include <QProgressDialog>
 #include <QItemSelectionModel>
@@ -47,13 +56,17 @@
 #include <QPaintEvent>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRadioButton>
 #include <QResizeEvent>
+#include <QScreen>
+#include <QScrollBar>
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyledItemDelegate>
 #include <QTableView>
 #include <QTableWidget>
 #include <QToolBar>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPointer>
@@ -74,6 +87,7 @@
 #include <QTextDocument>
 #include <QToolTip>
 #include <QUrl>
+#include <cmath>
 #include <thread>
 #include <algorithm>
 #include <functional>
@@ -289,9 +303,36 @@ QString previewPatterns(const std::vector<std::string>& patterns) {
         list << q(p);
     return list.join("; ");
 }
+QString protocolFullText(nd::Protocol p) {
+    switch (p) {
+        case nd::Protocol::udp:
+            return "Plain";
+        case nd::Protocol::tcp:
+            return "TCP";
+        case nd::Protocol::doh:
+            return "DNS over HTTPS";
+        case nd::Protocol::dot:
+            return "DNS over TLS";
+        case nd::Protocol::doh3:
+            return "DNS over HTTPS/3";
+        case nd::Protocol::doq:
+            return "DNS over QUIC";
+        case nd::Protocol::dnscrypt:
+            return "DNSCrypt";
+        case nd::Protocol::anonymized_dnscrypt:
+            return uiText("Anonymized DNSCrypt");
+    }
+    return {};
+}
 uint32_t nextServerId(const nd::Config& c) {
     uint32_t id = 0;
     for (const auto& v : c.servers)
+        id = std::max(id, v.id);
+    return id + 1;
+}
+uint32_t nextPoolId(const nd::Config& c) {
+    uint32_t id = 0;
+    for (const auto& v : c.pools)
         id = std::max(id, v.id);
     return id + 1;
 }
@@ -302,9 +343,29 @@ uint32_t nextRuleId(const nd::Config& c) {
     return id + 1;
 }
 
+constexpr qulonglong kPoolTargetFlag = 1ULL << 32;
+qulonglong encodeRuleTarget(uint32_t serverId, uint32_t poolId) {
+    if (poolId)
+        return kPoolTargetFlag | static_cast<qulonglong>(poolId);
+    return static_cast<qulonglong>(serverId);
+}
+bool isPoolTarget(qulonglong encoded) {
+    return (encoded & kPoolTargetFlag) != 0;
+}
+uint32_t targetId(qulonglong encoded) {
+    return static_cast<uint32_t>(encoded & 0xFFFFFFFFULL);
+}
+
 class AnchoredComboBox final : public QComboBox {
 public:
-    using QComboBox::QComboBox;
+    explicit AnchoredComboBox(QWidget* parent = nullptr) : QComboBox(parent) {
+        setMaxVisibleItems(14);
+        if (auto* v = view()) {
+            v->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            v->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+            v->setTextElideMode(Qt::ElideRight);
+        }
+    }
     void openPopup() {
         showPopup();
     }
@@ -321,26 +382,134 @@ protected:
                    "selection-background-color: #d7ebf9; selection-color: #202020; outline: 0; }"
                    "QAbstractItemView::item:hover, QAbstractItemView::item:selected { "
                    "background-color: #d7ebf9; color: #202020; }");
+        view()->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        view()->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        view()->setTextElideMode(Qt::ElideRight);
+
+        const auto computeGeometry = [this]() -> QRect {
+            const QPoint topLeft = mapToGlobal(QPoint(0, 0));
+            const QPoint bottomLeft = mapToGlobal(QPoint(0, height()));
+            QScreen* scr = QGuiApplication::screenAt(mapToGlobal(rect().center()));
+            if (!scr)
+                scr = screen();
+            if (!scr)
+                scr = QGuiApplication::primaryScreen();
+            const QRect avail = scr ? scr->availableGeometry() : QRect(0, 0, 1920, 1080);
+
+            const QFontMetrics fm(view()->font());
+            int totalRowsHeight = 0;
+            int visibleCapHeight = 0;
+            int textWidth = 0;
+            const int rowCount = count();
+            const int maxVis = std::max(1, maxVisibleItems());
+            for (int r = 0; r < rowCount; ++r) {
+                int rh = view()->sizeHintForRow(r);
+                if (rh <= 0)
+                    rh = fm.height() + 6;
+                totalRowsHeight += rh;
+                if (r < maxVis)
+                    visibleCapHeight += rh;
+                const QString text = itemText(r);
+                if (!text.isEmpty())
+                    textWidth = std::max(textWidth, fm.horizontalAdvance(text));
+            }
+            const int frame = view()->frameWidth() * 2 + 6;
+            const int desiredHeight =
+                std::max(40, std::min(totalRowsHeight, visibleCapHeight) + frame);
+
+            const int spaceBelow = avail.bottom() - bottomLeft.y() - 4;
+            const int spaceAbove = topLeft.y() - avail.top() - 4;
+            int popupHeight = desiredHeight;
+            int popupY = bottomLeft.y();
+            if (spaceBelow >= desiredHeight || spaceBelow >= spaceAbove) {
+                popupHeight = std::min(desiredHeight, std::max(40, spaceBelow));
+                popupY = std::min(bottomLeft.y(), avail.bottom() - popupHeight + 1);
+            } else {
+                popupHeight = std::min(desiredHeight, std::max(40, spaceAbove));
+                popupY = std::max(avail.top(), topLeft.y() - popupHeight);
+            }
+
+            const bool needsScroll = totalRowsHeight + frame > popupHeight;
+            const int scrollWidth =
+                needsScroll ? style()->pixelMetric(QStyle::PM_ScrollBarExtent) + 6 : 0;
+            const int maxWidth = std::max(width(), avail.width() - 16);
+            const int desiredWidth = textWidth + scrollWidth + view()->frameWidth() * 2 + 32;
+            const int popupWidth = std::clamp(std::max(width(), desiredWidth), width(), maxWidth);
+
+            int popupX = bottomLeft.x();
+            if (popupWidth > width()) {
+                const QWidget* topWin = window();
+                const int rightLimit =
+                    topWin ? std::min(avail.right(), topWin->frameGeometry().right() - 4)
+                           : avail.right();
+                if (popupX + popupWidth - 1 > rightLimit) {
+                    const int rightAlignedX = bottomLeft.x() + width() - popupWidth;
+                    if (rightAlignedX >= avail.left())
+                        popupX = rightAlignedX;
+                }
+            }
+            popupX = std::clamp(
+                popupX, avail.left(), std::max(avail.left(), avail.right() - popupWidth + 1));
+
+            return QRect(popupX, popupY, popupWidth, popupHeight);
+        };
+
+        const QRect initialRect = computeGeometry();
+        view()->setMinimumWidth(std::max(0, initialRect.width() - 4));
         QComboBox::showPopup();
         QPointer<QWidget> popup = view()->window();
-        QTimer::singleShot(0, this, [this, popup] {
-            if (!popup)
+        const auto applyPopupGeometry = [this, popup, computeGeometry] {
+            if (!popup || !popup->isVisible())
                 return;
+            const QRect target = computeGeometry();
+            view()->setMinimumWidth(std::max(0, target.width() - 4));
             popup->setMinimumWidth(width());
-            popup->move(mapToGlobal(QPoint(0, height())));
-        });
+            popup->setMaximumWidth(QWIDGETSIZE_MAX);
+            popup->setGeometry(target);
+        };
+        applyPopupGeometry();
+        QTimer::singleShot(0, this, applyPopupGeometry);
     }
 };
 
 struct ComboOption {
     QString text;
-    uint32_t value;
+    qulonglong value = 0;
+    bool separator = false;
 };
+
+std::vector<ComboOption> buildRuleTargetOptions(const nd::Config& config) {
+    std::vector<ComboOption> options;
+    options.reserve(config.pools.size() + config.servers.size() + 2);
+    if (!config.pools.empty()) {
+        for (const auto& pool : config.pools)
+            options.push_back({QStringLiteral("P| ") + q(pool.name),
+                               encodeRuleTarget(0, pool.id),
+                               false});
+        options.push_back({{}, 0, true});
+    }
+    options.push_back({uiText("Original/System"), 0, false});
+    for (const auto& server : config.servers)
+        options.push_back({QStringLiteral("S| ") + q(server.name),
+                           encodeRuleTarget(server.id, 0),
+                           false});
+    return options;
+}
+
+void populateRuleTargetCombo(QComboBox& combo, const nd::Config& config) {
+    combo.clear();
+    for (const auto& option : buildRuleTargetOptions(config)) {
+        if (option.separator)
+            combo.insertSeparator(combo.count());
+        else
+            combo.addItem(option.text, QVariant::fromValue(option.value));
+    }
+}
 
 class LazyComboDelegate final : public QStyledItemDelegate {
 public:
     using Options = std::function<std::vector<ComboOption>()>;
-    using Changed = std::function<void(const QModelIndex&, uint32_t)>;
+    using Changed = std::function<void(const QModelIndex&, qulonglong)>;
 
     LazyComboDelegate(Options options, Changed changed, QObject* parent)
         : QStyledItemDelegate(parent), options_(std::move(options)), changed_(std::move(changed)) {
@@ -349,8 +518,12 @@ public:
     QWidget*
     createEditor(QWidget* parent, const QStyleOptionViewItem&, const QModelIndex&) const override {
         auto* editor = new AnchoredComboBox(parent);
-        for (const auto& option : options_())
-            editor->addItem(option.text, option.value);
+        for (const auto& option : options_()) {
+            if (option.separator)
+                editor->insertSeparator(editor->count());
+            else
+                editor->addItem(option.text, QVariant::fromValue(option.value));
+        }
         connect(editor, qOverload<int>(&QComboBox::activated), editor, [this, editor] {
             editor->setProperty("choiceActivated", true);
             auto* self = const_cast<LazyComboDelegate*>(this);
@@ -393,7 +566,7 @@ public:
         // Focus loss or Escape must not apply the clicked row's value to other rows.
         if (!combo->property("choiceActivated").toBool())
             return;
-        const auto value = combo->currentData().toUInt();
+        const auto value = combo->currentData().toULongLong();
         changed_(index, value);
     }
 
@@ -511,15 +684,46 @@ QString friendlyCoreStatus(const QString& raw) {
            uiText("DNS port") + ": " + value("port") + " | UDP: " + udp + " | TCP: " + tcp;
 }
 
-bool editServer(QWidget* parent, nd::Server& server) {
+void setInputValidationError(QWidget* field, bool invalid) {
+    if (!field)
+        return;
+    field->setProperty("validationError", invalid);
+    if (invalid) {
+        const auto* ref = field->window() ? field->window() : field;
+        const bool dark = ref->palette().color(QPalette::Window).lightness() < 128;
+        const QString color = dark ? QStringLiteral("#ff5555") : QStringLiteral("#d32f2f");
+        if (qobject_cast<QPlainTextEdit*>(field))
+            field->setStyleSheet(
+                QStringLiteral("QPlainTextEdit { border: 2px solid %1; }").arg(color));
+        else
+            field->setStyleSheet(QStringLiteral("QLineEdit { border: 2px solid %1; }").arg(color));
+    } else {
+        field->setStyleSheet(QString{});
+    }
+}
+
+bool editServer(QWidget* parent,
+                nd::Server& server,
+                const std::function<void(const nd::Server&)>& validateCandidate = {}) {
     QDialog dialog(parent);
+    dialog.setObjectName("serverEditorDialog");
     dialog.setWindowTitle(server.id ? uiText("DNS Server") : uiText("Add DNS Server"));
     dialog.resize(520, 460);
     auto* form = new QFormLayout;
     QLineEdit name(q(server.name)), ip(q(server.ip)), host(q(server.hostname)), url(q(server.url)),
-        port(server.port ? QString::number(server.port) : QString()), fallbacks, bootstrap,
+        port(server.port ? QString::number(server.port) : QString()), bootstrap,
         publicKey(q(server.public_key)), provider(q(server.provider_name)), relay(q(server.relay));
+    name.setObjectName("serverNameEdit");
+    ip.setObjectName("serverIpEdit");
+    port.setObjectName("serverPortEdit");
+    host.setObjectName("serverHostnameEdit");
+    url.setObjectName("serverUrlEdit");
+    bootstrap.setObjectName("serverBootstrapEdit");
+    publicKey.setObjectName("serverPublicKeyEdit");
+    provider.setObjectName("serverProviderEdit");
+    relay.setObjectName("serverRelayEdit");
     AnchoredComboBox protocol;
+    protocol.setObjectName("serverProtocolCombo");
     for (int i = 0; i < 8; ++i)
         protocol.addItem(protocolText(protocolFrom(i)));
     protocol.setCurrentIndex(protocolIndex(server.protocol));
@@ -534,19 +738,12 @@ bool editServer(QWidget* parent, nd::Server& server) {
             x << q(v);
         return x.join(';');
     }());
-    fallbacks.setText([&] {
-        QStringList x;
-        for (const auto id : server.fallback_ids)
-            x << QString::number(id);
-        return x.join(';');
-    }());
     form->addRow(uiText("Name:"), &name);
     form->addRow(uiText("Protocol:"), &protocol);
     form->addRow(uiText("IP:"), &ip);
     form->addRow(uiText("Port:"), &port);
     form->addRow(uiText("Hostname:"), &host);
     form->addRow(uiText("URL:"), &url);
-    form->addRow(uiText("Fallback server IDs:"), &fallbacks);
     form->addRow(uiText("Bootstrap:"), &bootstrap);
     form->addRow(uiText("Public key:"), &publicKey);
     form->addRow(uiText("Provider:"), &provider);
@@ -554,7 +751,22 @@ bool editServer(QWidget* parent, nd::Server& server) {
     form->addRow(&directCertificateFallback);
     form->addRow(&enabled);
     form->addRow(&dnssec);
+
+    const std::array<QLineEdit*, 9> allInputs{
+        &name, &ip, &port, &host, &url, &bootstrap, &publicKey, &provider, &relay};
+    const auto clearAllErrors = [&] {
+        for (auto* field : allInputs)
+            setInputValidationError(field, false);
+    };
+    for (auto* field : allInputs) {
+        QObject::connect(field, &QLineEdit::textChanged, &dialog, [field] {
+            if (field->property("validationError").toBool())
+                setInputValidationError(field, false);
+        });
+    }
+
     auto update = [&] {
+        clearAllErrors();
         const auto p = protocolFrom(protocol.currentIndex());
         const bool plain = p == nd::Protocol::udp || p == nd::Protocol::tcp;
         const bool doh = p == nd::Protocol::doh || p == nd::Protocol::doh3;
@@ -570,35 +782,196 @@ bool editServer(QWidget* parent, nd::Server& server) {
     };
     QObject::connect(&protocol, &QComboBox::currentIndexChanged, &dialog, [&] { update(); });
     update();
+
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     translateDialogButtons(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        clearAllErrors();
+        QLineEdit* firstInvalid = nullptr;
+        QStringList errors;
+        const auto flagInvalid = [&](QLineEdit* field, const QString& msg) {
+            if (!field->property("validationError").toBool())
+                setInputValidationError(field, true);
+            if (!firstInvalid)
+                firstInvalid = field;
+            if (!msg.isEmpty() && !errors.contains(msg))
+                errors << msg;
+        };
+
+        nd::Server candidate = server;
+        candidate.name = s(name.text().trimmed());
+        if (candidate.name.empty())
+            flagInvalid(&name, uiText("Server name must not be empty."));
+
+        candidate.protocol = protocolFrom(protocol.currentIndex());
+        const bool plain =
+            candidate.protocol == nd::Protocol::udp || candidate.protocol == nd::Protocol::tcp;
+        const bool doh =
+            candidate.protocol == nd::Protocol::doh || candidate.protocol == nd::Protocol::doh3;
+        const bool dot =
+            candidate.protocol == nd::Protocol::dot || candidate.protocol == nd::Protocol::doq;
+        const bool crypt = candidate.protocol == nd::Protocol::dnscrypt ||
+                           candidate.protocol == nd::Protocol::anonymized_dnscrypt;
+
+        const QString portText = port.text().trimmed();
+        if (portText.isEmpty()) {
+            candidate.port = 0;
+        } else {
+            bool okPort = false;
+            const uint portValue = portText.toUInt(&okPort);
+            if (!okPort || portValue == 0 || portValue > 65535)
+                flagInvalid(&port, uiText("Port must be between 1 and 65535."));
+            else
+                candidate.port = static_cast<uint16_t>(portValue);
+        }
+
+        candidate.ip = s(ip.text().trimmed());
+        if (!candidate.ip.empty()) {
+            try {
+                (void)nd::parse_numeric_endpoint(candidate.ip);
+            } catch (const std::exception& e) {
+                flagInvalid(&ip, q(e.what()));
+            }
+        } else if (plain) {
+            flagInvalid(&ip, QStringLiteral("Plain server requires IP"));
+        } else if (crypt) {
+            flagInvalid(&ip, QStringLiteral("DNSCrypt server requires a numeric IP"));
+        }
+
+        candidate.hostname = s(host.text().trimmed());
+        if (dot || (doh && !candidate.hostname.empty())) {
+            try {
+                (void)nd::normalize_host(candidate.hostname);
+            } catch (const std::exception& e) {
+                flagInvalid(&host, q(e.what()));
+            }
+        }
+
+        candidate.url = s(url.text().trimmed());
+        if (doh) {
+            if (!candidate.url.starts_with("https://") ||
+                candidate.url.find_first_of("\r\n\t ") != std::string::npos ||
+                candidate.url.find('@') != std::string::npos) {
+                flagInvalid(
+                    &url,
+                    QStringLiteral("DoH requires HTTPS URL without credentials or whitespace"));
+            } else {
+                const auto slash = candidate.url.find('/', 8);
+                const auto authority = candidate.url.substr(
+                    8, slash == std::string::npos ? std::string::npos : slash - 8);
+                if (authority.empty())
+                    flagInvalid(&url, QStringLiteral("Empty DoH host"));
+            }
+        }
+
+        candidate.bootstrap.clear();
+        for (const auto& part : bootstrap.text().split(';', Qt::SkipEmptyParts)) {
+            const QString trimmed = part.trimmed();
+            if (trimmed.isEmpty())
+                continue;
+            const std::string entry = s(trimmed);
+            candidate.bootstrap.push_back(entry);
+            bool validBootstrap = false;
+            try {
+                (void)nd::parse_numeric_endpoint(entry);
+                validBootstrap = true;
+            } catch (...) {
+                // Also accept numeric ip:port / [ipv6]:port syntax.
+                std::string hostPart = entry;
+                std::string portPart;
+                if (!entry.empty() && entry.front() == '[') {
+                    const auto close = entry.find(']');
+                    if (close != std::string::npos && close + 2 < entry.size() &&
+                        entry[close + 1] == ':') {
+                        hostPart = entry.substr(1, close - 1);
+                        portPart = entry.substr(close + 2);
+                    }
+                } else {
+                    const auto colon = entry.rfind(':');
+                    if (colon != std::string::npos && entry.find(':') == colon) {
+                        hostPart = entry.substr(0, colon);
+                        portPart = entry.substr(colon + 1);
+                    }
+                }
+                if (!portPart.empty()) {
+                    bool okBp = false;
+                    const uint bp = q(portPart).toUInt(&okBp);
+                    if (okBp && bp >= 1 && bp <= 65535) {
+                        try {
+                            (void)nd::parse_numeric_endpoint(hostPart);
+                            validBootstrap = true;
+                        } catch (...) {
+                        }
+                    }
+                }
+            }
+            if (!validBootstrap)
+                flagInvalid(&bootstrap, uiText("Bootstrap entries must be numeric IP addresses."));
+        }
+
+        candidate.public_key = s(publicKey.text().trimmed());
+        candidate.provider_name = s(provider.text().trimmed());
+        candidate.relay = s(relay.text().trimmed());
+        if (crypt) {
+            try {
+                (void)nd::normalize_host(candidate.provider_name);
+            } catch (const std::exception& e) {
+                flagInvalid(&provider, q(e.what()));
+            }
+            try {
+                (void)nd::parse_dnscrypt_provider_key(candidate.public_key);
+            } catch (const std::exception& e) {
+                flagInvalid(&publicKey, q(e.what()));
+            }
+            if (candidate.protocol == nd::Protocol::anonymized_dnscrypt) {
+                nd::Server relayCheck = candidate;
+                relayCheck.ip = "1.1.1.1";
+                relayCheck.provider_name = "2.dnscrypt-cert.example";
+                relayCheck.public_key = std::string(64, '0');
+                try {
+                    nd::validate_dnscrypt_server(relayCheck);
+                } catch (const std::exception& e) {
+                    flagInvalid(&relay, q(e.what()));
+                }
+            }
+        }
+
+        candidate.enabled = enabled.isChecked();
+        candidate.dnssec_supported = dnssec.isChecked();
+        candidate.allow_direct_certificate_fallback =
+            candidate.protocol == nd::Protocol::anonymized_dnscrypt &&
+            directCertificateFallback.isChecked();
+
+        if (errors.isEmpty() && validateCandidate) {
+            try {
+                validateCandidate(candidate);
+            } catch (const std::exception& e) {
+                errors << q(e.what());
+            }
+        }
+
+        if (!errors.isEmpty()) {
+            if (firstInvalid) {
+                firstInvalid->setFocus();
+                firstInvalid->selectAll();
+            }
+            QMessageBox box(
+                QMessageBox::Critical, "NativeDNS", errors.join('\n'), QMessageBox::Ok, &dialog);
+            box.setObjectName("serverValidationErrorBox");
+            box.exec();
+            return;
+        }
+
+        server = std::move(candidate);
+        dialog.accept();
+    });
+
     auto* root = new QVBoxLayout(&dialog);
     root->addLayout(form);
     root->addWidget(buttons);
     positionDialog(dialog, parent);
-    if (dialog.exec() != QDialog::Accepted)
-        return false;
-    server.name = s(name.text().trimmed());
-    server.protocol = protocolFrom(protocol.currentIndex());
-    server.ip = s(ip.text().trimmed());
-    server.hostname = s(host.text().trimmed());
-    server.url = s(url.text().trimmed());
-    server.port = static_cast<uint16_t>(port.text().toUInt());
-    server.enabled = enabled.isChecked();
-    server.dnssec_supported = dnssec.isChecked();
-    server.allow_direct_certificate_fallback = directCertificateFallback.isChecked();
-    server.public_key = s(publicKey.text().trimmed());
-    server.provider_name = s(provider.text().trimmed());
-    server.relay = s(relay.text().trimmed());
-    server.fallback_ids.clear();
-    for (const auto& part : fallbacks.text().split(';', Qt::SkipEmptyParts))
-        server.fallback_ids.push_back(part.trimmed().toUInt());
-    server.bootstrap.clear();
-    for (const auto& part : bootstrap.text().split(';', Qt::SkipEmptyParts))
-        server.bootstrap.push_back(s(part.trimmed()));
-    return true;
+    return dialog.exec() == QDialog::Accepted;
 }
 
 class ServerDialog final : public QDialog {
@@ -655,7 +1028,11 @@ public:
             nd::Server server;
             server.id = nextServerId(working_);
             server.name = s(uiText("New DNS Server"));
-            if (!editServer(this, server))
+            const auto validateAdd = [this](const nd::Server& candidate) {
+                nd::ConfigEditor editor(working_);
+                editor.add_server(candidate);
+            };
+            if (!editServer(this, server, validateAdd))
                 return;
             try {
                 nd::ConfigEditor editor(working_);
@@ -672,7 +1049,11 @@ public:
                 return;
             const int row = rows.front().row();
             auto server = working_.servers[static_cast<size_t>(row)];
-            if (!editServer(this, server))
+            const auto validateEdit = [this](const nd::Server& candidate) {
+                nd::ConfigEditor editor(working_);
+                editor.update_server(candidate);
+            };
+            if (!editServer(this, server, validateEdit))
                 return;
             try {
                 nd::ConfigEditor editor(working_);
@@ -928,25 +1309,771 @@ private:
     std::shared_ptr<std::atomic_bool> cancelled_ = std::make_shared<std::atomic_bool>(false);
 };
 
-bool editRule(QWidget* parent, nd::Config& config, nd::Rule& rule) {
+constexpr auto kServerIdsMimeType = "application/x-nativedns-server-ids";
+constexpr int kPoolTreeKindRole = Qt::UserRole + 10;
+constexpr int kPoolTreePoolIdRole = Qt::UserRole + 11;
+constexpr int kPoolTreeServerIdRole = Qt::UserRole + 12;
+
+bool editRedundancyOptions(QWidget* parent, std::string& testHostname, uint32_t& recheckSeconds) {
     QDialog dialog(parent);
+    dialog.setObjectName("redundancyOptionsDialog");
+    dialog.setWindowTitle(uiText("Redundancy Pool Options"));
+    dialog.setModal(true);
+    dialog.resize(360, 145);
+
+    auto* hostEdit = new QLineEdit(q(testHostname), &dialog);
+    hostEdit->setObjectName("redundancyTestHostname");
+    hostEdit->selectAll();
+    auto* recheckEdit = new QLineEdit(QString::number(recheckSeconds), &dialog);
+    recheckEdit->setObjectName("redundancyRecheckSeconds");
+    recheckEdit->setValidator(new QIntValidator(5, 86400, recheckEdit));
+    recheckEdit->setMaximumWidth(90);
+
+    for (auto* field : {hostEdit, recheckEdit}) {
+        QObject::connect(field, &QLineEdit::textChanged, &dialog, [field] {
+            if (field->property("validationError").toBool())
+                setInputValidationError(field, false);
+        });
+    }
+
+    auto* recheckRow = new QHBoxLayout;
+    recheckRow->setContentsMargins(0, 0, 0, 0);
+    recheckRow->addWidget(recheckEdit);
+    recheckRow->addWidget(new QLabel(uiText("(seconds)"), &dialog));
+    recheckRow->addStretch();
+
+    auto* form = new QFormLayout;
+    form->addRow(uiText("Test hostname:"), hostEdit);
+    form->addRow(uiText("Recheck in:"), recheckRow);
+
+    auto* ok = new QPushButton(uiText("OK"), &dialog);
+    ok->setDefault(true);
+    auto* cancel = new QPushButton(uiText("Cancel"), &dialog);
+    auto* buttons = new QHBoxLayout;
+    buttons->addWidget(ok);
+    buttons->addStretch();
+    buttons->addWidget(cancel);
+
+    auto* root = new QVBoxLayout(&dialog);
+    root->addLayout(form);
+    root->addStretch();
+    root->addLayout(buttons);
+
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+        setInputValidationError(hostEdit, false);
+        setInputValidationError(recheckEdit, false);
+        QLineEdit* firstInvalid = nullptr;
+        QStringList errors;
+
+        const QString hostText = hostEdit->text().trimmed();
+        try {
+            (void)nd::normalize_host(s(hostText));
+        } catch (const std::exception& error) {
+            setInputValidationError(hostEdit, true);
+            firstInvalid = hostEdit;
+            errors << q(error.what());
+        }
+        bool okInt = false;
+        const int seconds = recheckEdit->text().trimmed().toInt(&okInt);
+        if (!okInt || seconds < 5 || seconds > 86400) {
+            setInputValidationError(recheckEdit, true);
+            if (!firstInvalid)
+                firstInvalid = recheckEdit;
+            errors << uiText("Recheck interval must be between 5 and 86400 seconds.");
+        }
+        if (!errors.isEmpty()) {
+            if (firstInvalid) {
+                firstInvalid->setFocus();
+                firstInvalid->selectAll();
+            }
+            QMessageBox::warning(&dialog, uiText("Redundancy Pool Options"), errors.join('\n'));
+            return;
+        }
+        testHostname = s(hostText);
+        recheckSeconds = static_cast<uint32_t>(seconds);
+        dialog.accept();
+    });
+
+    positionDialog(dialog, parent);
+    return dialog.exec() == QDialog::Accepted;
+}
+
+bool editPoolType(QWidget* parent, nd::ServerPool& pool) {
+    QDialog dialog(parent);
+    dialog.setObjectName("poolTypeDialog");
+    dialog.setWindowTitle(uiText("Pool Type"));
+    dialog.setModal(true);
+    dialog.resize(450, 290);
+
+    std::string testHostname = pool.test_hostname;
+    uint32_t recheckSeconds = pool.recheck_seconds;
+
+    auto* nameEdit = new QLineEdit(q(pool.name), &dialog);
+    nameEdit->setObjectName("poolNameEdit");
+    nameEdit->selectAll();
+    QObject::connect(nameEdit, &QLineEdit::textChanged, &dialog, [nameEdit] {
+        if (nameEdit->property("validationError").toBool())
+            setInputValidationError(nameEdit, false);
+    });
+    auto* nameRow = new QHBoxLayout;
+    nameRow->addStretch();
+    nameRow->addWidget(new QLabel(uiText("Pool Name:"), &dialog));
+    nameRow->addWidget(nameEdit, 1);
+    nameRow->addStretch();
+
+    auto* redundancyBox = new QGroupBox(uiText("Redundancy"), &dialog);
+    auto* redundancyRadio =
+        new QRadioButton(uiText("Automatically monitor DNS servers and use the best one."),
+                         redundancyBox);
+    redundancyRadio->setObjectName("poolRedundancyRadio");
+    auto* optionsButton = new QPushButton(uiText("Options..."), redundancyBox);
+    optionsButton->setObjectName("poolRedundancyOptions");
+    auto* optionsRow = new QHBoxLayout;
+    optionsRow->addSpacing(22);
+    optionsRow->addWidget(optionsButton);
+    optionsRow->addStretch();
+    auto* redundancyLayout = new QVBoxLayout(redundancyBox);
+    redundancyLayout->addWidget(redundancyRadio);
+    redundancyLayout->addLayout(optionsRow);
+
+    auto* lbBox = new QGroupBox(uiText("Load Balancing"), &dialog);
+    auto* lbRadio =
+        new QRadioButton(uiText("On each request use a random DNS server from the pool."), lbBox);
+    lbRadio->setObjectName("poolLoadBalancingRadio");
+    auto* lbLayout = new QVBoxLayout(lbBox);
+    lbLayout->addWidget(lbRadio);
+
+    auto* modeGroup = new QButtonGroup(&dialog);
+    modeGroup->setExclusive(true);
+    modeGroup->addButton(redundancyRadio, 0);
+    modeGroup->addButton(lbRadio, 1);
+    if (pool.type == nd::PoolType::load_balancing)
+        lbRadio->setChecked(true);
+    else
+        redundancyRadio->setChecked(true);
+
+    const auto syncOptionsEnabled = [redundancyRadio, optionsButton] {
+        optionsButton->setEnabled(redundancyRadio->isChecked());
+    };
+    syncOptionsEnabled();
+    QObject::connect(redundancyRadio, &QRadioButton::toggled, &dialog, syncOptionsEnabled);
+    QObject::connect(optionsButton, &QPushButton::clicked, &dialog, [&] {
+        (void)editRedundancyOptions(&dialog, testHostname, recheckSeconds);
+    });
+
+    auto* ok = new QPushButton(uiText("OK"), &dialog);
+    ok->setDefault(true);
+    auto* cancel = new QPushButton(uiText("Cancel"), &dialog);
+    auto* buttons = new QHBoxLayout;
+    buttons->addWidget(ok);
+    buttons->addStretch();
+    buttons->addWidget(cancel);
+
+    auto* root = new QVBoxLayout(&dialog);
+    root->addLayout(nameRow);
+    root->addSpacing(6);
+    root->addWidget(redundancyBox);
+    root->addWidget(lbBox);
+    root->addStretch();
+    root->addLayout(buttons);
+
+    QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    QObject::connect(ok, &QPushButton::clicked, &dialog, [&] {
+        setInputValidationError(nameEdit, false);
+        const QString trimmed = nameEdit->text().trimmed();
+        if (trimmed.isEmpty()) {
+            setInputValidationError(nameEdit, true);
+            nameEdit->setFocus();
+            QMessageBox::warning(&dialog, uiText("Pool Type"), uiText("Pool name must not be empty."));
+            return;
+        }
+        pool.name = s(trimmed);
+        pool.type = lbRadio->isChecked() ? nd::PoolType::load_balancing : nd::PoolType::redundancy;
+        pool.test_hostname = testHostname;
+        pool.recheck_seconds = recheckSeconds;
+        dialog.accept();
+    });
+
+    positionDialog(dialog, parent);
+    return dialog.exec() == QDialog::Accepted;
+}
+
+class DraggableServerTable final : public QTableWidget {
+public:
+    explicit DraggableServerTable(QWidget* parent = nullptr) : QTableWidget(parent) {
+        setDragEnabled(true);
+        setDragDropMode(QAbstractItemView::DragOnly);
+        setDefaultDropAction(Qt::CopyAction);
+    }
+
+protected:
+    QStringList mimeTypes() const override {
+        return {QString::fromLatin1(kServerIdsMimeType)};
+    }
+    QMimeData* mimeData(const QList<QTableWidgetItem*>& items) const override {
+        std::vector<uint32_t> ids;
+        std::unordered_set<uint32_t> seen;
+        for (const auto* item : items) {
+            if (!item)
+                continue;
+            const auto* first = this->item(item->row(), 0);
+            if (!first)
+                continue;
+            const uint32_t id = first->data(Qt::UserRole).toUInt();
+            if (id && seen.insert(id).second)
+                ids.push_back(id);
+        }
+        auto* mime = new QMimeData;
+        QStringList encoded;
+        for (const auto id : ids)
+            encoded << QString::number(id);
+        mime->setData(QString::fromLatin1(kServerIdsMimeType), encoded.join(';').toUtf8());
+        return mime;
+    }
+};
+
+class PoolTreeWidget final : public QTreeWidget {
+public:
+    using DropHandler = std::function<void(uint32_t poolId, const std::vector<uint32_t>& serverIds)>;
+    explicit PoolTreeWidget(QWidget* parent = nullptr) : QTreeWidget(parent) {
+        setHeaderHidden(true);
+        setRootIsDecorated(true);
+        setAcceptDrops(true);
+        setDropIndicatorShown(true);
+        setDragDropMode(QAbstractItemView::DropOnly);
+        setSelectionMode(QAbstractItemView::SingleSelection);
+    }
+    void setDropHandler(DropHandler handler) {
+        onDrop_ = std::move(handler);
+    }
+
+protected:
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        if (event->mimeData() &&
+            event->mimeData()->hasFormat(QString::fromLatin1(kServerIdsMimeType)))
+            event->acceptProposedAction();
+        else
+            event->ignore();
+    }
+    void dragMoveEvent(QDragMoveEvent* event) override {
+        if (event->mimeData() &&
+            event->mimeData()->hasFormat(QString::fromLatin1(kServerIdsMimeType)) &&
+            targetPoolIdAt(event->position().toPoint()) != 0)
+            event->acceptProposedAction();
+        else
+            event->ignore();
+    }
+    void dropEvent(QDropEvent* event) override {
+        if (!event->mimeData() ||
+            !event->mimeData()->hasFormat(QString::fromLatin1(kServerIdsMimeType))) {
+            event->ignore();
+            return;
+        }
+        const uint32_t poolId = targetPoolIdAt(event->position().toPoint());
+        if (!poolId || !onDrop_) {
+            event->ignore();
+            return;
+        }
+        const QString raw =
+            QString::fromUtf8(event->mimeData()->data(QString::fromLatin1(kServerIdsMimeType)));
+        std::vector<uint32_t> serverIds;
+        for (const auto& part : raw.split(';', Qt::SkipEmptyParts)) {
+            bool ok = false;
+            const uint32_t id = part.toUInt(&ok);
+            if (ok && id)
+                serverIds.push_back(id);
+        }
+        if (serverIds.empty()) {
+            event->ignore();
+            return;
+        }
+        onDrop_(poolId, serverIds);
+        event->acceptProposedAction();
+    }
+
+private:
+    uint32_t targetPoolIdAt(const QPoint& pos) const {
+        if (const auto* item = itemAt(pos))
+            return item->data(0, kPoolTreePoolIdRole).toUInt();
+        if (const auto* current = currentItem())
+            return current->data(0, kPoolTreePoolIdRole).toUInt();
+        if (topLevelItemCount() == 1)
+            return topLevelItem(0)->data(0, kPoolTreePoolIdRole).toUInt();
+        return 0;
+    }
+    DropHandler onDrop_;
+};
+
+class ServerPoolsDialog final : public QDialog {
+public:
+    using StatusFetcher = std::function<std::vector<nd::PoolStatusSnapshot>()>;
+
+    ServerPoolsDialog(QWidget* parent,
+                      nd::Config& config,
+                      std::function<bool()> changed,
+                      StatusFetcher statusFetcher = {})
+        : QDialog(parent), target_(config), original_(config), working_(config),
+          changed_(std::move(changed)), statusFetcher_(std::move(statusFetcher)) {
+        setWindowTitle(uiText("Server Pools"));
+        resize(760, 560);
+
+        serverTable_ = new DraggableServerTable(this);
+        serverTable_->setObjectName("poolSourceServersTable");
+        serverTable_->setColumnCount(3);
+        serverTable_->setHorizontalHeaderLabels(
+            {uiText("Name"), uiText("Protocol"), uiText("Address")});
+        new BoundedTableHeader(serverTable_, {160, 120, 220}, 0, 2, 3);
+        serverTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        serverTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        serverTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        configureFixedTableRows(serverTable_);
+
+        auto* hint = new QLabel(
+            uiText("Drag and drop DNS servers from the list above into a pool.\nRedundancy pools "
+                   "monitor servers and use the best one; Load Balancing pools use a random server "
+                   "for each request."),
+            this);
+        hint->setWordWrap(true);
+
+        poolTree_ = new PoolTreeWidget(this);
+        poolTree_->setObjectName("serverPoolsTree");
+        poolTree_->setDropHandler(
+            [this](uint32_t poolId, const std::vector<uint32_t>& serverIds) {
+                addServersToPool(poolId, serverIds);
+            });
+        poolTree_->installEventFilter(this);
+
+        createButton_ = new QPushButton(uiText("Create"), this);
+        createButton_->setObjectName("createPoolButton");
+        typeButton_ = new QPushButton(uiText("Type..."), this);
+        typeButton_->setObjectName("poolTypeButton");
+        removeButton_ = new QPushButton(uiText("Remove"), this);
+        removeButton_->setObjectName("removePoolButton");
+
+        auto* poolSide = new QVBoxLayout;
+        poolSide->addWidget(createButton_);
+        poolSide->addWidget(typeButton_);
+        poolSide->addWidget(removeButton_);
+        poolSide->addStretch();
+
+        auto* poolArea = new QHBoxLayout;
+        poolArea->addWidget(poolTree_, 1);
+        poolArea->addLayout(poolSide);
+
+        auto* ok = new QPushButton(uiText("OK"), this);
+        auto* cancel = new QPushButton(uiText("Cancel"), this);
+        auto* bottom = new QHBoxLayout;
+        bottom->addWidget(ok);
+        bottom->addStretch();
+        bottom->addWidget(cancel);
+
+        auto* root = new QVBoxLayout(this);
+        root->addWidget(serverTable_, 5);
+        root->addSpacing(4);
+        root->addWidget(hint);
+        root->addSpacing(4);
+        root->addLayout(poolArea, 5);
+        root->addLayout(bottom);
+
+        connect(createButton_, &QPushButton::clicked, this, [this] { createPool(); });
+        connect(typeButton_, &QPushButton::clicked, this, [this] { editSelectedPoolType(); });
+        connect(removeButton_, &QPushButton::clicked, this, [this] { removeSelected(); });
+        connect(ok, &QPushButton::clicked, this, [this] { commit(); });
+        connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+        connect(poolTree_,
+                &QTreeWidget::currentItemChanged,
+                this,
+                [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateButtons(); });
+        connect(poolTree_,
+                &QTreeWidget::itemDoubleClicked,
+                this,
+                [this](QTreeWidgetItem* item, int) {
+                    if (item && item->data(0, kPoolTreeKindRole).toInt() == 1)
+                        editSelectedPoolType();
+                });
+        connect(serverTable_,
+                &QTableWidget::cellDoubleClicked,
+                this,
+                [this](int row, int) {
+                    const uint32_t poolId = selectedPoolId();
+                    if (!poolId || row < 0 || row >= serverTable_->rowCount())
+                        return;
+                    if (const auto* item = serverTable_->item(row, 0)) {
+                        const uint32_t sid = item->data(Qt::UserRole).toUInt();
+                        if (sid)
+                            addServersToPool(poolId, {sid});
+                    }
+                });
+
+        populateServers();
+        rebuildPoolTree();
+        updateButtons();
+
+        if (!statusFetcher_) {
+            statusFetcher_ = []() -> std::vector<nd::PoolStatusSnapshot> {
+                try {
+                    const auto response = nd::pipe_request(
+                        nd::core_pipe_name, nd::IpcOperation::pool_status, {}, 1000);
+                    if (!response.status)
+                        return nd::parse_pool_statuses(response.payload);
+                } catch (...) {
+                }
+                return {};
+            };
+        }
+        connect(&pollTimer_, &QTimer::timeout, this, [this] { refreshLiveStatus(); });
+        pollTimer_.start(2000);
+        QTimer::singleShot(0, this, [this] { refreshLiveStatus(); });
+    }
+
+    ~ServerPoolsDialog() override {
+        *cancelled_ = true;
+        pollTimer_.stop();
+    }
+
+    bool addServersToPool(uint32_t poolId, const std::vector<uint32_t>& serverIds) {
+        auto it = std::find_if(working_.pools.begin(),
+                               working_.pools.end(),
+                               [poolId](const nd::ServerPool& p) { return p.id == poolId; });
+        if (it == working_.pools.end())
+            return false;
+        bool addedAny = false;
+        for (const auto sid : serverIds) {
+            if (std::find(it->server_ids.begin(), it->server_ids.end(), sid) ==
+                it->server_ids.end()) {
+                it->server_ids.push_back(sid);
+                addedAny = true;
+            }
+        }
+        if (addedAny)
+            rebuildPoolTree(poolId, serverIds.empty() ? 0u : serverIds.back());
+        return addedAny;
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == poolTree_ && event->type() == QEvent::KeyPress) {
+            const auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Delete && removeButton_->isEnabled()) {
+                removeSelected();
+                return true;
+            }
+        }
+        return QDialog::eventFilter(watched, event);
+    }
+
+private:
+    static std::string serverAddress(const nd::Server& server) {
+        return !server.url.empty()
+                   ? server.url
+                   : (!server.hostname.empty()
+                          ? server.hostname
+                          : server.ip + (server.port ? ":" + std::to_string(server.port) : ""));
+    }
+    const nd::Server* findServer(uint32_t id) const {
+        const auto it = std::find_if(working_.servers.begin(),
+                                     working_.servers.end(),
+                                     [id](const nd::Server& s) { return s.id == id; });
+        return it == working_.servers.end() ? nullptr : &*it;
+    }
+    uint32_t selectedPoolId() const {
+        if (const auto* item = poolTree_->currentItem())
+            return item->data(0, kPoolTreePoolIdRole).toUInt();
+        return 0;
+    }
+    uint32_t selectedMemberServerId() const {
+        if (const auto* item = poolTree_->currentItem();
+            item && item->data(0, kPoolTreeKindRole).toInt() == 2)
+            return item->data(0, kPoolTreeServerIdRole).toUInt();
+        return 0;
+    }
+    void populateServers() {
+        serverTable_->setRowCount(static_cast<int>(working_.servers.size()));
+        for (int row = 0; row < serverTable_->rowCount(); ++row) {
+            const auto& srv = working_.servers[static_cast<size_t>(row)];
+            auto* nameItem = new QTableWidgetItem(q(srv.name));
+            nameItem->setData(Qt::UserRole, srv.id);
+            auto* protoItem = new QTableWidgetItem(protocolFullText(srv.protocol));
+            auto* addrItem = new QTableWidgetItem(q(serverAddress(srv)));
+            serverTable_->setItem(row, 0, nameItem);
+            serverTable_->setItem(row, 1, protoItem);
+            serverTable_->setItem(row, 2, addrItem);
+        }
+    }
+    void rebuildPoolTree(uint32_t selectPoolId = 0, uint32_t selectServerId = 0) {
+        if (!selectPoolId) {
+            selectPoolId = selectedPoolId();
+            selectServerId = selectedMemberServerId();
+        }
+        std::unordered_map<uint32_t, bool> collapsed;
+        for (int i = 0; i < poolTree_->topLevelItemCount(); ++i) {
+            const auto* item = poolTree_->topLevelItem(i);
+            collapsed[item->data(0, kPoolTreePoolIdRole).toUInt()] = !item->isExpanded();
+        }
+
+        const bool dark = palette().color(QPalette::Base).lightness() < 128;
+        const QColor okColor = dark ? QColor(105, 220, 145) : QColor(20, 140, 46);
+        const QColor failColor = dark ? QColor(255, 110, 110) : QColor(185, 20, 20);
+        const QColor normalColor = palette().color(QPalette::Text);
+
+        poolTree_->setUpdatesEnabled(false);
+        poolTree_->clear();
+        QTreeWidgetItem* toSelect = nullptr;
+        for (const auto& pool : working_.pools) {
+            const QString typeTag = pool.type == nd::PoolType::load_balancing
+                                        ? QStringLiteral("[Load Balancing]")
+                                        : QStringLiteral("[Redundancy]");
+            auto* poolItem = new QTreeWidgetItem(poolTree_, {q(pool.name) + " " + typeTag});
+            poolItem->setData(0, kPoolTreeKindRole, 1);
+            poolItem->setData(0, kPoolTreePoolIdRole, pool.id);
+            poolItem->setData(0, kPoolTreeServerIdRole, 0u);
+            if (pool.type == nd::PoolType::redundancy) {
+                poolItem->setToolTip(
+                    0,
+                    uiText("Test hostname:") + " " + q(pool.test_hostname) + "\n" +
+                        uiText("Recheck in:") + " " + QString::number(pool.recheck_seconds) + " " +
+                        uiText("(seconds)"));
+            }
+
+            const auto liveIt = liveStatus_.find(pool.id);
+            bool sawChecked = false;
+            bool anyHealthy = false;
+            for (const auto sid : pool.server_ids) {
+                const auto* srv = findServer(sid);
+                if (!srv)
+                    continue;
+                QString label = q(srv->name) + " [" + protocolFullText(srv->protocol) + "]";
+                QColor color = normalColor;
+                QString tip = q(serverAddress(*srv));
+                if (liveIt != liveStatus_.end()) {
+                    const auto mIt = liveIt->second.find(sid);
+                    if (mIt != liveIt->second.end()) {
+                        const auto& st = mIt->second;
+                        if (st.health == nd::PoolMemberHealth::healthy) {
+                            sawChecked = true;
+                            anyHealthy = true;
+                            const auto rttInt =
+                                static_cast<long long>(std::llround(std::max(0.0, st.rtt_ms)));
+                            label = QString::number(rttInt) + " " + label;
+                            color = okColor;
+                            tip = QString("OK (%1 ms)\n%2")
+                                      .arg(QString::number(st.rtt_ms, 'f', 0), tip);
+                        } else if (st.health == nd::PoolMemberHealth::failed) {
+                            sawChecked = true;
+                            color = failColor;
+                            tip = (st.last_error.empty() ? uiText("Error") : q(st.last_error)) +
+                                  "\n" + tip;
+                        }
+                    }
+                }
+                auto* memberItem = new QTreeWidgetItem(poolItem, {label});
+                memberItem->setData(0, kPoolTreeKindRole, 2);
+                memberItem->setData(0, kPoolTreePoolIdRole, pool.id);
+                memberItem->setData(0, kPoolTreeServerIdRole, sid);
+                memberItem->setForeground(0, QBrush(color));
+                memberItem->setToolTip(0, tip);
+                if (pool.id == selectPoolId && sid == selectServerId)
+                    toSelect = memberItem;
+            }
+            if (pool.type == nd::PoolType::redundancy && sawChecked && !anyHealthy)
+                poolItem->setForeground(0, QBrush(failColor));
+            else
+                poolItem->setForeground(0, QBrush(normalColor));
+
+            const auto colIt = collapsed.find(pool.id);
+            poolItem->setExpanded(colIt == collapsed.end() ? true : !colIt->second);
+            if (!toSelect && pool.id == selectPoolId)
+                toSelect = poolItem;
+        }
+        if (toSelect)
+            poolTree_->setCurrentItem(toSelect);
+        poolTree_->setUpdatesEnabled(true);
+        updateButtons();
+    }
+    void updateButtons() {
+        const auto* item = poolTree_->currentItem();
+        const bool hasPool = item && item->data(0, kPoolTreePoolIdRole).toUInt() != 0;
+        typeButton_->setEnabled(hasPool);
+        removeButton_->setEnabled(hasPool);
+    }
+    void createPool() {
+        nd::ServerPool pool;
+        pool.id = nextPoolId(working_);
+        const QString baseName = uiText("New Pool");
+        QString candidate = baseName;
+        int suffix = 2;
+        while (std::any_of(working_.pools.begin(),
+                           working_.pools.end(),
+                           [&](const nd::ServerPool& p) { return q(p.name) == candidate; })) {
+            candidate = baseName + " " + QString::number(suffix++);
+        }
+        pool.name = s(candidate);
+        pool.type = nd::PoolType::redundancy;
+        pool.test_hostname = working_.test_target.empty() ? "iana.org" : working_.test_target;
+        pool.recheck_seconds = 60;
+        try {
+            nd::ConfigEditor editor(working_);
+            editor.add_pool(pool);
+            working_ = editor.get();
+            rebuildPoolTree(pool.id, 0);
+        } catch (const std::exception& e) {
+            QMessageBox::critical(this, "NativeDNS", e.what());
+        }
+    }
+    void editSelectedPoolType() {
+        const uint32_t poolId = selectedPoolId();
+        if (!poolId)
+            return;
+        auto it = std::find_if(working_.pools.begin(),
+                               working_.pools.end(),
+                               [poolId](const nd::ServerPool& p) { return p.id == poolId; });
+        if (it == working_.pools.end())
+            return;
+        auto edited = *it;
+        if (!editPoolType(this, edited))
+            return;
+        try {
+            nd::ConfigEditor editor(working_);
+            editor.update_pool(edited);
+            working_ = editor.get();
+            rebuildPoolTree(edited.id, 0);
+        } catch (const std::exception& e) {
+            QMessageBox::critical(this, "NativeDNS", e.what());
+        }
+    }
+    void removeSelected() {
+        const auto* item = poolTree_->currentItem();
+        if (!item)
+            return;
+        const int kind = item->data(0, kPoolTreeKindRole).toInt();
+        const uint32_t poolId = item->data(0, kPoolTreePoolIdRole).toUInt();
+        if (kind == 2) {
+            const uint32_t sid = item->data(0, kPoolTreeServerIdRole).toUInt();
+            auto it = std::find_if(working_.pools.begin(),
+                                   working_.pools.end(),
+                                   [poolId](const nd::ServerPool& p) { return p.id == poolId; });
+            if (it == working_.pools.end())
+                return;
+            std::erase(it->server_ids, sid);
+            rebuildPoolTree(poolId, 0);
+            return;
+        }
+        if (kind == 1 && poolId) {
+            const bool referenced = std::any_of(
+                working_.rules.begin(), working_.rules.end(), [poolId](const nd::Rule& r) {
+                    return r.pool_id == poolId;
+                });
+            if (referenced) {
+                QMessageBox::warning(
+                    this,
+                    uiText("Server Pools"),
+                    uiText("Cannot remove a pool referenced by one or more rules."));
+                return;
+            }
+            if (QMessageBox::question(
+                    this, "NativeDNS", uiText("Remove selected server pool?")) != QMessageBox::Yes)
+                return;
+            try {
+                nd::ConfigEditor editor(working_);
+                editor.remove_pool(poolId);
+                working_ = editor.get();
+                rebuildPoolTree();
+            } catch (const std::exception& e) {
+                QMessageBox::critical(this, "NativeDNS", e.what());
+            }
+        }
+    }
+    void refreshLiveStatus() {
+        if (!statusFetcher_ || pollPending_.exchange(true))
+            return;
+        QPointer<ServerPoolsDialog> self(this);
+        auto cancelled = cancelled_;
+        auto fetcher = statusFetcher_;
+        QThreadPool::globalInstance()->start([self, cancelled, fetcher] {
+            std::vector<nd::PoolStatusSnapshot> snapshots;
+            if (!cancelled->load())
+                snapshots = fetcher();
+            QMetaObject::invokeMethod(
+                qApp,
+                [self, cancelled, snapshots = std::move(snapshots)] {
+                    if (!self || cancelled->load())
+                        return;
+                    self->pollPending_ = false;
+                    self->liveStatus_.clear();
+                    for (const auto& ps : snapshots) {
+                        auto& map = self->liveStatus_[ps.pool_id];
+                        for (const auto& m : ps.members)
+                            map[m.server_id] = m;
+                    }
+                    self->rebuildPoolTree();
+                },
+                Qt::QueuedConnection);
+        });
+    }
+    void commit() {
+        if (working_ == original_) {
+            accept();
+            return;
+        }
+        const auto previous = target_;
+        target_ = working_;
+        if (changed_()) {
+            original_ = working_;
+            accept();
+        } else {
+            target_ = previous;
+        }
+    }
+
+    nd::Config& target_;
+    nd::Config original_;
+    nd::Config working_;
+    std::function<bool()> changed_;
+    StatusFetcher statusFetcher_;
+    DraggableServerTable* serverTable_ = nullptr;
+    PoolTreeWidget* poolTree_ = nullptr;
+    QPushButton* createButton_ = nullptr;
+    QPushButton* typeButton_ = nullptr;
+    QPushButton* removeButton_ = nullptr;
+    QTimer pollTimer_;
+    std::atomic_bool pollPending_{false};
+    std::shared_ptr<std::atomic_bool> cancelled_ = std::make_shared<std::atomic_bool>(false);
+    std::unordered_map<uint32_t, std::unordered_map<uint32_t, nd::PoolMemberStatus>> liveStatus_;
+};
+
+bool editRule(QWidget* parent,
+              const nd::Config& config,
+              nd::Rule& rule,
+              const std::function<void(const nd::Rule&)>& validateCandidate = {}) {
+    QDialog dialog(parent);
+    dialog.setObjectName("ruleEditorDialog");
     dialog.setWindowTitle(rule.is_default ? uiText("Default Rule") : uiText("DNS Rule"));
     dialog.resize(560, 420);
     auto* form = new QFormLayout;
     QLineEdit name(q(rule.name));
+    name.setObjectName("ruleNameEdit");
     QPlainTextEdit hosts;
+    hosts.setObjectName("ruleHostnamesEdit");
     hosts.setPlainText(joinPatterns(rule.patterns));
     hosts.setMinimumHeight(150);
+    QObject::connect(&name, &QLineEdit::textChanged, &dialog, [&name] {
+        if (name.property("validationError").toBool())
+            setInputValidationError(&name, false);
+    });
+    QObject::connect(&hosts, &QPlainTextEdit::textChanged, &dialog, [&hosts] {
+        if (hosts.property("validationError").toBool())
+            setInputValidationError(&hosts, false);
+    });
     AnchoredComboBox action;
     action.addItems({uiText("process"), uiText("bypass"), uiText("block")});
     action.setCurrentIndex(rule.action == nd::Action::process  ? 0
                            : rule.action == nd::Action::bypass ? 1
                                                                : 2);
     AnchoredComboBox server;
-    server.addItem(uiText("Original/System"), 0);
-    for (const auto& value : config.servers)
-        server.addItem(q(value.name), value.id);
-    const int found = server.findData(rule.server_id);
+    populateRuleTargetCombo(server, config);
+    const int found =
+        server.findData(QVariant::fromValue(encodeRuleTarget(rule.server_id, rule.pool_id)));
     if (found >= 0)
         server.setCurrentIndex(found);
     QCheckBox enabled(uiText("Enabled"));
@@ -971,23 +2098,81 @@ bool editRule(QWidget* parent, nd::Config& config, nd::Rule& rule) {
     update();
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
     translateDialogButtons(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        setInputValidationError(&name, false);
+        setInputValidationError(&hosts, false);
+        QWidget* firstInvalid = nullptr;
+        QStringList errors;
+        const auto flagInvalid = [&](QWidget* field, const QString& msg) {
+            if (!field->property("validationError").toBool())
+                setInputValidationError(field, true);
+            if (!firstInvalid)
+                firstInvalid = field;
+            if (!msg.isEmpty() && !errors.contains(msg))
+                errors << msg;
+        };
+
+        nd::Rule candidate = rule;
+        if (!candidate.is_default) {
+            candidate.name = s(name.text().trimmed());
+            if (candidate.name.empty())
+                flagInvalid(&name, uiText("Rule name must not be empty."));
+            bool patternsParsed = false;
+            try {
+                candidate.patterns = nd::split_patterns(s(hosts.toPlainText()));
+                patternsParsed = true;
+            } catch (const std::exception& e) {
+                flagInvalid(&hosts, q(e.what()));
+            }
+            if (patternsParsed) {
+                if (candidate.patterns.empty())
+                    flagInvalid(&hosts, uiText("At least one hostname pattern is required."));
+                else if (candidate.patterns.size() > 4096)
+                    flagInvalid(&hosts, QStringLiteral("Missing or excessive patterns"));
+            }
+            candidate.enabled = enabled.isChecked();
+        }
+        candidate.action = action.currentIndex() == 0   ? nd::Action::process
+                           : action.currentIndex() == 1 ? nd::Action::bypass
+                                                        : nd::Action::block;
+        if (candidate.action == nd::Action::process) {
+            const auto encoded = server.currentData().toULongLong();
+            if (isPoolTarget(encoded)) {
+                candidate.pool_id = targetId(encoded);
+                candidate.server_id = 0;
+            } else {
+                candidate.server_id = targetId(encoded);
+                candidate.pool_id = 0;
+            }
+        } else {
+            candidate.server_id = 0;
+            candidate.pool_id = 0;
+        }
+        candidate.block_mode = static_cast<nd::BlockMode>(block.currentIndex());
+
+        if (errors.isEmpty() && validateCandidate) {
+            try {
+                validateCandidate(candidate);
+            } catch (const std::exception& e) {
+                errors << q(e.what());
+            }
+        }
+
+        if (!errors.isEmpty()) {
+            if (firstInvalid)
+                firstInvalid->setFocus();
+            QMessageBox::critical(&dialog, "NativeDNS", errors.join('\n'));
+            return;
+        }
+        rule = std::move(candidate);
+        dialog.accept();
+    });
     auto* root = new QVBoxLayout(&dialog);
     root->addLayout(form);
     root->addWidget(buttons);
     positionDialog(dialog, parent);
-    if (dialog.exec() != QDialog::Accepted)
-        return false;
-    rule.name = s(name.text().trimmed());
-    rule.patterns = nd::split_patterns(s(hosts.toPlainText()));
-    rule.enabled = enabled.isChecked();
-    rule.action = action.currentIndex() == 0   ? nd::Action::process
-                  : action.currentIndex() == 1 ? nd::Action::bypass
-                                               : nd::Action::block;
-    rule.server_id = rule.action == nd::Action::process ? server.currentData().toUInt() : 0;
-    rule.block_mode = static_cast<nd::BlockMode>(block.currentIndex());
-    return true;
+    return dialog.exec() == QDialog::Accepted;
 }
 
 class CenteredCheckDelegate final : public QStyledItemDelegate {
@@ -1086,11 +2271,11 @@ public:
             return rule.id;
         if (role == Qt::UserRole) {
             if (index.column() == 3)
-                return rule.action == nd::Action::process  ? 0
-                       : rule.action == nd::Action::bypass ? 1
-                                                           : 2;
+                return QVariant::fromValue<qulonglong>(rule.action == nd::Action::process  ? 0
+                                                       : rule.action == nd::Action::bypass ? 1
+                                                                                           : 2);
             if (index.column() == 4)
-                return rule.server_id;
+                return QVariant::fromValue(encodeRuleTarget(rule.server_id, rule.pool_id));
             return {};
         }
         if (role == Qt::ToolTipRole && index.column() == 2)
@@ -1111,10 +2296,19 @@ public:
                               : rule.action == nd::Action::bypass ? "bypass"
                                                                   : "block");
             if (index.column() == 4) {
-                if (rule.action != nd::Action::process || !rule.server_id)
+                if (rule.action != nd::Action::process)
                     return uiText("Original/System");
-                const auto server = server_names_.find(rule.server_id);
-                return server == server_names_.end() ? uiText("Original/System") : server->second;
+                if (rule.pool_id) {
+                    const auto pool = pool_names_.find(rule.pool_id);
+                    return pool == pool_names_.end() ? uiText("Original/System")
+                                                     : QStringLiteral("P| ") + pool->second;
+                }
+                if (rule.server_id) {
+                    const auto server = server_names_.find(rule.server_id);
+                    return server == server_names_.end() ? uiText("Original/System")
+                                                         : QStringLiteral("S| ") + server->second;
+                }
+                return uiText("Original/System");
             }
         }
         if (role == Qt::ForegroundRole && !rule.enabled)
@@ -1183,21 +2377,26 @@ private:
             return before.action != rule.action || before.block_mode != rule.block_mode ||
                    before.dnssec_validate != rule.dnssec_validate ||
                    before.dnssec_reject_unsigned != rule.dnssec_reject_unsigned;
-        return column == 4 && before.server_id != rule.server_id;
+        return column == 4 &&
+               (before.server_id != rule.server_id || before.pool_id != rule.pool_id);
     }
     void rebuildIndexes() {
         original_rules_.clear();
         original_rows_.clear();
         server_names_.clear();
+        pool_names_.clear();
         original_rules_.reserve(original_.rules.size());
         original_rows_.reserve(original_.rules.size());
         server_names_.reserve(current_.servers.size());
+        pool_names_.reserve(current_.pools.size());
         for (size_t row = 0; row < original_.rules.size(); ++row) {
             original_rules_.emplace(original_.rules[row].id, &original_.rules[row]);
             original_rows_.emplace(original_.rules[row].id, row);
         }
         for (const auto& server : current_.servers)
             server_names_.emplace(server.id, q(server.name));
+        for (const auto& pool : current_.pools)
+            pool_names_.emplace(pool.id, q(pool.name));
     }
     const nd::Config& current_;
     const nd::Config& original_;
@@ -1205,6 +2404,7 @@ private:
     std::unordered_map<uint32_t, const nd::Rule*> original_rules_;
     std::unordered_map<uint32_t, size_t> original_rows_;
     std::unordered_map<uint32_t, QString> server_names_;
+    std::unordered_map<uint32_t, QString> pool_names_;
 };
 
 class RulesTableView final : public QTableView {
@@ -1286,39 +2486,42 @@ public:
                     return std::vector<ComboOption>{
                         {uiText("process"), 0}, {uiText("bypass"), 1}, {uiText("block"), 2}};
                 },
-                [this](const QModelIndex& index, uint32_t value) {
+                [this](const QModelIndex& index, qulonglong value) {
                     const auto ids = selectedRuleIds(index);
                     QTimer::singleShot(0, this, [this, ids, value] {
                         updateRules(ids, [value](nd::Rule& rule) {
                             rule.action = value == 0   ? nd::Action::process
                                           : value == 1 ? nd::Action::bypass
                                                        : nd::Action::block;
-                            if (rule.action != nd::Action::process)
+                            if (rule.action != nd::Action::process) {
                                 rule.server_id = 0;
+                                rule.pool_id = 0;
+                            }
                         });
                     });
                 },
                 table_));
-        table_->setItemDelegateForColumn(4,
-                                         new LazyComboDelegate(
-                                             [this] {
-                                                 std::vector<ComboOption> options{
-                                                     {uiText("Original/System"), 0}};
-                                                 options.reserve(working_.servers.size() + 1);
-                                                 for (const auto& server : working_.servers)
-                                                     options.push_back({q(server.name), server.id});
-                                                 return options;
-                                             },
-                                             [this](const QModelIndex& index, uint32_t value) {
-                                                 const auto ids = selectedRuleIds(index);
-                                                 QTimer::singleShot(0, this, [this, ids, value] {
-                                                     updateRules(ids, [value](nd::Rule& rule) {
-                                                         if (rule.action == nd::Action::process)
-                                                             rule.server_id = value;
-                                                     });
-                                                 });
-                                             },
-                                             table_));
+        table_->setItemDelegateForColumn(
+            4,
+            new LazyComboDelegate(
+                [this] { return buildRuleTargetOptions(working_); },
+                [this](const QModelIndex& index, qulonglong value) {
+                    const auto ids = selectedRuleIds(index);
+                    QTimer::singleShot(0, this, [this, ids, value] {
+                        updateRules(ids, [value](nd::Rule& rule) {
+                            if (rule.action == nd::Action::process) {
+                                if (isPoolTarget(value)) {
+                                    rule.pool_id = targetId(value);
+                                    rule.server_id = 0;
+                                } else {
+                                    rule.server_id = targetId(value);
+                                    rule.pool_id = 0;
+                                }
+                            }
+                        });
+                    });
+                },
+                table_));
 
         const auto updateSingleRuleControls = [this, up, down, edit, clone, remove] {
             const bool single =
@@ -1339,7 +2542,11 @@ public:
             rule.id = nextRuleId(working_);
             rule.name = s(uiText("New Rule"));
             rule.patterns = {"example.com"};
-            if (editRule(this, working_, rule))
+            const auto validateAdd = [this](const nd::Rule& candidate) {
+                nd::ConfigEditor editor(working_);
+                editor.add_rule(candidate);
+            };
+            if (editRule(this, working_, rule, validateAdd))
                 apply([&](nd::ConfigEditor& editor) { editor.add_rule(rule); }, rule.id);
         });
         connect(clone, &QPushButton::clicked, this, [this] {
@@ -1358,7 +2565,11 @@ public:
             if (row < 0)
                 return;
             auto rule = working_.rules[static_cast<size_t>(row)];
-            if (editRule(this, working_, rule))
+            const auto validateEdit = [this](const nd::Rule& candidate) {
+                nd::ConfigEditor editor(working_);
+                editor.update_rule(candidate);
+            };
+            if (editRule(this, working_, rule, validateEdit))
                 apply([&](nd::ConfigEditor& editor) { editor.update_rule(rule); }, rule.id);
         });
         connect(remove, &QPushButton::clicked, this, [this] {
@@ -1603,6 +2814,7 @@ void NativeDnsWindow::buildUi() {
     auto* config = addMenu("&Configuration");
     auto* servers = addAction(config, "DNS Servers");
     auto* rules = addAction(config, "Rules");
+    auto* serverPools = addAction(config, "Server Pools");
 #ifdef _WIN32
     config->addSeparator();
     prepareSystemDnsAction_ = addAction(config, "Temporarily disable Windows encrypted DNS");
@@ -1797,17 +3009,27 @@ void NativeDnsWindow::buildUi() {
     bar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     auto* toolbarServers = mark(new QAction(this), "DNS Servers");
     auto* toolbarRules = mark(new QAction(this), "Rules");
-    const auto setActionIcons =
-        [servers, rules, clear, restart, toolbarServers, toolbarRules](bool dark) {
-            const auto serverIcon = makeActionIcon(ActionIcon::dns_servers, dark);
-            const auto rulesIcon = makeActionIcon(ActionIcon::rules, dark);
-            servers->setIcon(serverIcon);
-            toolbarServers->setIcon(serverIcon);
-            rules->setIcon(rulesIcon);
-            toolbarRules->setIcon(rulesIcon);
-            clear->setIcon(makeActionIcon(ActionIcon::clear_display, dark));
-            restart->setIcon(makeActionIcon(ActionIcon::restart, dark));
-        };
+    auto* toolbarPools = mark(new QAction(this), "Server Pools");
+    const auto setActionIcons = [servers,
+                                 rules,
+                                 serverPools,
+                                 clear,
+                                 restart,
+                                 toolbarServers,
+                                 toolbarRules,
+                                 toolbarPools](bool dark) {
+        const auto serverIcon = makeActionIcon(ActionIcon::dns_servers, dark);
+        const auto rulesIcon = makeActionIcon(ActionIcon::rules, dark);
+        const auto poolsIcon = makeActionIcon(ActionIcon::server_pools, dark);
+        servers->setIcon(serverIcon);
+        toolbarServers->setIcon(serverIcon);
+        rules->setIcon(rulesIcon);
+        toolbarRules->setIcon(rulesIcon);
+        serverPools->setIcon(poolsIcon);
+        toolbarPools->setIcon(poolsIcon);
+        clear->setIcon(makeActionIcon(ActionIcon::clear_display, dark));
+        restart->setIcon(makeActionIcon(ActionIcon::restart, dark));
+    };
     setActionIcons(darkTheme_);
     const auto addToolbarButton = [bar](QAction* action) {
         auto* button = new ToolbarButton(bar);
@@ -1818,6 +3040,7 @@ void NativeDnsWindow::buildUi() {
     };
     addToolbarButton(toolbarServers);
     addToolbarButton(toolbarRules);
+    addToolbarButton(toolbarPools);
     bar->addSeparator();
     addToolbarButton(clear);
     addToolbarButton(restart);
@@ -1836,6 +3059,7 @@ void NativeDnsWindow::buildUi() {
     trayMenu->setDefaultAction(open);
     trayMenu->addAction(servers);
     trayMenu->addAction(rules);
+    trayMenu->addAction(serverPools);
     trayMenu->addAction(restart);
     trayMenu->addSeparator();
     trayMenu->addAction(exit);
@@ -1896,8 +3120,10 @@ void NativeDnsWindow::buildUi() {
     connect(exportCfg, &QAction::triggered, this, [this] { exportConfiguration(); });
     connect(servers, &QAction::triggered, this, [this] { openServers(); });
     connect(rules, &QAction::triggered, this, [this] { openRules(); });
+    connect(serverPools, &QAction::triggered, this, [this] { openServerPools(); });
     connect(toolbarServers, &QAction::triggered, this, [this] { openServers(); });
     connect(toolbarRules, &QAction::triggered, this, [this] { openRules(); });
+    connect(toolbarPools, &QAction::triggered, this, [this] { openServerPools(); });
     connect(restart, &QAction::triggered, this, [this] { requestCoreRestart(); });
     connect(clear, &QAction::triggered, this, [this] {
         log_->clear();
@@ -2345,6 +3571,11 @@ void NativeDnsWindow::openServers() {
 }
 void NativeDnsWindow::openRules() {
     RulesDialog dialog(this, config_, [this] { return applyConfiguration(); });
+    positionDialog(dialog, this);
+    dialog.exec();
+}
+void NativeDnsWindow::openServerPools() {
+    ServerPoolsDialog dialog(this, config_, [this] { return applyConfiguration(); });
     positionDialog(dialog, this);
     dialog.exec();
 }

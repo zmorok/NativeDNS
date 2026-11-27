@@ -48,6 +48,29 @@ void drawRules(QPainter& painter, const Colors& colors) {
         painter.drawLine(QPointF(18, y), QPointF(24, y));
 }
 
+void drawServerPools(QPainter& painter, const Colors& colors) {
+    // Pool container frame
+    painter.setPen(QPen(colors.line, 1.7, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(colors.paper);
+    painter.drawRoundedRect(QRectF(4.5, 4.5, 25.0, 25.0), 4.0, 4.0);
+    // Routing branches from left entry to stacked pool members
+    line(painter, colors.line, 1.8);
+    painter.drawLine(QPointF(8.0, 17.0), QPointF(13.5, 17.0));
+    painter.drawLine(QPointF(13.5, 10.5), QPointF(13.5, 23.5));
+    painter.drawLine(QPointF(13.5, 10.5), QPointF(19.5, 10.5));
+    painter.drawLine(QPointF(13.5, 17.0), QPointF(19.5, 17.0));
+    painter.drawLine(QPointF(13.5, 23.5), QPointF(19.5, 23.5));
+    // Entry hub + 3 member server nodes (top active green, others blue)
+    painter.setPen(QPen(colors.paper, 1.1));
+    painter.setBrush(colors.blue);
+    painter.drawEllipse(QPointF(9.5, 17.0), 3.0, 3.0);
+    painter.setBrush(colors.green);
+    painter.drawEllipse(QPointF(23.0, 10.5), 3.4, 3.4);
+    painter.setBrush(colors.blue);
+    painter.drawEllipse(QPointF(23.0, 17.0), 3.4, 3.4);
+    painter.drawEllipse(QPointF(23.0, 23.5), 3.4, 3.4);
+}
+
 void drawClear(QPainter& painter, const Colors& colors) {
     line(painter, colors.line, 1.8);
     painter.setBrush(colors.paper);
@@ -92,6 +115,9 @@ QPixmap render(ActionIcon icon, const Colors& colors, int size) {
             break;
         case ActionIcon::rules:
             drawRules(painter, colors);
+            break;
+        case ActionIcon::server_pools:
+            drawServerPools(painter, colors);
             break;
         case ActionIcon::clear_display:
             drawClear(painter, colors);

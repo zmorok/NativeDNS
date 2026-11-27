@@ -51,6 +51,7 @@ private:
     void openInterceptionDiagnostics();
     void openServers();
     void openRules();
+    void openServerPools();
     void importConfiguration();
     void exportConfiguration();
     void startCore(bool transparent = true, bool reportFailure = true);
