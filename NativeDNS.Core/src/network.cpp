@@ -116,10 +116,18 @@ std::string describe_network_change(const NetworkSnapshot& previous, const Netwo
                               " (removed)");
         }
     }
-    if (changes.empty())
-        return previous.interfaces == current.interfaces && previous.error == current.error
-                   ? "resume"
-                   : "none";
+    if (changes.empty()) {
+        if (previous.interfaces == current.interfaces && previous.error == current.error) {
+            if (current.power_resumed && current.resume_sleep_ms > 0)
+                return "resume (power, sleep=" + std::to_string(current.resume_sleep_ms) + "ms)";
+            if (current.resume_sleep_ms > 0)
+                return "resume (sleep=" + std::to_string(current.resume_sleep_ms) + "ms)";
+            if (current.power_resumed)
+                return "resume (power)";
+            return "resume";
+        }
+        return "none";
+    }
     std::string summary;
     const size_t limit = std::min<size_t>(changes.size(), 4);
     for (size_t i = 0; i < limit; ++i) {
@@ -248,7 +256,8 @@ void NetworkMonitor::poll_once() {
         last_clocks_ = now;
     }
     const bool power_resumed = resume_pending_.exchange(false, std::memory_order_acq_rel);
-    refresh(power_resumed || suspend_ms >= resume_threshold_ms);
+    const bool resumed = power_resumed || suspend_ms >= resume_threshold_ms;
+    refresh(resumed, resumed ? suspend_ms : 0, power_resumed);
 }
 NetworkSnapshotPtr NetworkMonitor::snapshot() const {
     return snapshot_.load();
@@ -279,7 +288,7 @@ bool routing_equivalent(const std::vector<InterfaceInfo>& previous,
     return select_bootstrap_dns_servers(previous) == select_bootstrap_dns_servers(current);
 }
 } // namespace
-void NetworkMonitor::refresh(bool invalidate) {
+void NetworkMonitor::refresh(bool invalidate, uint64_t resume_sleep_ms, bool power_resumed) {
     std::lock_guard lock(refresh_mutex_);
     const auto previous = snapshot();
     auto next = std::make_shared<NetworkSnapshot>();
@@ -301,6 +310,10 @@ void NetworkMonitor::refresh(bool invalidate) {
         next->generation = previous->generation;
         snapshot_.store(std::move(next));
         return;
+    }
+    if (invalidate) {
+        next->resume_sleep_ms = resume_sleep_ms;
+        next->power_resumed = power_resumed;
     }
     next->generation = previous->generation + 1;
     snapshot_.store(std::move(next));

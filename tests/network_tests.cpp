@@ -187,6 +187,118 @@ int main() {
                   "Down-only metadata churn reports none");
             check(nd::describe_network_change(b, a) == "Wi-Fi 'Home' (removed)",
                   "Removed active interface reports removed");
+            auto resumed_sleep = b;
+            resumed_sleep.generation = 3;
+            resumed_sleep.resume_sleep_ms = 14200;
+            check(nd::describe_network_change(b, resumed_sleep) == "resume (sleep=14200ms)",
+                  "Sleep-based resume reports measured sleep duration");
+            auto resumed_power = b;
+            resumed_power.generation = 4;
+            resumed_power.power_resumed = true;
+            check(nd::describe_network_change(b, resumed_power) == "resume (power)",
+                  "Power notification resume reports power source");
+            auto resumed_both = resumed_sleep;
+            resumed_both.generation = 5;
+            resumed_both.power_resumed = true;
+            check(nd::describe_network_change(b, resumed_both) == "resume (power, sleep=14200ms)",
+                  "Combined power and sleep resume reports both");
+        }
+        {
+            check(nd::detected_suspend_millis({1000, 1000}, {16000, 16000}) == 0,
+                  "CPU starvation advances both clocks equally without reporting suspend");
+            check(nd::detected_suspend_millis({1000, 1000}, {16000, 2000}) == 14000,
+                  "Real suspend measures boottime minus active time");
+            check(nd::detected_suspend_millis({5000, 5000}, {4000, 4000}) == 0,
+                  "Non-monotonic clock reading does not underflow");
+
+            std::vector<nd::InterfaceInfo> adapters(2);
+            adapters[0].id = "eth";
+            adapters[0].name = "Ethernet";
+            adapters[0].description = "NIC v1";
+            adapters[0].up = true;
+            adapters[0].mtu = 1500;
+            adapters[0].metric4 = 10;
+            adapters[0].gateways = {"192.0.2.1"};
+            adapters[0].addresses = {"192.0.2.10"};
+            adapters[0].dns_servers = {"192.0.2.1"};
+            adapters[1].id = "vpn";
+            adapters[1].name = "VPN";
+            adapters[1].up = false;
+            adapters[1].mtu = 1420;
+            adapters[1].metric4 = 20;
+            adapters[1].gateways = {"10.0.0.1"};
+            adapters[1].dns_servers = {"10.0.0.53"};
+
+            nd::platform::MonotonicClocks fake_clock{10000, 10000};
+            nd::NetworkMonitor clock_monitor(
+                [&] { return adapters; }, false, [&] { return fake_clock; });
+            const auto initial = clock_monitor.snapshot();
+            check(initial->generation == 1, "Initial clock monitor generation is 1");
+
+            // Simulate 15s CPU starvation (e.g. rustc saturating all cores).
+            fake_clock.boottime_ms += 15000;
+            fake_clock.active_ms += 15000;
+            clock_monitor.poll_once();
+            check(clock_monitor.snapshot()->generation == 1,
+                  "CPU starvation must not trigger false resume generation bump");
+
+            // Sub-threshold clock drift (<3000ms) must not invalidate.
+            fake_clock.boottime_ms += 2500;
+            fake_clock.active_ms += 500;
+            clock_monitor.poll_once();
+            check(clock_monitor.snapshot()->generation == 1,
+                  "Sub-threshold suspend delta must not trigger invalidation");
+
+            // Simulate real OS suspend (14s sleep, 1s active execution).
+            const auto before_sleep = clock_monitor.snapshot();
+            fake_clock.boottime_ms += 15000;
+            fake_clock.active_ms += 1000;
+            clock_monitor.poll_once();
+            const auto after_sleep = clock_monitor.snapshot();
+            check(after_sleep->generation == 2 && after_sleep->resume_sleep_ms == 14000,
+                  "Real OS suspend advances generation and records sleep duration");
+            check(nd::describe_network_change(*before_sleep, *after_sleep) ==
+                      "resume (sleep=14000ms)",
+                  "Resume change summary includes measured sleep duration");
+
+            // Cosmetic active metadata churn (mtu, description, non-ranking metric) keeps generation.
+            adapters[0].mtu = 1480;
+            adapters[0].description = "NIC v2";
+            adapters[0].metric4 = 15;
+            clock_monitor.refresh();
+            check(clock_monitor.snapshot()->generation == 2 &&
+                      clock_monitor.snapshot()->interfaces.front().mtu == 1480,
+                  "Cosmetic active metadata updates snapshot without bumping generation");
+
+            // Down-only adapter churn (mutation, addition, removal) keeps generation.
+            adapters[1].mtu = 1280;
+            adapters[1].description = "Disconnected VPN";
+            nd::InterfaceInfo extra_down;
+            extra_down.id = "zzz_down";
+            extra_down.up = false;
+            adapters.push_back(extra_down);
+            clock_monitor.refresh();
+            check(clock_monitor.snapshot()->generation == 2 &&
+                      clock_monitor.snapshot()->interfaces.size() == 3,
+                  "Down-only adapter addition updates snapshot without bumping generation");
+            adapters.pop_back();
+            clock_monitor.refresh();
+            check(clock_monitor.snapshot()->generation == 2 &&
+                      clock_monitor.snapshot()->interfaces.size() == 2,
+                  "Down-only adapter removal updates snapshot without bumping generation");
+
+            // Bringing VPN up must advance generation.
+            adapters[1].up = true;
+            adapters[1].addresses = {"10.0.0.2"};
+            clock_monitor.refresh();
+            check(clock_monitor.snapshot()->generation == 3,
+                  "Bringing second adapter up advances generation");
+
+            // Metric change that flips bootstrap DNS priority must advance generation.
+            adapters[1].metric4 = 5;
+            clock_monitor.refresh();
+            check(clock_monitor.snapshot()->generation == 4,
+                  "Metric change altering bootstrap DNS order advances generation");
         }
         std::cout << "Network snapshot tests passed\n";
         return 0;

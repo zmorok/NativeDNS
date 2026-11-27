@@ -26,6 +26,8 @@ struct NetworkSnapshot {
     uint64_t generation = 0;
     std::vector<InterfaceInfo> interfaces;
     std::string error;
+    uint64_t resume_sleep_ms = 0;
+    bool power_resumed = false;
 };
 using NetworkSnapshotPtr = std::shared_ptr<const NetworkSnapshot>;
 struct NumericEndpoint {
@@ -52,7 +54,9 @@ public:
                             ClockSource clocks = {});
     ~NetworkMonitor();
     NetworkSnapshotPtr snapshot() const;
-    void refresh(bool invalidate = false);
+    void refresh(bool invalidate = false,
+                 uint64_t resume_sleep_ms = 0,
+                 bool power_resumed = false);
     void poll_once();
     static NetworkMonitor& shared();
 
